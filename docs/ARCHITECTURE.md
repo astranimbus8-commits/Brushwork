@@ -1068,11 +1068,17 @@ policy for errors no job caught, and the two tools' jobs guarded and moved off t
 - **Saved selections** (region `v19-A7a savedSelectionWork`): a compression that throws never
   throws at `await` (nor from the undo that lands it): the save is dropped, kept as a report and
   said (`ERROR_TOAST` with "Save selection" or "Update saved selection").
-- **Not A7a's** (lead requests): excluding `files/diagnostics/` and `shared_prefs/diagnostics.xml`
-  from Auto Backup and from the backup folder (the manifest's backup rules, A8); compat row 15's
-  generator; `LabelsV19` entries for the report kinds (private stand-ins in `ReportText`); a
-  supervisor scope for the composables' jobs (their `rememberCoroutineScope` sites), so that
-  their errors too are survived rather than handed on.
+- **The lead's, at A7a's merge.** The report kinds' names and the report's title are
+  `StabilityLabels19` entries (`KIND_CRASH`, `KIND_HANDLED`, `KIND_OUT_OF_MEMORY`, `KIND_FREEZE`,
+  `KIND_NATIVE`, `KIND_ANR`, `KIND_LOW_MEMORY_KILL`, `REPORT_TITLE`), which `ReportText` uses.
+  Compat row 15 (`Qa19CompatBackFromV18RobolectricTest.row15CrashReports`, fixture
+  `qa19/compat/crash/`): one fatal report and the "diagnostics" preferences, both outside
+  `files/projects/`, so v1.8 never sees them.
+- **Not A7a's** (open lead requests): excluding `files/diagnostics/` and
+  `shared_prefs/diagnostics.xml` from Auto Backup and from the backup folder (A8's step 7: the
+  manifest's backup rules); a supervisor scope for the composables' jobs (their
+  `rememberCoroutineScope` sites, Gate 2), so that their errors too are survived rather than
+  handed on.
 - **Tests** (`app/src/test/java/com/brushwork/paint/v19/a7a/`): `CrashLogTest`,
   `ExitInfoReasonTest`, `FreezeWatchdogTest`, `ErrorReporterReleaseTest`,
   `ErrorReporterScopeTest` (a real composition: its Recomposer is gone, the error handed on, also
