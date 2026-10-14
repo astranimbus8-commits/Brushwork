@@ -3,14 +3,20 @@ package com.brushwork.paint.v19.a8
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
 import android.net.Uri
 import androidx.test.core.app.ApplicationProvider
+import com.brushwork.paint.AppSettings
 import com.brushwork.paint.model.PaperSpec
 import com.brushwork.paint.storage.CanvasCreate
 import com.brushwork.paint.storage.CanvasStart
 import com.brushwork.paint.storage.NewCanvasSpec
 import com.brushwork.paint.storage.ProjectFormat
 import com.brushwork.paint.storage.ProjectRepository
+import com.brushwork.paint.ui.common.CanvasLabels19
+import com.brushwork.paint.ui.common.V19Tags
+import com.brushwork.paint.ui.gallery.NewCanvasBackground
+import com.brushwork.paint.ui.gallery.PaperSwatchArt
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -28,7 +34,9 @@ import java.io.File
  * active: filled white or with the chosen colour ([CanvasStart.FILL]), transparent
  * ([CanvasStart.TRANSPARENT]) or transparent over white paper ([CanvasStart.PAPER], the only one
  * with a paper). "New from photo" gives the "Picture" layer alone, active. A null start stays
- * v1.8 (`storage/CanvasCreateV18Test`).
+ * v1.8 (`storage/CanvasCreateV18Test`). The dialog's four choices ([NewCanvasBackground]) in
+ * their order, with their captions, their remembered values and the start each makes; the Paper
+ * swatch ([PaperSwatchArt]) is not the White one in a render.
  */
 @RunWith(RobolectricTestRunner::class)
 class NewCanvasStartTest {
@@ -94,6 +102,58 @@ class NewCanvasStartTest {
             assertEquals("${c.name}: the layer", c.layerPixel, layer.getPixel(39, 29))
             for (l in doc.layers) l.recycleBitmaps()
         }
+    }
+
+    // ------------------------------------------------------------------ the dialog's choices (step 2)
+
+    @Test
+    fun theChoicesTheirCaptionsAndTheirStarts() {
+        assertEquals(
+            "White first, Paper last (R15)",
+            listOf(NewCanvasBackground.WHITE, NewCanvasBackground.TRANSPARENT, NewCanvasBackground.CUSTOM, NewCanvasBackground.PAPER),
+            NewCanvasBackground.entries,
+        )
+        assertEquals(CanvasLabels19.WHITE_NOTE, NewCanvasBackground.WHITE.caption)
+        assertEquals(CanvasLabels19.WHITE_NOTE, NewCanvasBackground.CUSTOM.caption)
+        assertEquals(CanvasLabels19.TRANSPARENT_NOTE, NewCanvasBackground.TRANSPARENT.caption)
+        assertEquals(CanvasLabels19.PAPER_NOTE, NewCanvasBackground.PAPER.caption)
+        assertEquals(
+            listOf(AppSettings.NEW_CANVAS_WHITE, AppSettings.NEW_CANVAS_TRANSPARENT, AppSettings.NEW_CANVAS_CUSTOM, AppSettings.NEW_CANVAS_PAPER),
+            NewCanvasBackground.entries.map { it.setting },
+        )
+        assertEquals(
+            listOf("WHITE", "TRANSPARENT", "CUSTOM", "PAPER").map { V19Tags.NEW_CANVAS_PREFIX + it },
+            NewCanvasBackground.entries.map { it.tag },
+        )
+        for (b in NewCanvasBackground.entries) assertEquals(b, NewCanvasBackground.fromSetting(b.setting))
+        assertEquals(NewCanvasBackground.WHITE, NewCanvasBackground.fromSetting(null))
+        assertEquals(NewCanvasBackground.WHITE, NewCanvasBackground.fromSetting("SEPIA"))
+        assertEquals("the first default", NewCanvasBackground.WHITE, NewCanvasBackground.fromSetting(AppSettings(context).newCanvasBackground))
+        // What each choice makes: one layer, filled or not, over paper or not.
+        assertEquals(listOf(CanvasStart.FILL, CanvasStart.TRANSPARENT, CanvasStart.FILL, CanvasStart.PAPER), NewCanvasBackground.entries.map { it.start })
+        assertEquals(listOf(white, null, tint, null), NewCanvasBackground.entries.map { it.background(tint) })
+        for (b in NewCanvasBackground.entries) {
+            val seed = CanvasCreate.seed(NewCanvasSpec("n", 8, 8, 350f, b.background(tint), b.start))
+            assertEquals("$b", 1, seed.layers.size)
+            assertEquals("$b", b == NewCanvasBackground.PAPER, seed.paper != null)
+        }
+    }
+
+    @Test
+    fun thePaperSwatchDiffersFromWhite() {
+        val side = 132
+        val paper = Bitmap.createBitmap(side, side, Bitmap.Config.ARGB_8888)
+        PaperSwatchArt.draw(Canvas(paper), side.toFloat(), side.toFloat(), 3f)
+        val pixels = IntArray(side * side).also { paper.getPixels(it, 0, side, 0, 0, side, side) }
+        val notWhite = pixels.count { it != white }
+        assertTrue("the fold and its checker cover part of the swatch: $notWhite px", notWhite > side * side / 20)
+        assertTrue("and leave most of the page white: $notWhite px", notWhite < side * side / 2)
+        assertTrue("every pixel is opaque", pixels.all { it ushr 24 == 0xFF })
+        assertEquals("the page", white, paper.getPixel(10, side - 10))
+        assertTrue("the top-right corner is not white", paper.getPixel(side - 2, 1) != white || paper.getPixel(side - 2, 30) != white)
+        // The checker's grey shows in the uncovered corner.
+        val corner = (side - side * 42 / 100 until side).flatMap { x -> (0 until 20).map { y -> paper.getPixel(x, y) } }
+        assertTrue("the checker's grey", corner.any { it == 0xFFCCCCCC.toInt() })
     }
 
     @Test

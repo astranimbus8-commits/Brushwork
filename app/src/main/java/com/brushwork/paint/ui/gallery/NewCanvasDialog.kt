@@ -47,8 +47,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -58,10 +64,13 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.brushwork.paint.AppSettings
+import com.brushwork.paint.BrushworkApp
 import com.brushwork.paint.core.LengthUnit
 import com.brushwork.paint.core.Units
 import com.brushwork.paint.storage.NewCanvasSpec
 import com.brushwork.paint.ui.color.ColorPickerDialog
+import com.brushwork.paint.ui.common.CanvasLabels19
 import com.brushwork.paint.ui.common.ChoiceChips
 import com.brushwork.paint.ui.common.ColorSwatch
 import com.brushwork.paint.ui.common.LengthField
@@ -76,8 +85,6 @@ private enum class SizeGroup(val label: String) {
     PRINT("Print"),
     CUSTOM("Custom"),
 }
-
-private enum class BackgroundChoice { WHITE, TRANSPARENT, CUSTOM }
 
 /**
  * Full-screen "New canvas" dialog: name, size (screen presets, paper sizes at a chosen DPI, or
@@ -100,12 +107,15 @@ fun NewCanvasDialog(creating: Boolean, onDismiss: () -> Unit, onCreate: (NewCanv
 private fun NewCanvasContent(creating: Boolean, onDismiss: () -> Unit, onCreate: (NewCanvasSpec) -> Unit) {
     val maxHeap = remember { Runtime.getRuntime().maxMemory() }
     val focusManager = LocalFocusManager.current
+    val context = LocalContext.current
+    val settings = remember { (context.applicationContext as? BrushworkApp)?.settings ?: AppSettings(context) }
 
     var name by rememberSaveable { mutableStateOf("") }
     var group by rememberSaveable { mutableStateOf(SizeGroup.SCREEN) }
     var size by rememberSaveable { mutableStateOf(CanvasSize()) }
     var unit by rememberSaveable { mutableStateOf(LengthUnit.PX) }
-    var background by rememberSaveable { mutableStateOf(BackgroundChoice.WHITE) }
+    // v1.9 (R15): the last choice, "White" the first time.
+    var background by rememberSaveable { mutableStateOf(NewCanvasBackground.fromSetting(settings.newCanvasBackground)) }
     var customColor by rememberSaveable { mutableIntStateOf(0xFFF3E7D3.toInt()) }
     var pickingColor by remember { mutableStateOf(false) }
 
@@ -125,17 +135,15 @@ private fun NewCanvasContent(creating: Boolean, onDismiss: () -> Unit, onCreate:
         val cw = size.width
         val ch = size.height
         if (creating || !CanvasPresets.check(cw, ch, maxHeap).ok) return
-        val bg = when (background) {
-            BackgroundChoice.WHITE -> 0xFFFFFFFF.toInt()
-            BackgroundChoice.TRANSPARENT -> null
-            BackgroundChoice.CUSTOM -> customColor
-        }
-        onCreate(NewCanvasSpec(name.trim().ifEmpty { "Untitled" }, cw, ch, size.dpi.toFloat(), bg))
+        // v1.9 (R15): one layer for every choice; the choice is remembered for the next canvas.
+        settings.newCanvasBackground = background.setting
+        onCreate(NewCanvasSpec(name.trim().ifEmpty { "Untitled" }, cw, ch, size.dpi.toFloat(), background.background(customColor), background.start))
     }
 
     Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
+        // v1.9 (I27): the bar grows and the title wraps at a large font instead of being cut.
         Row(
-            Modifier.fillMaxWidth().height(56.dp).padding(start = 4.dp, end = 12.dp),
+            Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(start = 4.dp, end = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             IconButton(onClick = onDismiss, enabled = !creating) { Icon(Icons.Filled.Close, contentDescription = "Close") }
@@ -143,7 +151,7 @@ private fun NewCanvasContent(creating: Boolean, onDismiss: () -> Unit, onCreate:
                 "New canvas",
                 style = MaterialTheme.typography.titleLarge,
                 modifier = Modifier.weight(1f).padding(start = 4.dp),
-                maxLines = 1,
+                maxLines = 2,
             )
             Button(
                 onClick = { create() },
@@ -202,11 +210,19 @@ private fun NewCanvasContent(creating: Boolean, onDismiss: () -> Unit, onCreate:
             }
 
             SectionHeader("Background")
-            Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-                BackgroundOption("White", 0xFFFFFFFF.toInt(), background == BackgroundChoice.WHITE) { background = BackgroundChoice.WHITE }
-                BackgroundOption("Transparent", 0, background == BackgroundChoice.TRANSPARENT) { background = BackgroundChoice.TRANSPARENT }
-                BackgroundOption("Color…", customColor, background == BackgroundChoice.CUSTOM) { pickingColor = true }
+            // v1.9 (R15): four choices on one line at 360 dp; a large font wraps the row.
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                BackgroundOption("White", NewCanvasBackground.WHITE, 0xFFFFFFFF.toInt(), background) { background = NewCanvasBackground.WHITE }
+                BackgroundOption("Transparent", NewCanvasBackground.TRANSPARENT, 0, background) { background = NewCanvasBackground.TRANSPARENT }
+                BackgroundOption("Color…", NewCanvasBackground.CUSTOM, customColor, background) { pickingColor = true }
+                BackgroundOption(CanvasLabels19.PAPER, NewCanvasBackground.PAPER, 0xFFFFFFFF.toInt(), background) { background = NewCanvasBackground.PAPER }
             }
+            Text(
+                background.caption,
+                style = MaterialTheme.typography.bodySmall,
+                color = BrushworkColors.OnChromeDim,
+                modifier = Modifier.padding(top = 8.dp),
+            )
 
             SectionHeader("Result")
             SummaryCard(w, h, size.dpi, unit, check, maxHeap)
@@ -218,7 +234,7 @@ private fun NewCanvasContent(creating: Boolean, onDismiss: () -> Unit, onCreate:
             initial = customColor,
             onPick = {
                 customColor = it or 0xFF000000.toInt()
-                background = BackgroundChoice.CUSTOM
+                background = NewCanvasBackground.CUSTOM
             },
             onDismiss = { pickingColor = false },
             title = "Background color",
@@ -229,11 +245,17 @@ private fun NewCanvasContent(creating: Boolean, onDismiss: () -> Unit, onCreate:
 
 @Composable
 private fun ScreenPresets(w: Int, h: Int, onPick: (PixelPreset) -> Unit) {
+    // v1.9 (I27): fewer tiles per row at a large font, so a size such as "1080 × 2408" is never cut.
+    val fontScale = LocalDensity.current.fontScale
     FlowRow(
         Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
-        maxItemsInEachRow = 3,
+        maxItemsInEachRow = when {
+            fontScale <= 1.15f -> 3
+            fontScale <= 1.6f -> 2
+            else -> 1
+        },
     ) {
         for (p in CanvasPresets.screen) {
             PresetTile(selected = p.width == w && p.height == h, onClick = { onPick(p) }, modifier = Modifier.weight(1f)) {
@@ -354,12 +376,38 @@ private fun AspectGlyph(w: Int, h: Int, box: Dp = 28.dp) {
     }
 }
 
+/**
+ * One choice of the "Background" row: its swatch over [label], one touch target tagged
+ * [NewCanvasBackground.tag]. v1.9 (R15): the Paper choice has its own swatch ([PaperSwatch]).
+ */
 @Composable
-private fun BackgroundOption(label: String, color: Int, selected: Boolean, onClick: () -> Unit) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        ColorSwatch(color, size = 44.dp, selected = selected, onClick = onClick)
+private fun BackgroundOption(label: String, choice: NewCanvasBackground, color: Int, current: NewCanvasBackground, onClick: () -> Unit) {
+    val selected = choice == current
+    Column(
+        Modifier
+            .testTag(choice.tag)
+            .selectable(selected = selected, onClick = onClick, role = Role.RadioButton),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        if (choice == NewCanvasBackground.PAPER) PaperSwatch(selected) else ColorSwatch(color, size = 44.dp, selected = selected)
         Text(label, style = MaterialTheme.typography.labelSmall, color = if (selected) BrushworkColors.OnChrome else BrushworkColors.OnChromeDim, modifier = Modifier.padding(top = 4.dp))
     }
+}
+
+/** v1.9 (R15): the Paper choice's 44 dp swatch ([PaperSwatchArt]) with [ColorSwatch]'s shape and border. */
+@Composable
+private fun PaperSwatch(selected: Boolean) {
+    val shape = RoundedCornerShape(6.dp)
+    Box(
+        Modifier
+            .size(44.dp)
+            .clip(shape)
+            .drawBehind {
+                val stroke = 1.dp.toPx()
+                drawIntoCanvas { PaperSwatchArt.draw(it.nativeCanvas, size.width, size.height, stroke) }
+            }
+            .border(if (selected) 3.dp else 1.dp, if (selected) BrushworkColors.Accent else BrushworkColors.ChromeBorder, shape),
+    )
 }
 
 @Composable
