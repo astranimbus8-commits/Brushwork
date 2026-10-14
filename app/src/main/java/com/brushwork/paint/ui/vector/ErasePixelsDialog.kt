@@ -50,7 +50,7 @@ object ErasePixels {
             layer.isShapeLayer -> {
                 c.setLayerData(layer, layer.dataSnapshot().rasterizedContent(), TransformTool.RASTERIZE_SHAPE_LABEL)
                 if (layer.isShapeLayer) return false
-                c.toast("\"${layer.name}\" is now a regular layer (its shape can no longer be edited; undo to get it back)")
+                c.toast(TransformTool.rasterizedMessage(layer.name, "shape"))
                 true
             }
             else -> false

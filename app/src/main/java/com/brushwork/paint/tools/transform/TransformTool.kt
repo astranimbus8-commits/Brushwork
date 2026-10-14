@@ -315,7 +315,7 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
         }
         controller.setLayerData(layer, before.rasterizedContent(), if (kind == "text") RASTERIZE_TEXT_LABEL else RASTERIZE_SHAPE_LABEL)
         if (layer.textData != null || layer.shapeData != null) return false
-        controller.toast("\"${layer.name}\" is now a regular layer (its $kind can no longer be edited; undo to get it back)")
+        controller.toast(rasterizedMessage(layer.name, kind))
         return true
     }
 
@@ -3134,6 +3134,12 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
         /** The rasterize steps of "Rasterize and deform" (the names a pixel edit gives them too). */
         const val RASTERIZE_TEXT_LABEL = "Rasterize text"
         const val RASTERIZE_SHAPE_LABEL = "Rasterize shape"
+        /**
+         * The toast after those steps ([kind]: "text" or "shape"), also said by the Eraser's
+         * `EraseLabels19.TURN_INTO_PIXELS` on a shape layer (`ErasePixels.turnIntoPixels`; lead, at A5's merge).
+         */
+        fun rasterizedMessage(layerName: String, kind: String): String =
+            "\"$layerName\" is now a regular layer (its $kind can no longer be edited; undo to get it back)"
         /** What "Rasterize and deform" can turn into pixels first (an array is applied by the user instead). */
         private val RASTERIZABLE = setOf(Lifted.TEXT, Lifted.SHAPE, Lifted.VECTOR)
         /** Largest neighborhood (document px, each way) read to tell whether a finger is on content. */
