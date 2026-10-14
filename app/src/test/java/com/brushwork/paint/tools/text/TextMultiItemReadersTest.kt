@@ -230,6 +230,8 @@ class TextMultiItemReadersTest {
         assertEquals(before, TextCodec.decodeAll(layer.textData))
         assertRendered(layer, "after undo")
         // A layer of one text is deleted whole, as in v1.8.
+        // v1.9 (R14): the switch keeps the new text out of the open text layer.
+        c.settings.textNewLayerEachTime = true
         tool.startTextAt(150f, 120f)
         tool.setText("Solo")
         tool.confirmEditor()

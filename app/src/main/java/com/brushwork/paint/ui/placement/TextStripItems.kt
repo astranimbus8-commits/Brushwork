@@ -1,5 +1,6 @@
 package com.brushwork.paint.ui.placement
 
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.WrapText
@@ -16,16 +17,23 @@ import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import com.brushwork.paint.tools.frame.FrameDividerTool
 import com.brushwork.paint.tools.text.TextTool
+import com.brushwork.paint.ui.common.PlaceLabels19
+import com.brushwork.paint.ui.common.V19Tags
 import com.brushwork.paint.ui.common.LocalSheetHost
 import com.brushwork.paint.ui.common.ToolIconButton
 import com.brushwork.paint.ui.theme.BrushworkColors
 import com.brushwork.paint.ui.tools.strip.LocalStripContext
+import com.brushwork.paint.ui.tools.strip.StripKeysV19
 import com.brushwork.paint.ui.tools.strip.StripItem
 import com.brushwork.paint.ui.tools.strip.StripRow
 import com.brushwork.paint.ui.tools.strip.StripSpec
@@ -36,6 +44,8 @@ import com.brushwork.paint.ui.tools.strip.StripSpec
  * wrap button (AUTO: the first to go to the More row); the More row "Snap to objects", then
  * "Numbers" while a text is open (no slot kept without one), under v1.7's hint. The editor
  * dialog and the Numbers, Wrap and Letter scaling sheets are its overlays, as v1.7 hosted them.
+ * v1.9 (R14) ends the More row with “New layer each time” while no text is open, and fades the
+ * wrap button for a text that shares its layer with others.
  */
 @Composable
 internal fun textSpec(tool: TextTool): StripSpec {
@@ -95,8 +105,40 @@ internal fun textSpec(tool: TextTool): StripSpec {
                 tool.numbersOpen = true
             })
         },
+        // v1.9 (R14): “New layer each time” while no text is open (off, a new text joins the
+        // active text layer), after v1.8's More items.
+        if (item != null) null else StripItem(T.NEW_LAYER.key, PlaceLabels19.NEW_LAYER_EACH_TIME, T.NEW_LAYER.widthDp.dp, row = StripRow.MORE) {
+            NewLayerEachTimeButton(tool)
+        },
     )
     return StripSpec(items, hint = hint, overlays = { TextOverlays(tool) })
+}
+
+/**
+ * v1.9 (R14): “New layer each time” ([TextTool.newLayerEachTime]), a text button with a selected
+ * state (tag [V19Tags.NEW_LAYER_EACH_TIME]): on, every new text gets a layer of its own as in
+ * v1.8; off (the default), a new text joins the active text layer. The tap that places a text
+ * reads it, so it applies before any text exists.
+ *
+ * I27: the label is 11 sp on two lines in a fixed cell; past font scale
+ * [TextStripItems.NEW_LAYER_MAX_FONT_SCALE] it would need a third line, so it stops growing
+ * there (it shrinks rather than being cut, and stays above 11 sp).
+ */
+@Composable
+private fun NewLayerEachTimeButton(tool: TextTool) {
+    val on = tool.newLayerEachTime
+    val d = LocalDensity.current
+    val capped = Density(d.density, minOf(d.fontScale, TextStripItems.NEW_LAYER_MAX_FONT_SCALE))
+    Box(Modifier.testTag(V19Tags.NEW_LAYER_EACH_TIME)) {
+        CompositionLocalProvider(LocalDensity provides capped) {
+            StripTextButton(
+                PlaceLabels19.NEW_LAYER_EACH_TIME,
+                TextStripItems.NEW_LAYER.widthDp.dp,
+                onClick = { tool.newLayerEachTime = !on },
+                checked = on,
+            )
+        }
+    }
 }
 
 /** The Text tool's sheets and dialog, as v1.7 hosted them (§3.9 "Overlays"). */
@@ -158,7 +200,7 @@ private fun WrapButton(tool: TextTool) {
         description = TextStripItems.wrapLabel(tool),
         announceText = false,
         on = item != null && item.wrapActive,
-        dimmed = !(item != null && item.canWrap),
+        dimmed = !tool.canWrap,
     )
 }
 
@@ -170,6 +212,12 @@ internal object TextStripItems {
     const val WRAP = "text.wrap"
     const val NUMBERS = "text.numbers"
     const val SNAP = "text.snap"
+
+    /** v1.9 (R14): the More-row toggle [NewLayerEachTimeButton], while no text is open. */
+    val NEW_LAYER = StripKeysV19.NEW_LAYER_EACH_TIME_TEXT
+
+    /** The largest font scale at which [NEW_LAYER]'s label fits its two lines (I27). */
+    const val NEW_LAYER_MAX_FONT_SCALE = 1.3f
 
     /** "Edit text" after its icon at 11 sp. */
     const val EDIT_DP = 92f

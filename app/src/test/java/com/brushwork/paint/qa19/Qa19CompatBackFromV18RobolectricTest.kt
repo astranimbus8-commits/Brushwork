@@ -295,30 +295,54 @@ class Qa19CompatBackFromV18RobolectricTest {
         // A3: v1.8 reads the CURVE or LINE fallback (a closed guide becomes an open curve); the nodes are dropped.
     }
 
-    @Ignore("5.2 row 5, TextLayerData.more and TextItem.id (NEVER): owner A3")
     @Test
     fun row05SeveralTextsInALayer() {
-        v18Reads("text-several", listOf("more"))
+        val dto = v18Reads("text-several", listOf("more"))
         // A3: v1.8 shows the saved pixels with every text; it edits only the first text; its
         // re-encode drops `more`; an untouched layer's JSON survives a v1.8 save.
+        val data = firstText("text-several", "Two texts")
+        assertEquals("v1.9 wrote both texts", SEVERAL.map { it.text }, TextCodec.decodeAll(data).map { it.text })
+        val first = requireNotNull(TextCodecV18.decode(data)) { "v1.8 reads the layer" }
+        assertEquals("v1.8 edits the first text", SEVERAL[0].text, first.text)
+        val edited = TextCodecV18.encode(first.copy(text = "Edited in v1.8"))
+        assertFalse("v1.8's re-encode drops the others", edited.contains("\"more\""))
+        assertEquals("v1.9 reads v1.8's edit as one text", listOf("Edited in v1.8"), TextCodec.decodeAll(edited).map { it.text })
+        // Untouched: the layer's text data goes through v1.8's save as it was.
+        val saved = ProjectFormatV18.decode(ProjectFormatV18.encode(dto))
+        assertEquals("v1.8 saves the untouched layer's data as it was", data, saved.layers.single { it.name == "Two texts" }.textData)
+        // A one-text layer is v1.8's format, byte for byte.
+        val one = firstText("text-several", "One text")
+        assertEquals(one, TextCodecV18.encode(TextCodecV18.decode(one)!!))
     }
 
-    @Ignore("5.2 row 6, v1.8 Transform (move, rotate, scale) of a several-text layer (TextTransforms.mapped): owner A3")
     @Test
     fun row06V18TransformOfASeveralTextLayer() {
+        v18Reads("text-transform", listOf("more"))
         val data = firstText("text-transform", "Three texts")
+        assertEquals(3, TextCodec.decodeAll(data).size)
         val moved = TextTransformsV18.mapped(data, floatArrayOf(0.8f, -0.6f, 40f, 0.6f, 0.8f, -12f, 0f, 0f, 1f))
         assertNotNull("v1.8 transforms the layer's text", moved)
         assertFalse("v1.8 keeps only the first text", moved!!.contains("\"more\""))
         // A3: v1.9 reopens the v1.8-transformed layer with one editable text, the pixels of the
         // others moved with it (I1 for the first text only).
+        val reopened = TextCodec.decodeAll(moved).single()
+        val src = TextCodec.decodeAll(data)[0]
+        assertEquals(src.text, reopened.text)
+        assertEquals("moved as v1.8 maps it", 0.8f * src.cx - 0.6f * src.cy + 40f, reopened.cx, 0.01f)
+        assertEquals(0.6f * src.cx + 0.8f * src.cy - 12f, reopened.cy, 0.01f)
+        assertEquals("turned with it", src.rotationDeg + 36.87f, reopened.rotationDeg, 0.01f)
     }
 
-    @Ignore("5.2 row 7, v1.8 array source and data lift of a several-text layer (ArraySources, DataLift): owner A3")
     @Test
     fun row07V18ArraySourceAndLiftOfASeveralTextLayer() {
         v18Reads("text-array-lift", listOf("more"))
         // A3: v1.8's copy or lift carries the first text only; the others are pixels.
+        val data = firstText("text-array-lift", "Array source")
+        assertEquals(SEVERAL.size, TextCodec.decodeAll(data).size)
+        // v1.8's ArraySources and DataLift read a text layer with its TextCodec and write the copy with it.
+        val copy = TextCodecV18.encode(requireNotNull(TextCodecV18.decode(data)) { "v1.8 reads the source" })
+        assertFalse(copy.contains("\"more\""))
+        assertEquals("the copy holds the first text", listOf(SEVERAL[0].text), TextCodec.decodeAll(copy).map { it.text })
     }
 
     // Row 8, v1.8's wrap re-flow (TextWrapReflow): not reachable, no section (a wrapping or
@@ -660,6 +684,9 @@ class Qa19CompatBackFromV18RobolectricTest {
         "text-justify" to ::writeTextJustify,
         "text-kerning" to ::writeTextKerning,
         "text-list" to ::writeTextList,
+        "text-several" to ::writeTextSeveral,
+        "text-transform" to ::writeTextTransform,
+        "text-array-lift" to ::writeTextArrayLift,
     )
 
     /** `project.json` of the gallery's project [id], copied into [dir]. */
@@ -1125,13 +1152,32 @@ class Qa19CompatBackFromV18RobolectricTest {
         )
     }
 
+    /** Row 5 (A3): "Two texts" (one layer, two texts, R14) and "One text" (v1.8's format). */
+    private fun writeTextSeveral(dir: File) {
+        saveTextLayers(dir, "Two texts" to SEVERAL, "One text" to listOf(TextItem("Alone", TextSpec(sizePx = 20f), cx = 120f, cy = 140f)))
+    }
+
+    /** Row 6 (A3): "Three texts", for v1.8's Transform. */
+    private fun writeTextTransform(dir: File) {
+        saveTextLayers(dir, "Three texts" to SEVERAL + TextItem("Third", TextSpec(sizePx = 18f), cx = 180f, cy = 130f, rotationDeg = 10f))
+    }
+
+    /** Row 7 (A3): "Array source", two texts, for v1.8's array source and data lift. */
+    private fun writeTextArrayLift(dir: File) {
+        saveTextLayers(dir, "Array source" to SEVERAL)
+    }
+
     /** A 240 x 160 document of one text layer per [texts] (name to text, its pixels drawn by v1.9), saved into [dir]. */
-    private fun saveTexts(dir: File, vararg texts: Pair<String, TextItem>) {
+    private fun saveTexts(dir: File, vararg texts: Pair<String, TextItem>) =
+        saveTextLayers(dir, *texts.map { (name, item) -> name to listOf(item) }.toTypedArray())
+
+    /** A 240 x 160 document of one text layer per [layers] (name to its texts, bottom first, drawn by v1.9), saved into [dir]. */
+    private fun saveTextLayers(dir: File, vararg layers: Pair<String, List<TextItem>>) {
         val doc = Document("qa19-${dir.name}", dir.name, 240, 160, dpi = 144f)
-        for ((name, item) in texts) {
+        for ((name, items) in layers) {
             val layer = Layer(doc.newLayerId(), name, BitmapUtils.createLayerBitmap(doc.width, doc.height))
-            TextRenderer.drawItem(Canvas(layer.bitmap), item, TextRenderer.prepare(item), null)
-            layer.textData = TextCodec.encodeAll(listOf(item))
+            for (item in items) TextRenderer.drawItem(Canvas(layer.bitmap), item, TextRenderer.prepare(item), null)
+            layer.textData = TextCodec.encodeAll(items)
             doc.layers += layer
         }
         saveProject(doc, dir)
@@ -1193,6 +1239,12 @@ class Qa19CompatBackFromV18RobolectricTest {
 
         /** Row 3 (A3): three paragraphs and a blank one (neither marked nor counted). */
         const val TEXT_LIST = "Brushes\n\nLayers and text\nExport"
+
+        /** Rows 5 to 7 (A3): two texts of one layer, bottom first. */
+        val SEVERAL = listOf(
+            TextItem("First text", TextSpec(sizePx = 22f), cx = 90f, cy = 40f),
+            TextItem("Second", TextSpec(sizePx = 26f, color = 0xFFCC2222.toInt()), cx = 140f, cy = 90f, rotationDeg = -8f),
+        )
 
         /** The keys v1.9 adds to [SETTINGS_FILE] (F1a, design 2.3.4). */
         val V19_SETTINGS_KEYS = listOf(
