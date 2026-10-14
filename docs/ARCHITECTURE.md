@@ -1907,8 +1907,9 @@ for bit, across blend modes, alpha lock, selection, grain, taper, masks, clippin
 layers, folders, symmetry, smudge and blur; elsewhere the lift redraws its tiles as before.
 
 **Per-frame allocations (P2).** `DisplayTiles` keeps each tile's Canvas and `CompositeTarget`
-with its bitmap, tracks dirty tiles in a flag array with a count (`hasDirty` is O(1)) and reuses
-its rects, order arrays and `TileUpdate` values; `Compositor` caches its blend Paint per (mode,
+with its bitmap, counts its dirty tiles (`hasDirty` is O(1); `dirty` holds null for a clean tile,
+as in v1.8, since `VectorPerfHarness` reads it, and each tile's own reused rect otherwise) and
+reuses its rects, order arrays and `TileUpdate` values; `Compositor` caches its blend Paint per (mode,
 alpha) on the main thread; `DirectStroke` (smudge, blur, watercolor, raster eraser) recycles its
 dabs.
 
