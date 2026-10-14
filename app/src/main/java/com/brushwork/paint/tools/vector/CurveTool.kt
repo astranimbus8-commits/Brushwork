@@ -1569,7 +1569,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
             val i = indices[k]
             val v = values[k]
             if (i !in 0 until n || !v.isFinite()) continue
-            want[i] = v.coerceIn(0f, if (isPath) VSpline.MAX_WIDTH else CurveWidths.MAX_FACTOR)
+            want[i] = v.coerceIn(0f, CurveWidths.MAX_FACTOR)
         }
         if (want.all { (i, w) -> widthOf(i) == w }) return
         pushHistory(NumericKey("thickness", -1))
