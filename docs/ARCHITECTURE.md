@@ -1096,7 +1096,7 @@ policy for errors no job caught, and the two tools' jobs guarded and moved off t
 
 R15 (one layer, the paper) and R16 (the artworks outlive an uninstall). Steps 1-8, 10 and 11 are
 built; step 9 (the zip archive: Save all / Open file) is cut, because the backup folder already
-keeps the artworks across an uninstall. `CanvasLabels19.SAVE_ALL` and `OPEN_FILE` stay unused.
+keeps the artworks across an uninstall. `BackupLabels19.SAVE_ALL` and `OPEN_FILE` stay unused.
 
 **New canvas (R15).** The New canvas dialog's Background row (`ui/gallery/NewCanvasBackground.kt`)
 offers White, Transparent, a colour and Paper, in that order. `AppSettings.newCanvasBackground`
@@ -1189,15 +1189,16 @@ artwork, and `LATER` hides it for 7 days, kept in the state file.
 
 **Release guards (step 8).** `app/build.gradle.kts` registers `checkReleaseGuards` before
 `preReleaseBuild`. The `versionCode` is `BW_VERSION_CODE`, the workflow's run number, or 1
-locally. With `BW_RELEASE_GUARD=true`, which the workflow sets for a push or a tag and never for a
-pull request, a release build fails in either case:
+locally. With `BW_RELEASE_GUARD=true`, which the workflow sets only for the build of a release tag
+(never for a push to `main` or a pull request, so those stay green; the lead, at A8's merge), a
+release build fails in either case:
 - the release keystore is missing (`BW_KEYSTORE_FILE`); a debug-signed APK does not install over
   the release, and uninstalling deletes the artworks;
 - the `versionCode` is not above `BW_LAST_VERSION_CODE`.
 
-The workflow looks up `BW_LAST_VERSION_CODE`: the run number of the successful push build of the
-last `vX.Y.Z` release (`gh release list`, `gh run list`; `actions: read`). Without the guard, a
-build only warns. The workflow also uploads R8's `mapping.txt` as the `mapping-<run>` artifact.
+On a tag, the workflow looks up `BW_LAST_VERSION_CODE`: the run number of the successful push
+build of the last `vX.Y.Z` release (`gh release list`, `gh run list`; `actions: read`). Without
+the guard, a build only warns. The workflow also uploads R8's `mapping.txt` as the `mapping-<run>` artifact.
 
 **Gallery thumbnails (step 11).** `ui/gallery/ThumbnailCache` holds at most 24 MB
 (`MAX_BYTES`, LRU by bytes). It is registered with `MemoryGovernor` at priority 0 (a display

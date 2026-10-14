@@ -13,9 +13,10 @@ val releaseCode: Int = System.getenv("BW_VERSION_CODE")?.toIntOrNull() ?: 1
 
 // v1.9 A8 (R16): an APK that does not install over the last release makes the user uninstall the
 // app, and uninstalling deletes the artworks. So when the workflow asks for it (BW_RELEASE_GUARD=true:
-// a push or a tag, never a pull request), a release build refuses to run without the release
-// keystore, or with a versionCode not above the last release tag's (BW_LAST_VERSION_CODE: the run
-// number of that tag's build, which the workflow looks up). Local builds keep the debug-key fallback.
+// the build of a release tag only, never a push to main or a pull request), a release build refuses
+// to run without the release keystore, or with a versionCode not above the last release tag's
+// (BW_LAST_VERSION_CODE: the run number of that tag's build, which the workflow looks up). Local
+// builds and unguarded CI builds keep the debug-key fallback.
 val releaseGuard = tasks.register("checkReleaseGuards") {
     group = "verification"
     description = "Refuses a CI release build without the release keystore or with a versionCode not above the last release's."
