@@ -6,16 +6,16 @@ import com.brushwork.paint.model.FolderSpec
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.vector.VectorContent
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotEquals
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 
 /**
- * v1.9 (R11, design 2.4.12): F1b's [EraseRouting] reproduces v1.8. The Eraser brush erases objects
- * exactly where v1.8's `BrushTool.start` did (`layer.isVectorLayer && !maskTarget && !isPath`),
- * over every kind of layer, target and stroke; the four tools are refused; CONVERT_THEN_OBJECTS is
- * never the route.
+ * v1.9 (R11, design 2.4.12): what [EraseRouting] keeps of v1.8. The Eraser brush still erases a
+ * vector layer's objects exactly where v1.8's `BrushTool.start` did (`layer.isVectorLayer &&
+ * !maskTarget && !isPath`); what v1.9 adds (A5, design 2.8): a legacy shape layer's content is
+ * converted and erased as objects (it was rasterized), and the four tools route by the layer like
+ * the Eraser (F1b refused them).
  */
 @RunWith(RobolectricTestRunner::class)
 class EraseRoutingV18Test {
@@ -33,18 +33,19 @@ class EraseRoutingV18Test {
     private val kinds = listOf("raster", "text", "shape", "vector", "adjustment", "folder")
 
     @Test
-    fun theEraserErasesObjectsExactlyWhereV18DidAndNeverConvertsFirst() {
+    fun theEraserErasesObjectsExactlyWhereV18DidAndConvertsOnlyShapeLayers() {
         for (kind in kinds) for (mask in listOf(false, true)) for (path in listOf(false, true)) {
             val l = layer(kind)
             val route = EraseRouting.route(l, EraseSource.ERASER_BRUSH, mask, path)
             val v18 = l.isVectorLayer && !mask && !path
             assertEquals("$kind, mask $mask, path $path: $route", v18, route == EraseRoute.OBJECTS)
-            assertNotEquals("$kind, mask $mask, path $path", EraseRoute.CONVERT_THEN_OBJECTS, route)
+            val converts = l.isShapeLayer && !mask && !path
+            assertEquals("$kind, mask $mask, path $path: $route", converts, route == EraseRoute.CONVERT_THEN_OBJECTS)
         }
     }
 
     @Test
-    fun theTableOfF1b() {
+    fun theTableOfV19() {
         fun r(kind: String, mask: Boolean = false, path: Boolean = false) = EraseRouting.route(layer(kind), EraseSource.ERASER_BRUSH, mask, path)
         assertEquals(EraseRoute.RASTER, r("raster"))
         assertEquals(EraseRoute.RASTER, r("raster", path = true))
@@ -52,7 +53,8 @@ class EraseRoutingV18Test {
         assertEquals(EraseRoute.OBJECTS, r("vector"))
         assertEquals(EraseRoute.RASTERIZE_DATA, r("vector", path = true))
         assertEquals(EraseRoute.RASTERIZE_DATA, r("text"))
-        assertEquals(EraseRoute.RASTERIZE_DATA, r("shape"))
+        // v1.8 rasterized a shape layer under the Eraser (2.8: now its shape is erased as an object).
+        assertEquals(EraseRoute.CONVERT_THEN_OBJECTS, r("shape"))
         assertEquals(EraseRoute.RASTERIZE_DATA, r("shape", path = true))
         assertEquals(EraseRoute.REFUSE, r("adjustment"))
         assertEquals(EraseRoute.REFUSE, r("folder"))
@@ -60,10 +62,11 @@ class EraseRoutingV18Test {
     }
 
     @Test
-    fun theFourToolsAreRefusedInF1b() {
+    fun theFourToolsRouteLikeTheEraser() {
         for (source in EraseSource.entries.filter { it != EraseSource.ERASER_BRUSH }) {
             for (kind in kinds) for (mask in listOf(false, true)) {
-                assertEquals("$source on $kind, mask $mask", EraseRoute.REFUSE, EraseRouting.route(layer(kind), source, mask, false))
+                val l = layer(kind)
+                assertEquals("$source on $kind, mask $mask", EraseRouting.route(l, EraseSource.ERASER_BRUSH, mask, false), EraseRouting.route(l, source, mask, false))
             }
         }
     }

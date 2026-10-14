@@ -6,14 +6,17 @@ import android.graphics.Matrix
 import android.graphics.Rect
 import com.brushwork.paint.AppSettings
 import com.brushwork.paint.EditorController
+import com.brushwork.paint.array.ArraySources
 import com.brushwork.paint.brush.BrushLibrary
 import com.brushwork.paint.brush.TipCache
 import com.brushwork.paint.core.PackedPoints
 import com.brushwork.paint.engine.BitmapUtils
+import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
+import com.brushwork.paint.tools.vector.ShapeCodec
 import com.brushwork.paint.tools.vector.ShapeObject
 import com.brushwork.paint.tools.vector.ShapeStyle
 import com.brushwork.paint.tools.vector.ShapeType
@@ -255,6 +258,48 @@ class VectorEraserRobolectricTest {
         assertEquals(steps + 1, c.undoManager.undoCount)
         assertArrayEquals(render(after), pixels(c.vec.bitmap))
         assertNull(c.renderOverride)
+    }
+
+    /**
+     * v1.9 (R11 b, I20; A5): the Eraser on a legacy shape layer erases the shape as an object; the
+     * layer becomes a vector layer in that same step, and only when something is erased.
+     */
+    @Test
+    fun aLegacyShapeLayerIsErasedAsAnObjectInOneStep() {
+        val c = setup()
+        val o = ShapeObject(ShapeType.RECTANGLE, cx = 150f, cy = 100f, w = 80f, h = 60f, style = ShapeStyle.STROKE, strokeWidth = 4f)
+        val shape = c.addLayerWithContent("Shape", "Add shape", shapeData = ShapeCodec.encode(o), draw = ArraySources.shapeDraw(o, ColorMode.RGB, w, h))!!
+        c.selectLayer(shape)
+        val data = shape.dataSnapshot()
+        val cache = pixels(shape.bitmap)
+        val steps = c.undoManager.undoCount
+        eraser(c, VectorEraseMode.OBJECT)
+        // A gesture that misses the outline, and a cancelled one: no step, no conversion.
+        c.swipe(20f to 20f, 40f to 30f)
+        c.pointerDown(ToolPoint(150f, 60f))
+        c.pointerMove(ToolPoint(150f, 140f))
+        assertSame(shape, c.renderOverride?.layer)
+        c.pointerCancel()
+        assertNull(c.renderOverride)
+        assertEquals(steps, c.undoManager.undoCount)
+        assertEquals(data, shape.dataSnapshot())
+        assertArrayEquals(cache, pixels(shape.bitmap))
+        // Across the outline: the shape goes, the layer is a vector layer, ONE step.
+        c.swipe(150f to 60f, 150f to 140f)
+        assertEquals(steps + 1, c.undoManager.undoCount)
+        assertEquals(VectorEraserRecorder.ERASE_LABEL, c.undoManager.undoLabel)
+        assertNull(shape.shapeData)
+        assertTrue(shape.isVectorLayer)
+        assertTrue(shape.vector!!.objects.isEmpty())
+        assertArrayEquals(render(shape.vector!!), pixels(shape.bitmap))
+        assertNull(c.renderOverride)
+        c.undo()
+        assertEquals(data, shape.dataSnapshot())
+        assertTrue(shape.isShapeLayer)
+        assertArrayEquals(cache, pixels(shape.bitmap))
+        c.redo()
+        assertTrue(shape.isVectorLayer)
+        assertArrayEquals(render(shape.vector!!), pixels(shape.bitmap))
     }
 
     @Test

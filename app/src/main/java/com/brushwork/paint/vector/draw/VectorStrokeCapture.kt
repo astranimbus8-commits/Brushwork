@@ -9,6 +9,7 @@ import com.brushwork.paint.brush.StrokeKind
 import com.brushwork.paint.brush.StrokeRecorder
 import com.brushwork.paint.core.PackedPoints
 import com.brushwork.paint.engine.EditTarget
+import com.brushwork.paint.engine.LayerConvert
 import com.brushwork.paint.tools.LayerToolRules
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.vector.VStroke
@@ -27,16 +28,32 @@ import com.brushwork.paint.vector.VStroke
  * - tips that move pixels (watercolor, smudge, blur) are refused, and so is a brush on an
  *   alpha-locked vector layer (its live stroke would be clipped to the painted pixels, which a
  *   replay can't reproduce);
- * - a stroke into the layer's mask, a path stroke and every stroke on another kind of layer is a
+ * - v1.9: the eraser on a legacy shape layer erases its shape as an object (the layer becomes a
+ *   vector layer in the erase's step, [EraseRoute.CONVERT_THEN_OBJECTS]);
+ * - a stroke into the layer's mask, a path stroke and every other stroke on another kind of layer is a
  *   normal raster stroke.
  */
 object VectorStrokeCapture {
     /** Shown when a brush is refused on an alpha-locked vector layer. */
     const val ALPHA_LOCK_MESSAGE = "Transparency is locked on this vector layer: unlock it to draw strokes"
 
+    /**
+     * v1.9: the Eraser on a legacy shape layer whose shape doesn't decode (it can't become an
+     * object). `EditorController.convertToVectorLayer`'s message for the same case.
+     */
+    private const val SHAPE_UNREADABLE_MESSAGE = "This shape can't be converted"
+
     fun hookFor(c: EditorController, info: StrokeInfo): StrokeHook {
         val layer = info.layer
-        if (info.isPath || !layer.isVectorLayer || info.target != EditTarget.CONTENT) return StrokeHook.None
+        if (info.isPath || info.target != EditTarget.CONTENT) return StrokeHook.None
+        if (!layer.isVectorLayer) {
+            // v1.9 (R11 b, I20): the Eraser on a legacy shape layer erases its shape as an object
+            // of the vector layer it becomes in the erase's own step (EraseRoute.CONVERT_THEN_OBJECTS).
+            // Every other stroke on a non-vector layer is a normal raster stroke, as in v1.8.
+            if (info.toolId != ToolId.ERASER || !info.convertFirst || !layer.isShapeLayer) return StrokeHook.None
+            // A shape that doesn't decode can't become an object: refused rather than rasterized.
+            if (LayerConvert.shapeToVector(layer) == null) return StrokeHook.Refuse(SHAPE_UNREADABLE_MESSAGE)
+        }
         return when {
             info.toolId == ToolId.ERASER -> {
                 val state = VectorDrawState.of(c)

@@ -11,6 +11,7 @@ import com.brushwork.paint.EditorController
 import com.brushwork.paint.brush.BrushPreset
 import com.brushwork.paint.brush.StrokeRaster
 import com.brushwork.paint.brush.StrokeRecorder
+import com.brushwork.paint.engine.LayerConvert
 import com.brushwork.paint.engine.LayerRenderOverride
 import com.brushwork.paint.engine.PerfTrace
 import com.brushwork.paint.model.Layer
@@ -22,6 +23,10 @@ import kotlin.math.max
  * or parts of strokes and lines, by [VectorEraseMode]) is shown dimmed while the finger moves,
  * and lifting the finger removes it as ONE undo step "Erase" (`VectorLayers.update`, which
  * re-renders the changed area). A second finger (cancel) leaves no trace.
+ *
+ * v1.9 (R11 b, I20; A5): on a legacy shape layer ([convertFirst]) the eraser works on the object
+ * the shape becomes ([LayerConvert.shapeToVector]); the layer becomes a vector layer in the same
+ * step ([ERASE_LABEL]), and only when the gesture erases something.
  */
 internal class VectorEraserRecorder(
     private val c: EditorController,
@@ -31,10 +36,10 @@ internal class VectorEraserRecorder(
     private val stylus: Boolean,
     private val mode: VectorEraseMode,
     /**
-     * v1.9 (design 2.4.12): convert the layer to a vector layer first, in the erase step (A5).
-     * F1b: never true (EraseRouting never routes CONVERT_THEN_OBJECTS) and not read.
+     * v1.9 (design 2.4.12): [layer] is a legacy shape layer ([EraseRoute.CONVERT_THEN_OBJECTS]):
+     * it becomes a vector layer ([LayerConvert.toVectorAction]) in the erase's own step.
      */
-    @Suppress("unused") private val convertFirst: Boolean = false,
+    private val convertFirst: Boolean = false,
 ) : StrokeRecorder {
     override val replacesStroke: Boolean = true
 
@@ -42,7 +47,7 @@ internal class VectorEraserRecorder(
     override val ignoresSelection: Boolean = true
 
     private val state = VectorDrawState.of(c)
-    private val session = EraseSession(layer.vector ?: VectorContent.EMPTY, mode, state.targets)
+    private val session = EraseSession(contentNow() ?: VectorContent.EMPTY, mode, state.targets)
     private val preview = DoomPreview(layer, session)
     private var previous: LayerRenderOverride? = null
     private var installed = false
@@ -51,6 +56,13 @@ internal class VectorEraserRecorder(
     /** The eraser's path (x, y, radius per point), to apply it again if the layer changes meanwhile. */
     private var path = FloatArray(96)
     private var pathSize = 0
+
+    /**
+     * What the eraser works on now: the layer's objects, or (on a shape layer to convert) the
+     * object its shape becomes; null when there is none (the layer changed kind meanwhile).
+     */
+    private fun contentNow(): VectorContent? =
+        layer.vector ?: if (convertFirst) LayerConvert.shapeToVector(layer) else null
 
     /** The eraser's radius at raw pressure [raw] (size follows a stylus' pressure like the brush). */
     private fun radius(raw: Float): Float {
@@ -80,7 +92,7 @@ internal class VectorEraserRecorder(
 
     override fun commit(label: String, bounds: Rect, commitPixels: () -> Boolean): Boolean {
         if (ended) return false
-        if (layer.vector == null || c.doc.indexOf(layer) < 0) { end(); return false }
+        if (contentNow() == null || c.doc.indexOf(layer) < 0) { end(); return false }
         // No more points. The dimmed preview stays until the new content is on the layer: the
         // update of an earlier gesture may still be on its way, and this one may render in the
         // background.
@@ -94,11 +106,14 @@ internal class VectorEraserRecorder(
      * [finish] is called once it was applied (or nothing was to be done).
      */
     private fun apply(finish: () -> Unit) {
-        val current = layer.vector
+        val current = contentNow()
         if (current == null || c.doc.indexOf(layer) < 0) { removePreview(); finish(); return }
+        // v1.9: a shape layer still to convert (its shape decodes again into an equal object).
+        val converting = layer.vector == null
         // The layer changed since the gesture began (an update landed meanwhile): the same
         // eraser path is applied to what the layer holds now.
-        val final = if (current === session.content) session else EraseSession(current, mode, state.targets).also { s ->
+        val same = current === session.content || (converting && current == session.content)
+        val final = if (same) session else EraseSession(current, mode, state.targets).also { s ->
             var k = 0
             while (k < pathSize) { s.add(path[k], path[k + 1], path[k + 2]); k += 3 }
         }
@@ -109,7 +124,19 @@ internal class VectorEraserRecorder(
             c.toast("Closed shapes and fills are erased whole (\"Partial\" cuts strokes and lines)")
         }
         try {
-            state.update(c, layer, after, ERASE_LABEL) { removePreview(); finish() }
+            if (!converting) {
+                state.update(c, layer, after, ERASE_LABEL) { removePreview(); finish() }
+            } else if (c.doc.effectiveLocked(layer) || !c.doc.effectiveVisible(layer)) {
+                // (The update would refuse it: no conversion either.)
+                removePreview(); finish()
+            } else {
+                // ONE step: the conversion, then the erase on the vector layer it made (rendered
+                // synchronously inside the step).
+                c.groupUndo(ERASE_LABEL) {
+                    LayerConvert.toVectorAction(c, layer, label = ERASE_LABEL)?.let(c::pushUndo)
+                    state.update(c, layer, after, ERASE_LABEL) { removePreview(); finish() }
+                }
+            }
         } catch (e: Throwable) {
             removePreview()
             throw e
