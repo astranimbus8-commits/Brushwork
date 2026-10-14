@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    v1.9 A8 (R16): what Android 12 and newer keep in the cloud backup and move to a new phone: the
+    settings, the brush presets and the palettes, as backup_rules.xml says for older versions.
+    The artworks travel through the backup folder; caches, crash reports (diagnostics/) and the
+    backup folder's state (under noBackupFilesDir) are never included.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <include domain="sharedpref" path="brushwork_settings.xml" />
+        <include domain="sharedpref" path="brushwork_brushes.xml" />
+        <include domain="sharedpref" path="brushwork_palettes.xml" />
+    </cloud-backup>
+    <device-transfer>
+        <include domain="sharedpref" path="brushwork_settings.xml" />
+        <include domain="sharedpref" path="brushwork_brushes.xml" />
+        <include domain="sharedpref" path="brushwork_palettes.xml" />
+    </device-transfer>
+</data-extraction-rules>
