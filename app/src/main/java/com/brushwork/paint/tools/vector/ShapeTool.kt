@@ -233,7 +233,15 @@ data class ShapeSettings(
  * box-local so the box handles keep transforming it). Drag a point to move it; tap the outline
  * or a "+" between two points to insert one (the outline does not change); tap / long-press a
  * point to select it for delete / sharp / smooth / automatic tangent and to drag its tangent
- * handles. Undo (button or two-finger tap) takes back one edit while such a shape is pending.
+ * handles.
+ *
+ * PER-EDIT UNDO (v1.9, R17): while a shape is pending (new, a reopened shape layer or a reopened
+ * shape object of a vector layer), each finished move, resize, rotation, line-end or point drag,
+ * nudge run, pinch, typed or scrubbed value and point edit is one in-tool step, for every shape
+ * type, with or without its own points. Undo (button or two-finger tap) takes back the last edit,
+ * not the placement; at the bottom of these steps Undo acts as in v1.8 (a new shape is discarded,
+ * an untouched reopened shape closes and the document's last step is undone). The commit is still
+ * ONE document step.
  *
  * VECTOR LAYERS (v1.5): on a vector layer a new shape becomes a shape object (`VShape`) on top
  * of the layer ("Editable (own layer)" is implied), ONE undo step "Shape"; a brush outline shown
@@ -320,7 +328,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
     var editingLayer by mutableStateOf<Layer?>(null)
         private set
 
-    /** True when [undoStep] can take back an edit of the pending shape's points. */
+    /** True when [undoStep] can take back an edit of the pending shape (v1.9, R17: of any shape). */
     override var canUndoStep by mutableStateOf(false)
         private set
 
@@ -847,7 +855,8 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         if (!(b.cx.isFinite() && b.cy.isFinite() && b.w.isFinite() && b.h.isFinite() && b.rotationDeg.isFinite())) return
         val next = clean(b)
         if (next == cur) return
-        if (points != null) pushHistory(NumericKey("place", 0))
+        // v1.9 (R17): a typed or scrubbed placement is an in-tool step for every shape.
+        pushHistory(NumericKey("place", 0))
         box = next
         refreshPreview()
     }
@@ -897,7 +906,8 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
             refreshPreview()
             return
         }
-        if (points != null) pushHistory(NumericKey("nudge", -1))
+        // v1.9 (R17): a run of nudges of the whole shape is an in-tool step for every shape.
+        pushHistory(NumericKey("nudge", -1))
         box = clean(b.translated(d.x, d.y))
         refreshPreview()
     }
@@ -1680,9 +1690,10 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
     }
 
     /**
-     * Takes back one edit of a shape with its own points (a point moved, inserted, deleted,
-     * made smooth... or the shape moved / resized meanwhile). Also used by the app's undo
-     * (button / two-finger tap); without such edits undo discards the pending shape.
+     * Takes back one edit of the pending shape (moved, resized, turned, nudged, pinched, a typed
+     * value, a point moved, inserted, deleted, made smooth...; v1.9, R17: of every shape, not only
+     * one with its own points). Also used by the app's undo (button / two-finger tap); without such
+     * edits undo acts as in v1.8 (it discards the pending shape).
      */
     override fun undoStep(): Boolean {
         val b = box ?: return false
@@ -1725,8 +1736,8 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
 
     /**
      * The in-tool history and the pending shape at [historyMark] time: equal marks mean nothing
-     * changed in between (the states compare by value, so a coalesced edit, or a move of a shape
-     * without its own points, which keeps no step, still counts as a change).
+     * changed in between (the states compare by value, so a coalesced edit, which keeps no step
+     * of its own, still counts as a change).
      */
     private data class HistoryMark(
         val settings: ShapeSettings,
@@ -1886,8 +1897,9 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
                 beginGroupEdit(if (mode == Mode.GIZMO) "Gizmo" else "Move points")
                 gesturePushed = true
             }
-            // A shape with its own points: every change can be undone one at a time.
-            if (mode != Mode.CREATE && !gesturePushed && points != null) { pushHistory(); gesturePushed = true }
+            // v1.9 (R17): every finished move, resize, rotation, line-end or point drag of the
+            // pending shape is one in-tool step, with or without its own points.
+            if (mode != Mode.CREATE && !gesturePushed) { pushHistory(); gesturePushed = true }
             // The point being dragged is the selected one (its actions and numbers follow it).
             if (mode == Mode.POINT && dragIndex >= 0) selectedPoint = dragIndex
             // The preview follows the finger as cheaply as possible until it lifts.
@@ -2357,8 +2369,9 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         mode = Mode.NONE
         pinchStart = bx
         pinchFocus = focus
-        pinchPushed = points != null
-        if (pinchPushed) pushHistory()
+        // v1.9 (R17): a pinch is one in-tool step for every shape (a pinch that moved nothing drops it, below).
+        pushHistory()
+        pinchPushed = true
         setDragging(true)
         return true
     }
@@ -2397,6 +2410,10 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         if (cancelled && box != null) {
             box = start
             if (pinchPushed) history.removeLastOrNull().also { canUndoStep = history.isNotEmpty() }
+        } else if (pinchPushed && box == start) {
+            // v1.9 (R17): a pinch that left the shape as it was is no edit (its step is dropped).
+            history.removeLastOrNull()
+            canUndoStep = history.isNotEmpty()
         }
         pinchPushed = false
         refreshPreview()
