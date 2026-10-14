@@ -34,6 +34,8 @@ data class CrashReport(val id: String, val timeMillis: Long, val kind: Kind, val
  *   only the app is remembered.
  * - [record] is also how the guarded jobs and `ErrorReporter` keep a handled error: written on
  *   the diagnostics thread, at most once a minute for the same place and class.
+ * - [install] also reads, on the diagnostics thread, how the last runs ended ([ExitReasons]: a
+ *   low-memory kill, an ANR, a native crash become reports).
  * - What was seen: the "diagnostics" preferences ("seenAt", the newest report the gallery's card
  *   was dismissed for; "exitSeenAt", the newest exit read).
  *
@@ -119,6 +121,11 @@ object CrashLog {
             Thread.setDefaultUncaughtExceptionHandler(Handler(previous))
         } catch (e: Throwable) {
             Log.w(TAG, "crash log: no handler", e)
+        }
+        // Step 2: how the last runs ended (read off the main thread), and this run's summary.
+        background {
+            ExitReasons.readSince(app)
+            ExitReasons.publishSummary(app)
         }
     }
 
