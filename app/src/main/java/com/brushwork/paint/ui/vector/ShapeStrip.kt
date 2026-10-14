@@ -69,6 +69,9 @@ import com.brushwork.paint.ui.tools.strip.StripSpec
  * "Handles" popup), "Reset shape" (a shape with its own points) and "Turn into path" (also for
  * an open cog with a hole, whose Points mode is refused: D21 keeps its Turn into path, a compound
  * path); and [MirrorLabels18.REMOVE] while the open shape has copies (§3.1, one in-tool step).
+ * v1.9 (R18) adds [PointLabels19.BEVEL] in Points mode, last ([shapeBevelItem]; its popup is an overlay,
+ * [ShapeBevelPopupHost]), and shows the box's Center and Proportional / Circle outside Points
+ * mode only ([ShapeStripInfo.boxModifiersShown]).
  *
  * Every handle is the v1.7 one (StripHandlesV17 "SHAPE"; "Snap" became "Snap to objects"). The
  * Shape settings and Numbers sheets and the typed handle scale are overlays: they outlive the
@@ -112,6 +115,8 @@ internal fun shapeStrip(tool: ShapeTool, c: EditorController): StripSpec {
             if (showNumbers) ShapeNumbersSheet(tool) { showNumbers = false }
             if (typingHandles) ShapeHandleScaleDialog(tool) { typingHandles = false }
             if (typingRoundness) ShapeRoundnessDialog(tool) { typingRoundness = false }
+            // v1.9 (R18): the bevel popup, while a bevel is open.
+            ShapeBevelPopupHost(tool)
         },
         // The v1.7 type, style and line-end chips' entries are inside their dropdowns; the
         // Handles group is inside "Handles".
@@ -144,6 +149,16 @@ internal data class ShapeStripInfo(
 
     /** The style cell shows: a closed type's style, or a plain line's ends. */
     val styleShown: Boolean get() = !lineLike || strokeWith == ShapeStroke.PLAIN
+
+    /**
+     * v1.9 (R18): [ShapeStripItems.CENTER_LABEL] and [ShapeStripItems.PROPORTIONAL_LABEL] /
+     * [ShapeStripItems.CIRCLE_LABEL] show outside Points mode only. They act on the box's resize
+     * handles and on a drag that draws a new shape; Points mode has no box handles, so there they
+     * only pre-set the next new shape. Without them the fullest Points mode (copies, a smooth
+     * point with handles and a corner selected, [PointLabels19.BEVEL]) keeps its More row within
+     * three lines at 360 dp, also with the VECTOR cell (a vector layer whose mask is edited).
+     */
+    val boxModifiersShown: Boolean get() = !pointsMode
 
     companion object {
         fun of(tool: ShapeTool, dpi: Float): ShapeStripInfo {
@@ -331,11 +346,11 @@ internal object ShapeStripItems {
                 ) { Icon(strokeIcon(m), contentDescription = null, tint = BrushworkColors.OnChrome) }
             })
         }
-        add(more(CENTER, CENTER_LABEL) {
+        if (info.boxModifiersShown) add(more(CENTER, CENTER_LABEL) {
             val on = tool.settings.fromCenter
             ShapeIconToggle(Icons.Filled.CenterFocusStrong, CENTER_LABEL, on, { set { it.copy(fromCenter = !on) } })
         })
-        if (!lineLike) {
+        if (!lineLike && info.boxModifiersShown) {
             val label = if (info.type == ShapeType.ELLIPSE) CIRCLE_LABEL else PROPORTIONAL_LABEL
             add(more(PROPORTIONAL, label) {
                 val on = tool.settings.keepProportions
@@ -408,6 +423,9 @@ internal object ShapeStripItems {
         if (info.hasCopies) {
             add(more(REMOVE_COPIES, MirrorLabels18.REMOVE) { ShapeIconAction(Icons.Filled.LayersClear, MirrorLabels18.REMOVE) { tool.removeCopies() } })
         }
+        // v1.9 (R18): [PointLabels19.BEVEL], after v1.8's More items (StripKeysV19 rank 60); in
+        // Points mode the box's Center and Proportional are hidden ([ShapeStripInfo.boxModifiersShown]).
+        if (info.pointsMode) add(shapeBevelItem(tool))
     }
 
     private fun more(key: String, label: String, widthDp: Float = CELL_DP, content: @Composable () -> Unit) =

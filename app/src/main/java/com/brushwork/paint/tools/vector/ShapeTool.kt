@@ -46,7 +46,9 @@ import com.brushwork.paint.tools.ScaledTool
 import com.brushwork.paint.tools.Tool
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
+import com.brushwork.paint.tools.points.BevelPoint
 import com.brushwork.paint.tools.points.Mixed
+import com.brushwork.paint.tools.points.PointBevel
 import com.brushwork.paint.tools.points.PointEditor
 import com.brushwork.paint.tools.points.PointGizmo
 import com.brushwork.paint.tools.points.PointGroupMath
@@ -65,6 +67,7 @@ import com.brushwork.paint.ui.common.CogLabels18
 import com.brushwork.paint.ui.common.FolderLabels
 import com.brushwork.paint.ui.common.MirrorLabels18
 import com.brushwork.paint.ui.common.PointLabels
+import com.brushwork.paint.ui.common.PointLabels19
 import com.brushwork.paint.ui.editor.HistoryLabels
 import com.brushwork.paint.vector.CopyMaps
 import com.brushwork.paint.vector.ObjectCopies
@@ -81,6 +84,7 @@ import kotlinx.serialization.EncodeDefault
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.serializer
+import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.floor
@@ -539,6 +543,8 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
             return
         }
         settings = new
+        // v1.9 (R18): another action closes the bevel popup (the bevel stays).
+        closeBevelPopup()
         // While a shape layer is edited the options show that shape: only the drawing options
         // are the user's own (and saved).
         val user = userSettings
@@ -1541,6 +1547,164 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         points = np
     }
 
+    // ------------------------------------------------------------------ bevel (v1.9, R18)
+
+    /**
+     * The bevel the popup adjusts: the points and the selection before it ([base], document px),
+     * and what its latest apply made. Session state (I22): the popup's changes re-apply from
+     * [base] in place, the bevel is ONE in-tool step, and the commit is still one document step.
+     */
+    private class BevelSession(
+        val base: List<ShapeAnchor>,
+        val baseSelection: PointSelection,
+        val rotationDeg: Float,
+        var amount: Float,
+        var segments: Int,
+    ) {
+        var points: List<ShapePoint>? = null
+        var box: ShapeBox? = null
+        var made: PointSelection = PointSelection.none(0)
+    }
+
+    private var bevelSession: BevelSession? = null
+
+    private var bevelPopupState by mutableStateOf(false)
+
+    /** The popup's Amount (0.01..0.5) and Segments (1..8): the remembered ones, or the open bevel's (Compose state). */
+    var bevelAmount by mutableFloatStateOf(PointBevel.clampAmount(controller.settings.shapeBevelAmount))
+        private set
+    var bevelSegments by mutableIntStateOf(PointBevel.clampSegments(controller.settings.shapeBevelSegments))
+        private set
+
+    /**
+     * The bevel popup shows (Compose state): from [bevelPoints] until "Done", a tap on the canvas
+     * (consumed: it adds no point), another edit, undo, or the shape closing.
+     */
+    val bevelPopupOpen: Boolean
+        get() = bevelPopupState && box != null && pointsMode && bevelSession?.let { isCurrent(it) } == true
+
+    /** A one-finger gesture that started while the popup showed: it only closes the popup. */
+    private var bevelTap = false
+
+    /** [PointLabels19.BEVEL] shows: in Points mode (Compose state). */
+    val bevelShown: Boolean get() = box != null && pointsMode && points != null
+
+    /** [PointLabels19.BEVEL] applies: in Points mode with points selected (Compose state). */
+    val canBevel: Boolean get() = bevelShown && !pointSelection.resized(pointCount).isEmpty
+
+    /** The open bevel is what the shape shows, and its points are still the selected ones. */
+    private fun isCurrent(s: BevelSession): Boolean =
+        s.points != null && points == s.points && box == s.box && pointSelection == s.made
+
+    /**
+     * R18 [PointLabels19.BEVEL]: bevels the selected sharp corners at once with the remembered
+     * Amount and Segments, as ONE in-tool step, selects the new points and opens the popup on
+     * that step. A second tap while the new points stay selected reopens the popup instead of
+     * bevelling again. Points the bevel does not touch keep their smoothness, handles and
+     * roundness (through `origin`); new points are sharp, without handles and with a roundness of
+     * 0, so the shape's corner radius does not round them. Says why when nothing changes
+     * ([PointLabels19.BEVEL_SHARP_ONLY], [PointLabels19.BEVEL_TOO_MANY]).
+     */
+    fun bevelPoints(): Boolean {
+        val b = box ?: return false
+        if (!pointsMode) return false
+        val anchors = docAnchors() ?: return false
+        val sel = pointSelection.resized(anchors.size)
+        if (sel.isEmpty) return false
+        bevelSession?.let { s ->
+            if (isCurrent(s)) {
+                bevelPopupState = true
+                return true
+            }
+        }
+        val amount = PointBevel.clampAmount(controller.settings.shapeBevelAmount)
+        val segments = PointBevel.clampSegments(controller.settings.shapeBevelSegments)
+        val r = bevelOf(anchors, sel, amount, segments)
+        if (r !is PointBevel.Result.Ok) {
+            bevelRefused(r)
+            return false
+        }
+        historyKey = null
+        pushHistory()
+        val s = BevelSession(anchors, sel, b.rotationDeg, amount, segments)
+        bevelSession = s
+        applyBevel(s, r)
+        bevelPopupState = true
+        return true
+    }
+
+    /** The popup's Amount: the open bevel again from its points before it (no new step). */
+    fun changeBevelAmount(amount: Float) {
+        val s = bevelSession?.takeIf { isCurrent(it) } ?: return
+        rebevel(s, PointBevel.clampAmount(amount), s.segments)
+    }
+
+    /** The popup's Segments: the open bevel again from its points before it (no new step). */
+    fun changeBevelSegments(segments: Int) {
+        val s = bevelSession?.takeIf { isCurrent(it) } ?: return
+        rebevel(s, s.amount, PointBevel.clampSegments(segments))
+    }
+
+    /** "Done" (or a tap on the canvas): the popup closes; the bevel stays as it is. */
+    fun closeBevelPopup() {
+        bevelPopupState = false
+    }
+
+    private fun rebevel(s: BevelSession, amount: Float, segments: Int) {
+        if (amount == s.amount && segments == s.segments) return
+        val r = bevelOf(s.base, s.baseSelection, amount, segments)
+        if (r !is PointBevel.Result.Ok) {
+            // Too many points: the bevel keeps its last values.
+            bevelRefused(r)
+            return
+        }
+        s.amount = amount
+        s.segments = segments
+        applyBevel(s, r)
+        // Remembered for the next bevel.
+        controller.settings.shapeBevelAmount = amount
+        controller.settings.shapeBevelSegments = segments
+    }
+
+    private fun bevelOf(anchors: List<ShapeAnchor>, sel: PointSelection, amount: Float, segments: Int): PointBevel.Result {
+        val closed = closedShape
+        val sharp = PointBevel.shapeSharp(anchors, closed, settings.corner, settings.cornerRadius)
+        return PointBevel.bevel(
+            anchors.map { BevelPoint(it.pos.x, it.pos.y) }, closed, sharp, sel.indices.toSet(),
+            amount, segments, PointBevel.MAX_POINTS_SHAPE,
+        )
+    }
+
+    private fun bevelRefused(r: PointBevel.Result) {
+        when (r) {
+            is PointBevel.Result.TooMany -> controller.toast(String.format(Locale.ROOT, PointLabels19.BEVEL_TOO_MANY, r.max))
+            PointBevel.Result.NoSharpCorner -> controller.toast(PointLabels19.BEVEL_SHARP_ONLY)
+            is PointBevel.Result.Ok -> {}
+        }
+    }
+
+    /** Puts [r] on the shape: untouched points as they were, new ones sharp with a roundness of 0, selected. */
+    private fun applyBevel(s: BevelSession, r: PointBevel.Result.Ok) {
+        val anchors = r.points.mapIndexed { i, p ->
+            val o = r.origin[i]
+            if (o >= 0) s.base[o] else ShapeAnchor(Vec2(p.x, p.y), smooth = false, handleIn = null, handleOut = null, radius = 0f)
+        }
+        applyAnchors(anchors, s.rotationDeg)
+        pointSelection = PointSelection.none(anchors.size).plusAll(r.selected)
+        s.points = points
+        s.box = box
+        s.made = pointSelection
+        bevelAmount = s.amount
+        bevelSegments = s.segments
+        refreshPreview()
+    }
+
+    /** Another edit, an undo or the shape closing ends the bevel session (its popup closes). */
+    private fun endBevel() {
+        bevelSession = null
+        bevelPopupState = false
+    }
+
     // ------------------------------------------------------------------ handle scaling (v1.6 §3.3, Points)
 
     /** Which handles the Handles group scales (Compose state). */
@@ -1665,6 +1829,8 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
      */
     private fun pushHistory(key: Any? = null) {
         val b = box ?: return
+        // v1.9 (R18): another edit ends the open bevel (its popup closes).
+        endBevel()
         val now = if (key != null) clock() else 0L
         val coalesce = key != null && key == historyKey && history.isNotEmpty() && (numericHeld || now - historyKeyTime <= COALESCE_MS)
         historyKey = key
@@ -1683,6 +1849,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
     }
 
     private fun clearHistory() {
+        endBevel()
         history.clear()
         redo.clear()
         redoCount = 0
@@ -1726,6 +1893,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
     }
 
     private fun restoreState(s: PendingState) {
+        endBevel()
         handleBase = null
         handleStepSaved = false
         handleScale = 1f
@@ -1797,6 +1965,13 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
 
     override fun onDown(p: ToolPoint) {
         val pt = Vec2(p.x, p.y)
+        // v1.9 (R18): a finger on the canvas while the bevel popup shows only closes it (on
+        // release): it neither adds, selects nor moves anything. Two fingers still pan and zoom.
+        bevelTap = bevelPopupOpen
+        if (bevelTap) {
+            mode = Mode.NONE
+            return
+        }
         downPoint = pt
         started = false
         longPressed = false
@@ -2153,6 +2328,13 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
     }
 
     override fun onUp(p: ToolPoint) {
+        if (bevelTap) {
+            bevelTap = false
+            closeBevelPopup()
+            mode = Mode.NONE
+            controller.invalidateOverlay()
+            return
+        }
         when (mode) {
             Mode.NONE -> {}
             Mode.CREATE -> createUp(Vec2(p.x, p.y))
@@ -2271,6 +2453,8 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
     }
 
     override fun onCancel() {
+        // A cancelled finger (a pinch began: pan and zoom) leaves the bevel popup open.
+        bevelTap = false
         setDragging(false)
         snap.end()
         showReadout(null)
@@ -2327,7 +2511,13 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
      * keeps that edit going instead of turning into color picking (a point gets selected);
      * elsewhere the controller decides.
      */
-    override fun onLongPress(p: ToolPoint): Boolean = when (mode) {
+    override fun onLongPress(p: ToolPoint): Boolean = when {
+        // The finger that closes the bevel popup picks no color either.
+        bevelTap -> true
+        else -> longPressIn(mode)
+    }
+
+    private fun longPressIn(mode: Mode): Boolean = when (mode) {
         Mode.NONE, Mode.CREATE -> false
         Mode.POINT -> {
             if (!started) {
