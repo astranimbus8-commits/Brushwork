@@ -11,6 +11,7 @@ import android.provider.OpenableColumns
 import android.util.Log
 import com.brushwork.paint.ImageImport
 import com.brushwork.paint.engine.Compositor
+import com.brushwork.paint.engine.MemoryGovernor
 import com.brushwork.paint.model.Document
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -392,36 +393,51 @@ class ProjectRepository(private val context: Context) {
      * Saves [bitmap] to the device gallery (Pictures/Brushwork). Returns the content Uri, or
      * null on failure — including Android 9 and older when WRITE_EXTERNAL_STORAGE hasn't been
      * granted (request it first; see [needsStoragePermission]). JPEG is flattened onto white.
+     * v1.9 (F1b G2): throws [NotEnoughMemoryException] when the memory policy refuses the JPEG's
+     * white copy, so the caller can say why.
      */
     suspend fun exportToGallery(bitmap: Bitmap, name: String, format: ExportFormat): Uri? = withContext(Dispatchers.IO) {
         guarded("export") { ImageExport.saveToGallery(context, bitmap, name, format) }
     }
 
-    /** Writes [bitmap] to a shareable cache file and returns a FileProvider Uri (null on failure). */
+    /**
+     * Writes [bitmap] to a shareable cache file and returns a FileProvider Uri (null on failure;
+     * v1.9: [NotEnoughMemoryException] as [exportToGallery]).
+     */
     suspend fun exportForShare(bitmap: Bitmap, name: String, format: ExportFormat): Uri? = withContext(Dispatchers.IO) {
         guarded("share export") { ImageExport.saveForShare(context, bitmap, name, format) }
     }
 
-    /** Loads, flattens and exports a project without opening it in the editor (null on failure). */
+    /**
+     * Loads, flattens and exports a project without opening it in the editor (null on failure).
+     * v1.9 (F1b G2): throws [NotEnoughMemoryException] when the memory policy refuses the flatten
+     * ("Export PNG", as the editor names it) or the JPEG's white copy; the gallery shows its message.
+     */
     suspend fun exportProject(id: String, format: ExportFormat): Uri? = guarded("project export") {
-        val (flat, name) = renderFlattened(id)
+        val (flat, name) = renderFlattened(id, "Export ${format.extension.uppercase()}")
         try { exportToGallery(flat, name, format) } finally { flat.recycle() }
     }
 
-    /** Loads and flattens a project into a share file (see [exportForShare]); null on failure. */
+    /**
+     * Loads and flattens a project into a share file (see [exportForShare]); null on failure.
+     * v1.9 (F1b G2): throws [NotEnoughMemoryException] as [exportProject] ("Share").
+     */
     suspend fun shareProject(id: String, format: ExportFormat = ExportFormat.PNG): Uri? = guarded("project share") {
-        val (flat, name) = renderFlattened(id)
+        val (flat, name) = renderFlattened(id, "Share")
         try { exportForShare(flat, name, format) } finally { flat.recycle() }
     }
 
     /**
      * Full-resolution flattened image of a stored project. The caller recycles it. v1.9 (design
-     * 2.4.9): on its paper, if any, like the editor's export and share.
+     * 2.4.9): on its paper, if any, like the editor's export and share. v1.9 (F1b G2, design
+     * 2.4.13): the flatten must fit, as in the editor ([MemoryGovernor.admit] for [purpose]);
+     * refused, the loaded layers are freed and [NotEnoughMemoryException] is thrown.
      */
-    private suspend fun renderFlattened(id: String): Pair<Bitmap, String> {
+    private suspend fun renderFlattened(id: String, purpose: String): Pair<Bitmap, String> {
         val doc = load(id)
         return withContext(Dispatchers.Default) {
             try {
+                if (!MemoryGovernor.admit(doc.width.toLong() * doc.height * 4, purpose)) throw NotEnoughMemoryException(purpose)
                 Compositor(doc) { null }.renderFlattened(withPaper = true) to doc.name
             } finally {
                 for (layer in doc.layers) { layer.recycleBitmaps(); layer.array?.pixels?.bitmap?.recycle() }
@@ -429,9 +445,17 @@ class ProjectRepository(private val context: Context) {
         }
     }
 
+    /**
+     * [block]'s result, or null (logged) when it fails. v1.9 (F1b G2): a memory refusal
+     * ([NotEnoughMemoryException]) is not a failure to hide: it is thrown on, so the gallery's and
+     * the editor's busy overlays show its message instead of v1.8's "could not be saved".
+     */
     private inline fun <T> guarded(what: String, block: () -> T?): T? = try {
         block()
     } catch (e: CancellationException) {
+        throw e
+    } catch (e: NotEnoughMemoryException) {
+        Log.w(TAG, "$what refused: ${e.message}")
         throw e
     } catch (e: Exception) {
         Log.w(TAG, "$what failed", e)
