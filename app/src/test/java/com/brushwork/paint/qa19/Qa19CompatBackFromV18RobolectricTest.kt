@@ -3,6 +3,8 @@ package com.brushwork.paint.qa19
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Matrix
+import android.graphics.Paint
+import android.graphics.Path
 import android.net.Uri
 import android.os.Looper
 import com.brushwork.paint.AppSettings
@@ -44,13 +46,16 @@ import com.brushwork.paint.exchange.export.TextSource
 import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.Layer
+import com.brushwork.paint.model.Selection
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.storage.CanvasStart
+import com.brushwork.paint.storage.LayerCodec
 import com.brushwork.paint.storage.NewCanvasSpec
 import com.brushwork.paint.storage.ProjectRepository
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
 import com.brushwork.paint.tools.points.PointSelection
+import com.brushwork.paint.tools.select.SelectionDuplicate
 import com.brushwork.paint.tools.vector.CornerStyle
 import com.brushwork.paint.tools.vector.CurveSettings
 import com.brushwork.paint.tools.vector.ShapeCodec
@@ -61,6 +66,7 @@ import com.brushwork.paint.tools.vector.ShapeTool
 import com.brushwork.paint.tools.vector.ShapeType
 import com.brushwork.paint.v19.a1.A1Tools
 import com.brushwork.paint.v19.a1.A1Tools.curveTool
+import com.brushwork.paint.v19.a4.A4Kit
 import com.brushwork.paint.v19.a8.BackupKit
 import com.brushwork.paint.vector.CopyMaps
 import com.brushwork.paint.vector.VAnchor
@@ -85,6 +91,7 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -342,18 +349,51 @@ class Qa19CompatBackFromV18RobolectricTest {
         assertEquals(3, requireNotNull(path.spline) { "the Path line keeps its spline" }.points.size)
     }
 
-    @Ignore("5.2 row 10 (merged layers), existing kinds only: owner A4")
+    /** 5.2 row 10 (merged layers), existing kinds only: owner A4, fixture by [writeMergedLayers]. */
     @Test
     fun row10MergedLayers() {
-        v18Reads("layers-merged")
-        // A4: fully read and fully editable in v1.8.
+        val dto = v18Reads("layers-merged")
+        // A4: fully read and fully editable in v1.8: two vector layers of the kinds v1.8 knows.
+        assertEquals(listOf("Background", "Curves", "Shapes"), dto.layers.map { it.name })
+        val (curves, shapes) = dto.layers[1] to dto.layers[2]
+        for (l in listOf(curves, shapes)) {
+            assertNull("${l.name}: no shape data (a vector layer)", l.shapeData)
+            assertNull("${l.name}: no text data", l.textData)
+            assertEquals("${l.name}: at 100 % (the opacity folded into the objects)", 1f, l.props.opacity, 0f)
+        }
+        val merged = VectorCodecV18.decode(resource("layers-merged/${requireNotNull(curves.vectorFile)}"))
+        assertEquals("both layers' objects", 2, merged.objects.size)
+        assertEquals("the lower one's at its own opacity", 1f, merged.objects[0].opacity, 0.001f)
+        assertEquals("the upper layer's 50 % folded into its object", 0.5f, merged.objects[1].opacity, 0.001f)
+        editable(merged, "Curves")
+        val joined = VectorCodecV18.decode(resource("layers-merged/${requireNotNull(shapes.vectorFile)}"))
+        assertEquals("both shapes", 2, joined.objects.size)
+        assertTrue("shapes as v1.8's shape objects", joined.objects.all { it is VShapeV18 })
+        editable(joined, "Shapes")
     }
 
-    @Ignore("5.2 row 10 (duplicates), existing kinds only: owner A4; its generator may need Qa19Harness.editor")
+    /** 5.2 row 10 (duplicates), existing kinds only: owner A4, fixture by [writeDuplicates]. */
     @Test
     fun row10Duplicates() {
-        v18Reads("duplicates")
-        // A4: fully read and fully editable in v1.8.
+        val dto = v18Reads("duplicates")
+        // A4: fully read and fully editable in v1.8: the copies are pixels and objects of their layers.
+        assertEquals("no new layer", listOf("Background", "Painted", "Objects"), dto.layers.map { it.name })
+        val painted = dto.layers[1]
+        assertNull(painted.vectorFile)
+        val pixels = LayerCodec.readBitmap(resource("duplicates/${requireNotNull(painted.file)}").inputStream(), painted.name, dto.width, dto.height)
+        assertEquals("the original", DUPLICATE_RED, pixels.getPixel(21, 21))
+        assertEquals("the copy, 16 px right and down", DUPLICATE_RED, pixels.getPixel(59 + 16, 49 + 16))
+        val objects = VectorCodecV18.decode(resource("duplicates/${requireNotNull(dto.layers[2].vectorFile)}"))
+        assertEquals("two objects and the copy", 3, objects.objects.size)
+        assertEquals("the copy is of the first's kind", objects.objects[0].javaClass, objects.objects[2].javaClass)
+        editable(objects, "Objects")
+    }
+
+    /** [content] as v1.8 edits it: distinct ids, all below its next id. */
+    private fun editable(content: VectorContentV18, layer: String) {
+        val ids = content.objects.map { it.id }
+        assertEquals("$layer: distinct ids $ids", ids.size, ids.toSet().size)
+        assertTrue("$layer: the next id ${content.nextId} past $ids", ids.all { it < content.nextId })
     }
 
     /** 5.2 row 10 (cut pieces), existing kinds only: owner A5, fixture by [writeCutPieces]. */
@@ -586,6 +626,8 @@ class Qa19CompatBackFromV18RobolectricTest {
         "shapes-joined" to ::writeShapesJoined,
         "bevel-shapes" to ::writeBevelShapes,
         "shape-r17" to ::writeShapeR17,
+        "layers-merged" to ::writeMergedLayers,
+        "duplicates" to ::writeDuplicates,
     )
 
     /** `project.json` of the gallery's project [id], copied into [dir]. */
@@ -659,6 +701,60 @@ class Qa19CompatBackFromV18RobolectricTest {
         File(root, "$id/project.json").copyTo(File(dir, "project.json"), overwrite = true)
         val files = root.walkTopDown().filter { it.isFile }.map { it.relativeTo(root).invariantSeparatorsPath }.sorted().toList()
         File(dir, "files.txt").writeText(files.joinToString("\n", postfix = "\n"))
+    }
+
+    /**
+     * Row 10, merged layers (A4, R19): v1.9's "Merge down" keeping the layers' type, over the
+     * raster "Background": two vector layers merged as objects (the upper one at 50 %, folded
+     * into its object's opacity), two shape layers merged into one vector layer of shapes. (A
+     * text merge writes row 5's `more`, A3's row.)
+     */
+    private fun writeMergedLayers(dir: File) {
+        val kit = A4Kit(240, 180)
+        try {
+            val c = kit.controller()
+            kit.vectorLayer(c, listOf(kit.box(20f, 20f, 80f, 70f)), "Curves")
+            val upper = kit.vectorLayer(c, listOf(kit.box(100f, 30f, 150f, 80f, 0xFF3070D0.toInt())), "Curves 2")
+            c.setLayerProps(upper, upper.props().copy(opacity = 0.5f))
+            kit.settle(c)
+            c.mergeDown(upper)
+            kit.settle(c)
+            kit.shapeLayer(c, kit.rect(60f, 130f, 50f, 30f), "Shapes")
+            val top = kit.shapeLayer(c, kit.rect(160f, 130f, 40f, 40f, 0xFF30A060.toInt()), "Shapes 2")
+            c.mergeDown(top)
+            kit.settle(c)
+            assertEquals(listOf("Background", "Curves", "Shapes"), c.doc.layers.map { it.name })
+            assertTrue("kept their type", c.doc.layers.drop(1).all { it.isVectorLayer })
+            saveProject(c.doc, dir)
+        } finally {
+            kit.close()
+        }
+    }
+
+    /**
+     * Row 10, duplicates (A4, R14): the selection bar's Duplicate (its controller entry,
+     * [SelectionDuplicate.duplicate]; no UI needed) on a raster layer (the selected pixels drawn
+     * again 16 px right and down) and on a vector layer (the touched object copied).
+     */
+    private fun writeDuplicates(dir: File) {
+        val kit = A4Kit(240, 180)
+        fun select(c: EditorController, l: Float, t: Float, r: Float, b: Float) =
+            c.setSelection(Selection.fromPath(Path().apply { addRect(l, t, r, b, Path.Direction.CW) }, c.doc.width, c.doc.height, antiAlias = false))
+        try {
+            val c = kit.controller()
+            c.addLayerWithContent("Painted", "Add") { cv -> cv.drawRect(20f, 20f, 60f, 50f, Paint().apply { color = DUPLICATE_RED }) }
+            select(c, 10f, 10f, 70f, 60f)
+            assertEquals(16, SelectionDuplicate.offset(c))
+            assertTrue("pixels duplicated", SelectionDuplicate.duplicate(c))
+            kit.vectorLayer(c, listOf(kit.box(100f, 100f, 140f, 140f), kit.box(180f, 40f, 220f, 80f)), "Objects")
+            select(c, 90f, 90f, 150f, 150f)
+            assertTrue("an object duplicated", SelectionDuplicate.duplicate(c))
+            kit.settle(c)
+            assertEquals(listOf("Background", "Painted", "Objects"), c.doc.layers.map { it.name })
+            saveProject(c.doc, dir)
+        } finally {
+            kit.close()
+        }
     }
 
     /**
@@ -998,6 +1094,9 @@ class Qa19CompatBackFromV18RobolectricTest {
     }
 
     private companion object {
+        /** The duplicated pixels of row 10's [writeDuplicates]. */
+        const val DUPLICATE_RED = 0xFFE02020.toInt()
+
         /** AppSettings' preference file (v1.0 on). */
         const val SETTINGS_FILE = "brushwork_settings"
 

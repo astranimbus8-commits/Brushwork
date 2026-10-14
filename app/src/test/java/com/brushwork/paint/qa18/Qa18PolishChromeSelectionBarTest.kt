@@ -11,6 +11,7 @@ import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.remove.ContentAwareFillJob
 import com.brushwork.paint.ui.common.ArrayLabels
+import com.brushwork.paint.ui.common.LayerLabels19
 import com.brushwork.paint.ui.common.SavedSelectionLabels
 import com.brushwork.paint.ui.editor.chrome.ChromeHarness
 import com.brushwork.paint.ui.editor.chrome.ChromeScreen
@@ -29,11 +30,11 @@ import org.robolectric.shadows.ShadowLog
 import kotlin.math.pow
 
 /**
- * v1.8 polish (request items 8 and 9, QA: the selection bar's ten items scroll sideways with no
+ * v1.8 polish (request items 8 and 9, QA: the selection bar's ten items, eleven in v1.9, scroll sideways with no
  * cue). On the user's phone (392 dp) and on a 360 dp phone, over a dark and a white picture
  * zoomed under the bar, with a selection made by a finger: a chevron cue shows at the edge with
  * items past it (the end at first, the start once a finger slid the bar to its end, the end
- * again once slid back), and only there; a slide reaches all ten items; the cue lies clear of
+ * again once slid back), and only there; a slide reaches all eleven items; the cue lies clear of
  * every whole item's label; its chevron stands out from the rest of the cue on both pictures
  * (at least 4.5:1); a finger on it reaches the item under it. A bar whose items fit (Paste,
  * More, Hide) shows no cue. Rendered: `polish-chrome-selection-bar-<width>-<dark|white>[-end].png`.
@@ -64,7 +65,15 @@ class Qa18PolishChromeSelectionBarTest {
         val tone = if (dark) "dark" else "white"
         val what = "the selection bar at $dp dp over a $tone picture"
         Qa18MenusShots.pick(s, ToolId.MARQUEE)
+        // v1.9 (CI flake, shard 0, first editor at 360 dp): the tool menu could still be closing
+        // when the finger came down, and the stroke went to it. Wait for it to go; retry once.
+        menuGone(s)
         Fingers18.stroke(s, 100f, 80f, 260f, 210f)
+        if (s.c.selection == null) {
+            System.err.println("[polish-chrome] $what: no selection after the first stroke (tool ${s.c.activeToolId}, windows ${SmokeUi.windows().size}); again")
+            menuGone(s)
+            Fingers18.stroke(s, 100f, 80f, 260f, 210f)
+        }
         assertNotNull("$what: a selection", s.c.selection)
         // Zoomed in by two fingers: the picture lies under the bar.
         Fingers18.pinch(s, 200f, 150f)
@@ -104,7 +113,7 @@ class Qa18PolishChromeSelectionBarTest {
         Qa18PolishChromeKit.shot(s, "selection-bar-$dp-$tone-end", heightDp = 200f)
         seen += labels(s, bar)
         val missing = ITEMS.filter { it !in seen }
-        assertTrue("$what: all ten items reached by a slide; missing $missing", missing.isEmpty())
+        assertTrue("$what: all eleven items reached by a slide; missing $missing", missing.isEmpty())
 
         // Slid back: the end cue again, no start cue.
         Finger.slowDrag(s, (bar.left + 24f) to bar.center.y, (bar.right - 24f) to bar.center.y)
@@ -128,6 +137,14 @@ class Qa18PolishChromeSelectionBarTest {
         assertNull("$what: the paste bar $paste fits $shown: no start cue", cue(s, end = false))
         Qa18PolishChromeKit.shot(s, "selection-bar-$dp-$tone-paste", heightDp = 200f)
         Smoke.assertQuiet(s.c, what)
+    }
+
+    /** Until the tool menu (its window too) has gone, at most 2 s. */
+    private fun menuGone(s: ChromeScreen) {
+        repeat(20) {
+            if (SmokeUi.windows().size <= 1 && s.tagged(ChromeTags.TOOL_MENU) == null) return
+            Smoke.pump(100); SmokeUi.settle()
+        }
     }
 
     /** Everything the bar's items on screen are known by. */
@@ -192,10 +209,11 @@ class Qa18PolishChromeSelectionBarTest {
     }
 
     private companion object {
-        /** What the bar's ten items do (their click labels). */
+        /** What the bar's eleven items do (their click labels; v1.9 adds [LayerLabels19.DUPLICATE_DESC]). */
         val ITEMS = listOf(
             "Copy selection", "Cut selection", "Paste as a new layer", "Clear the selection", "Delete the selected pixels",
             ContentAwareFillJob.FILL_LABEL, "Invert the selection", "Selection menu", ArrayLabels.FROM_SELECTION, SavedSelectionLabels.SAVE,
+            LayerLabels19.DUPLICATE_DESC,
         )
     }
 }
