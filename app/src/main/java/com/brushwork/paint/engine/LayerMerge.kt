@@ -1,6 +1,9 @@
 package com.brushwork.paint.engine
 
 import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.PorterDuff
 import android.graphics.Rect
 import android.graphics.RectF
 import com.brushwork.paint.EditorController
@@ -11,12 +14,16 @@ import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.LayerBlendMode
 import com.brushwork.paint.model.LayerData
+import com.brushwork.paint.model.LayerProps
 import com.brushwork.paint.tools.text.TextCodec
 import com.brushwork.paint.tools.text.TextItem
 import com.brushwork.paint.tools.text.TextRenderer
 import com.brushwork.paint.ui.common.FolderLabels
 import com.brushwork.paint.ui.common.LayerLabels19
 import com.brushwork.paint.ui.common.StabilityLabels19
+import com.brushwork.paint.vector.VPath
+import com.brushwork.paint.vector.VShape
+import com.brushwork.paint.vector.VStroke
 import com.brushwork.paint.vector.VectorContent
 import com.brushwork.paint.vector.VectorLayerOps
 import com.brushwork.paint.vector.geom.ObjectIndex
@@ -219,44 +226,112 @@ internal class LayerMerge(private val c: EditorController) {
      * [LayerLabels19] WHY_* text), or null when they can; [UNREADABLE] when a shape does not decode.
      * v1.8's guard ([VectorLayerOps.mergesAsObjects]) on both kinds: neither layer masked or with
      * copies (a live array), [upper] Normal and not clipping (the lower layer's blend mode and
-     * clipping apply to the merged layer, as in v1.8), both at 100 %.
+     * clipping apply to the merged layer, as in v1.8). A layer under 100 % folds its opacity into
+     * its objects ([foldsExactly]); [LayerLabels19.WHY_OVERLAP], the last reason, when that would
+     * change the picture.
      */
     private fun objectWhy(upper: Layer, lower: Layer): String? {
-        if (objectsOf(upper) == null || objectsOf(lower) == null) return UNREADABLE
+        val above = objectsOf(upper) ?: return UNREADABLE
+        val below = objectsOf(lower) ?: return UNREADABLE
         if (upper.mask != null || upper.maskSpec != null || lower.mask != null || lower.maskSpec != null) return LayerLabels19.WHY_MASK
         if (upper.blendMode != LayerBlendMode.NORMAL) return LayerLabels19.WHY_BLEND
         if (upper.clipping) return LayerLabels19.WHY_CLIP
         if (upper.array != null || lower.array != null) return LayerLabels19.WHY_COPIES
         if (upper.adjustment != null || lower.adjustment != null) return LayerLabels19.WHY_KINDS
-        if (upper.opacity < 1f || lower.opacity < 1f) return LayerLabels19.WHY_OVERLAP
+        if (!foldsExactly(upper, above) || !foldsExactly(lower, below)) return LayerLabels19.WHY_OVERLAP
         return null
+    }
+
+    /**
+     * R19 (D26): [layer]'s opacity folds into the opacity of each of its objects [content] without
+     * changing the picture: it is 100 %, or no two objects share a pixel (their paint bounds rounded
+     * out are pairwise disjoint; an object's opacity applies to it as a whole, its copies too). A
+     * sweep over the bounds sorted by their left edge.
+     */
+    private fun foldsExactly(layer: Layer, content: VectorContent): Boolean {
+        if (layer.opacity >= 1f) return true
+        val index = ObjectIndex.of(content)
+        val rects = content.objects.indices.mapNotNull { i -> pixelRect(index.bounds(i)).takeUnless { it.isEmpty } }.sortedBy { it.left }
+        for (i in rects.indices) {
+            var j = i + 1
+            while (j < rects.size && rects[j].left < rects[i].right) {
+                if (Rect.intersects(rects[i], rects[j])) return false
+                j++
+            }
+        }
+        return true
+    }
+
+    /** [content] with [opacity] folded into each object's own opacity ([content] itself at 100 %). */
+    private fun faded(content: VectorContent, opacity: Float): VectorContent {
+        if (opacity >= 1f) return content
+        val f = opacity.coerceAtLeast(0f)
+        return content.copy(
+            objects = content.objects.map { o ->
+                when (o) {
+                    is VStroke -> o.copy(opacity = o.opacity * f)
+                    is VPath -> o.copy(opacity = o.opacity * f)
+                    is VShape -> o.copy(opacity = o.opacity * f)
+                }
+            },
+        )
     }
 
     /**
      * R19 [MergeKind.VECTOR_OBJECTS]: the objects of [upper] join those of [lower] on top of them
      * (with new ids, [VectorContent.plus]). A shape layer converts on the way ([LayerConvert]: its
      * one shape, its pixels kept), so [lower] becomes or stays a vector layer and keeps its name.
-     * The merged pixels are [upper]'s drawn over [lower]'s within the paint bounds of [upper]'s
-     * objects (a shape layer's: the whole layer). ONE step "Merge down"; false (nothing done) when
-     * a shape does not decode or the pixels don't fit in memory.
+     * Each layer's opacity is folded into its objects ([faded]) and the merged layer is at 100 %.
+     * The merged pixels: [lower]'s scaled by its opacity within its objects' paint bounds (DST_IN),
+     * then [upper]'s drawn over them at its opacity within its objects' paint bounds (a shape
+     * layer's: the whole layer); exactly the picture before the merge when the folds are exact
+     * ([foldsExactly]). ONE step "Merge down"; false (nothing done) when a shape does not decode or
+     * the pixels don't fit in memory.
      */
     private fun mergeObjects(upper: Layer, lower: Layer): Boolean {
         // Renders still on their way land first: the pixels drawn are those of the objects.
         c.vectors.flushPending()
         val above = objectsOf(upper) ?: return false
         val below = objectsOf(lower) ?: return false
-        val merged = below.plus(above.objects).first
-        val area = if (upper.isVectorLayer) pixelRect(ObjectIndex.of(above).unionBounds()) else Rect(0, 0, c.doc.width, c.doc.height)
-        return mergeData(upper, lower, lower.dataSnapshot().copy(text = null, shape = null, vector = merged), area)
+        val merged = faded(below, lower.opacity).plus(faded(above, upper.opacity).objects).first
+        val upperArea = paintArea(upper, above)
+        val lowerArea = if (lower.opacity < 1f) paintArea(lower, below) else Rect()
+        val area = Rect(upperArea).apply { union(lowerArea) }
+        val props = lower.props().copy(opacity = 1f)
+        return mergeData(upper, lower, lower.dataSnapshot().copy(text = null, shape = null, vector = merged), area, props) { cv ->
+            if (!lowerArea.isEmpty) {
+                cv.save()
+                cv.clipRect(lowerArea)
+                cv.drawColor(Color.argb(alphaOf(lower.opacity), 0, 0, 0), PorterDuff.Mode.DST_IN)
+                cv.restore()
+            }
+            val paint = if (upper.opacity < 1f) Paint().apply { alpha = alphaOf(upper.opacity) } else null
+            cv.drawBitmap(upper.bitmap, upperArea, upperArea, paint)
+        }
     }
 
+    /** The pixels a shape or vector [layer] (its objects [content]) may paint: its objects' paint bounds rounded out; a legacy shape layer's whole bitmap. */
+    private fun paintArea(layer: Layer, content: VectorContent): Rect =
+        if (layer.isVectorLayer) pixelRect(ObjectIndex.of(content).unionBounds()) else Rect(0, 0, c.doc.width, c.doc.height)
+
+    /** [opacity] as a paint alpha, rounded as the vector renderer rounds an object's opacity. */
+    private fun alphaOf(opacity: Float): Int = (opacity.coerceIn(0f, 1f) * 255f + 0.5f).toInt()
+
     /**
-     * Stores [after] as [lower]'s data and draws [upper]'s pixels over [lower]'s within [area]
-     * (document px), then removes [upper]: ONE step "Merge down" (as in [VectorLayerOps.mergeVector],
-     * a locked or hidden lower layer is merged into as well). False, with nothing recorded, when
-     * the pixels don't fit in memory.
+     * Stores [after] as [lower]'s data (and [props] as its properties when given) and changes its
+     * pixels within [area] (document px) by [draw] (by default [upper]'s pixels drawn over them),
+     * then removes [upper]: ONE step "Merge down" (as in [VectorLayerOps.mergeVector], a locked or
+     * hidden lower layer is merged into as well). False, with nothing recorded, when the pixels
+     * don't fit in memory.
      */
-    private fun mergeData(upper: Layer, lower: Layer, after: LayerData, area: Rect): Boolean {
+    private fun mergeData(
+        upper: Layer,
+        lower: Layer,
+        after: LayerData,
+        area: Rect,
+        props: LayerProps? = null,
+        draw: (Canvas) -> Unit = { it.drawBitmap(upper.bitmap, area, area, null) },
+    ): Boolean {
         val doc = c.doc
         if (!area.intersect(0, 0, doc.width, doc.height)) area.setEmpty()
         var ok = false
@@ -268,7 +343,7 @@ internal class LayerMerge(private val c: EditorController) {
                 val rec = c.beginEdit(lower, EditTarget.CONTENT).also { it.preserveData = true }
                 try {
                     rec.touch(area)
-                    Canvas(lower.bitmap).drawBitmap(upper.bitmap, area, area, null)
+                    draw(Canvas(lower.bitmap))
                 } catch (e: OutOfMemoryError) {
                     rec.abort()
                     return@groupUndo
@@ -279,6 +354,7 @@ internal class LayerMerge(private val c: EditorController) {
                 lower.restoreData(after)
                 pushData(lower, dataAction)
             }
+            if (props != null) c.applyLayerProps(lower, props, MERGE_LABEL, c::pushUndo)
             val remove = RemoveLayerAction(upper, doc.indexOf(upper), MERGE_LABEL)
             remove.redo(c)
             c.pushUndo(remove)

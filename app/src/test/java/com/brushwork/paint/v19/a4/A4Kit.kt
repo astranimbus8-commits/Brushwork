@@ -148,6 +148,14 @@ internal class A4Kit(val w: Int = 240, val h: Int = 180) {
     companion object {
         const val WHITE = 0xFFFFFFFF.toInt()
 
+        /** [px] (unpremultiplied, as `getPixels` gives them) premultiplied: a faint edge's color counts as little as it shows. */
+        fun premultiplied(px: IntArray): IntArray = IntArray(px.size) { i ->
+            val p = px[i]
+            val a = p ushr 24
+            fun ch(s: Int) = (((p ushr s) and 0xFF) * a + 127) / 255
+            (a shl 24) or (ch(16) shl 16) or (ch(8) shl 8) or ch(0)
+        }
+
         /** Fails with [what] when a channel of [a] and [b] differs by more than [tol] levels anywhere. */
         fun assertClose(what: String, a: IntArray, b: IntArray, tol: Int = 1) {
             if (a.size != b.size) fail("$what: sizes ${a.size} and ${b.size}")

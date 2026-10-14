@@ -217,4 +217,52 @@ class MergeKeepsTypeTest {
         c.mergeDown(upper)
         assertNull(lower.textData)
     }
+
+    @Test
+    fun aSeeThroughLayerFoldsItsOpacityIntoItsObjectsWhenThatIsExact() {
+        val c = kit.controller()
+        val lower = kit.vectorLayer(c, listOf(kit.box(20f, 20f, 90f, 80f)), "Lower")
+        val upper = kit.vectorLayer(c, listOf(kit.box(60f, 50f, 120f, 110f), kit.box(150f, 100f, 220f, 160f)), "Upper")
+        c.setLayerProps(lower, lower.props().copy(opacity = 0.4f))
+        c.setLayerProps(upper, upper.props().copy(opacity = 0.5f))
+        val lowerData = lower.dataSnapshot()
+        assertEquals(MergeKind.VECTOR_OBJECTS, c.layerMerge.kindOf(upper, lower))
+        val steps = c.undoManager.undoCount
+        c.mergeDown(upper)
+        kit.settle(c)
+        assertEquals(steps + 1, c.undoManager.undoCount)
+        assertEquals("Merge down", c.undoManager.undoLabel)
+        assertEquals("the merged layer is at 100 %", 1f, lower.opacity)
+        assertEquals("each layer's opacity in its objects", listOf(0.4f, 0.5f, 0.5f), lower.vector!!.objects.map { it.opacity })
+        c.undo()
+        kit.settle(c)
+        assertEquals(0.4f, lower.opacity)
+        assertEquals(0.5f, upper.opacity)
+        assertEquals(lowerData, lower.dataSnapshot())
+        // A legacy shape layer at 60 % is one object: it always folds.
+        val d = kit.controller()
+        val below = kit.vectorLayer(d, listOf(kit.box(20f, 20f, 90f, 80f)), "Lower")
+        val shape = kit.shapeLayer(d, kit.rect(80f, 70f, 60f, 60f), "Upper")
+        d.setLayerProps(shape, shape.props().copy(opacity = 0.6f))
+        assertEquals(MergeKind.VECTOR_OBJECTS, d.layerMerge.kindOf(shape, below))
+        d.mergeDown(shape)
+        kit.settle(d)
+        assertEquals(listOf(1f, 0.6f), below.vector!!.objects.map { it.opacity })
+    }
+
+    @Test
+    fun seeThroughObjectsThatOverlapMergeAsPixels() {
+        for (lowerSeeThrough in listOf(false, true)) {
+            val c = kit.controller()
+            val overlapping = listOf(kit.box(20f, 20f, 90f, 80f), kit.box(60f, 50f, 120f, 110f))
+            val lower = kit.vectorLayer(c, if (lowerSeeThrough) overlapping else listOf(kit.box(20f, 20f, 90f, 80f)), "Lower")
+            val upper = kit.vectorLayer(c, if (lowerSeeThrough) listOf(kit.box(150f, 100f, 220f, 160f)) else overlapping, "Upper")
+            val see = if (lowerSeeThrough) lower else upper
+            c.setLayerProps(see, see.props().copy(opacity = 0.5f))
+            assertEquals("see-through lower: $lowerSeeThrough", MergeKind.RASTER, c.layerMerge.kindOf(upper, lower))
+            // At 100 % the same layers keep their objects.
+            c.setLayerProps(see, see.props().copy(opacity = 1f))
+            assertEquals("see-through lower: $lowerSeeThrough", MergeKind.VECTOR_OBJECTS, c.layerMerge.kindOf(upper, lower))
+        }
+    }
 }
