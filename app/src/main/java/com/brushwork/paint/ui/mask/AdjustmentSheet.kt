@@ -138,7 +138,7 @@ private fun AdjustmentBody(c: EditorController, layer: Layer, edit: AdjustmentEd
                     edit.settled()
                 },
                 // A slider let go: the canvas refines to the exact image at once (§3.1a).
-                onChangeFinished = edit::settled,
+                onChangeFinished = { edit.settled() },
             )
         }
         if (filter.params.isEmpty()) {

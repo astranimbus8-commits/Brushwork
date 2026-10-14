@@ -64,7 +64,7 @@ internal fun FringeControl(host: ParamHost, p: FilterParam.Fringes, enabled: Boo
     val chipColors = FilterChipDefaults.filterChipColors(selectedContainerColor = BrushworkColors.AccentDim, selectedLabelColor = Color.White)
     fun store(n: IntArray) {
         host.update(p.key, n)
-        host.onChangeFinished()
+        host.onChangeFinished(p.key)
     }
     fun set(i: Int, c: Int) = store(FringeColors.resolve(host.values, p).also { it[i] = c })
 

@@ -323,12 +323,39 @@ class FilterSession(val controller: EditorController, val filter: Filter) : InTo
 
     // ------------------------------------------------------------------ parameters
 
-    /** Sets one parameter value and schedules a preview. */
+    /**
+     * Sets one parameter value and schedules a preview. The change is live: it becomes a step of
+     * [history] when its control finishes it ([commitStep]). v1.9: a change of another control
+     * that was never finished (text typed without leaving its field, a run of − / + taps) becomes
+     * its own step first, so each step names one control.
+     */
     fun update(key: String, value: Any) {
         if (isClosed || isApplying) return
+        if (!heldByTap) FilterSessionMath.firstDifference(filter.params, values, history.current, except = key)?.let { record(it.label) }
         values = values.copy().set(key, value)
         onValuesChanged()
     }
+
+    /**
+     * v1.9 (R8 (a)): a control finished its change of [key] (a slider released, a value typed, a
+     * chip, switch, colour or seed chosen, a curve point, gradient stop or point dragged, a text
+     * field left, a fringe preset or swatch chosen): the values become one step, labelled with
+     * the control's label. Nothing when they equal the last step. Ignored while a history tap
+     * holds the panel ([heldByTap]).
+     */
+    fun commitStep(key: String) {
+        if (isClosed || isApplying || heldByTap) return
+        val p = filter.params.firstOrNull { it.key == key }
+        if (p != null) record(p.label) else settle()
+    }
+
+    /**
+     * v1.9 (R8): a two- or three-finger history tap claimed a touch that started in the panel
+     * (set by the panel, cleared when the tap undoes or redoes and when the next touch starts).
+     * The controls then end what the first finger started (a slider's drag stops, a − / + is
+     * released) and the tap puts the values back before it undoes: those ends are not steps.
+     */
+    internal var heldByTap = false
 
     /** Restores every parameter to its default (drawing-color parameters to the current drawing color). */
     fun reset() {
@@ -344,7 +371,7 @@ class FilterSession(val controller: EditorController, val filter: Filter) : InTo
     }
 
     /** Default of [p] in this session: [FilterParam.Color.useDrawingColor] means the current drawing color. */
-    private fun sessionDefault(p: FilterParam): Any =
+    internal fun sessionDefault(p: FilterParam): Any =
         if (p is FilterParam.Color && p.useDrawingColor) controller.color else p.defaultValue()
 
     /** The filter's defaults with drawing-color parameters set to the current drawing color. */
@@ -389,6 +416,9 @@ class FilterSession(val controller: EditorController, val filter: Filter) : InTo
      */
     override fun undoStep(): Boolean {
         if (isClosed || isApplying) return false
+        heldByTap = false
+        // A point dragged on the canvas when a two-finger tap lands there goes back first.
+        if (draggingPoint != null) onPointerCancel()
         settle()
         val state = history.undo() ?: return false
         undoLabels.removeLastOrNull()?.let { redoLabels.addLast(it) }
@@ -403,6 +433,8 @@ class FilterSession(val controller: EditorController, val filter: Filter) : InTo
      */
     override fun redoStep(): Boolean {
         if (isClosed || isApplying) return false
+        heldByTap = false
+        if (draggingPoint != null) onPointerCancel()
         if (pendingParam() != null) {
             settle()
             return false
@@ -816,6 +848,7 @@ class FilterSession(val controller: EditorController, val filter: Filter) : InTo
     fun onPointerDown(p: ToolPoint): Boolean {
         if (isClosed || isApplying || pointParams.isEmpty()) return false
         if (draggingPoint != null) onPointerCancel() // the previous gesture never ended
+        heldByTap = false
         val t = controller.viewTransform
         val finger = t.docToScreen(p.x, p.y)
         var best = pointParams.first()
@@ -840,12 +873,14 @@ class FilterSession(val controller: EditorController, val filter: Filter) : InTo
         if (draggingPoint != null) movePointTo(p)
     }
 
+    /** The drag ended: v1.9 (R8), the point's new place is one step. */
     fun onPointerUp(p: ToolPoint) {
-        if (draggingPoint == null) return
+        val key = draggingPoint ?: return
         movePointTo(p)
         draggingPoint = null
         dragStartValue = null
         controller.invalidateOverlay()
+        commitStep(key)
     }
 
     /**
