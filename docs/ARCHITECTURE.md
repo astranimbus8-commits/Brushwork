@@ -1229,6 +1229,101 @@ rows 09, 11, 15 and 16 of `qa19/Qa19CompatBackFromV18RobolectricTest` read A8's 
 
 <!-- v19-A5 -->
 
+R11: the Eraser and the four tools in erase mode (Curve, Polyline, Path, Shape) erase objects on
+vector and legacy shape layers, live, in one undo step, and never turn such a layer into pixels on
+their own (I20). Code: `vector/draw/` (routing, session, cut, landing, preview, tool erase),
+`vector/pathfinder/` (region ops), `ui/vector/VectorEraseChooser.kt`, `ui/vector/ErasePixelsDialog.kt`,
+`ui/brush/BrushStrip.kt`, `ui/editor/chrome/BottomBar.kt`.
+
+**Routing (I20).** Every erase asks `EraseRouting.route(layer, source, maskTarget, isPath)` first,
+in this order; the source (the Eraser brush or a tool) does not change the route:
+
+| Layer or target | Route | What happens |
+|---|---|---|
+| folder | `REFUSE` | v1.8's `checkUsable` message |
+| a layer mask (an adjustment layer's mask included) | `RASTER` | paints the mask, as v1.8 |
+| adjustment layer content | `REFUSE` | v1.8's `checkEditable` message |
+| vector layer | `OBJECTS` | the object eraser in the current mode |
+| legacy shape layer | `CONVERT_THEN_OBJECTS` | `LayerConvert.toVectorAction` and the erase in ONE step (`EraseLanding`); a cancelled or empty erase leaves no step |
+| text layer | `RASTERIZE_DATA` | v1.8's undoable rasterize with its toast |
+| any other layer | `RASTER` | pixels |
+
+The one exception is `isPath` with the Eraser brush (BrushTool's path stroke, never hooked): a
+vector or shape layer stays v1.8's `RASTERIZE_DATA` (lead request: A6 to route it too).
+`ToolErase.begin` uses the same table (`isPath = false`) and returns null, after saying why, for a
+refused layer, a locked or hidden one, an alpha-locked layer's pixels or a shape that doesn't decode.
+
+**The three modes.** `VectorEraseMode` keeps v1.8's three buttons (OBJECT, PARTIAL,
+TO_INTERSECTION; v1.8's descriptions, which the frozen labels test reads as v1.8 text); the strip
+and the hint show `VectorEraseMode.note`, which for PARTIAL is `EraseLabels19.PARTIAL_NOTE`. What
+the user asked for as three ways of erasing:
+- Object (`OBJECT`): every object the eraser touches goes whole (all its copies too).
+- Partial (`PARTIAL`): strokes and open lines are cut as in v1.8 (`EraseSession`); shapes, filled
+  paths and closed outlines are cut by the region the eraser swept (`EraseCut`), the pieces
+  editable `VPath`s in the object's place and style.
+- Turn into pixels (`EraseLabels19.TURN_INTO_PIXELS`, the Eraser's More row, last, warning tint;
+  also the last entry of the tools' mode cell): `ErasePixelsDialog` asks first
+  (`PIXELS_TITLE`, `PIXELS_BODY`, `PIXELS_CONFIRM`), then `ErasePixels.turnIntoPixels` rasterizes
+  the layer captured at tap time in one undoable step (`VectorLayerOps.rasterize`, or for a shape
+  layer `setLayerData` with Transform's rasterize label) and the open tool erase reroutes to pixels.
+
+**EraseCut** (`EraseCut.cut`, `EraseCut.cutAll`; pure, thread-safe, Skia PathOps through
+`vector/pathfinder/`). A target's region is `PathConvert.region` (outline under its fill rule, a
+shape's outline; live copies baked first, each copy cut on its own). Strokes and line or arrow
+shapes are no operand (the v1.8 stroke cut handles them). Rules and caps:
+- the eraser must take at least `PathfinderOps.SLIVER_AREA` (0.5 px²) of the region, else the
+  object is untouched (a graze of its outline leaves it);
+- the pieces are the connected components of region minus eraser, each a plain `VPath` with the
+  object's fill, stroke and opacity (`PathfinderStyle.objectOf`), so the cut edge is stroked; a
+  shape reopens as a Bézier path; slivers are dropped; nothing left removes the object;
+- more than `EraseCut.MAX_PIECES` (256) pieces, or a failed op, leaves the object unchanged;
+- only the topmost `EraseCut.MAX_TARGETS` (500) targets of a gesture are cut; the rest stay;
+- one toast after the step (`EraseLanding.land`): `EraseLabels19.TOO_COMPLEX` when any object was
+  left as it was by a cap or a failed op (also with no step, when nothing else was erased), else
+  `EraseLabels19.COPIES_BAKED` when an object's live copies became pieces of their own.
+
+**Landing** (`EraseLanding`): queued behind the layer's pending updates (`VectorDrawState.serial`),
+applied to what the layer holds now (the footprint fed again when it changed). The region cut runs
+on `Dispatchers.Default` (`VectorDrawState.cutDispatcher` is the test seam), the busy overlay after
+`EraseLanding.CUT_BUSY_AFTER_MS`; it runs on the main thread for few targets (a tool erase: up to 50),
+inside another step, under another busy operation or after two reruns. While it runs it is the
+editor's `DeferredStep`: anything else that records a step lands it first. A layer that changed
+meanwhile reruns the erase on its new content. Undo: one step labelled
+`VectorEraserRecorder.ERASE_LABEL` (the Eraser) or `EraseLabels19.STEP_*` (a tool).
+
+**The preview** (`DoomPreview`, the render override while the finger is down): the layer without
+what will go, as the result looks (v1.8 dimmed). Each move rebuilds only the changed parts into an
+alpha mask redrawn at most once per frame (`DoomPreview.rebuilds`; `P0ProxyBench` reads `items`).
+In PARTIAL, filled targets are punched by the eraser's capsules (`punch`, `punchOutline`). Known
+differences with the result, until the lift: at sliver edges, a graze the cut ignores looks erased
+in the preview, and the result strokes the cut edge where the preview shows a clean edge; an object
+that stays but lies under a removed part is hidden there too (the layer's pixels are one image).
+
+**ToolErase** (`vector/draw/ToolErase.kt`): a tool's erase with its own outline (`ToolEraseSession`):
+its footprint is the outline stroked at the tool's width, round, plus the fill of a filled closed
+outline. On RASTER and RASTERIZE_DATA it takes pixels away live (`VectorPaintSpec.erase`, DST_OUT;
+black into a mask) inside the selection and bakes at commit; on OBJECTS and CONVERT_THEN_OBJECTS it
+erases objects in the Eraser's mode through the same session, cut and landing. Contract for A1 and
+A9: `begin` null means refused (the tool shows its outline only); call `update` on every outline
+change, mode change and after Turn into pixels (`reroute`); the session owns the render override;
+`commit(label)` returns `Done`, `Nothing` or `Refused`; `cancel` when erase mode goes off.
+
+**UI.** Row 1 of the Eraser on a vector or shape layer holds `VectorEraseChooser.item` (the three
+mode buttons, `V19Tags.ERASE_CHOOSER`) and the size; the opacity goes to the More row, where
+`VectorEraseChooser.pixelsItem` (`StripKeysV19.ERASE_PIXELS`, `V19Tags.ERASE_PIXELS`) comes last;
+at a large font scale its text shrinks (never below 11 sp) to stay within two lines of its cell
+(`VectorEraseChooser.FittingFontScale`, I27).
+The four tools while erasing such a layer get `VectorEraseChooser.modeCell`
+(`StripKeysV19.ERASE_MODE_CELL`, `EraseLabels19.MODE_CELL`), whose menu lists the modes with their
+notes, a divider and Turn into pixels. Bottom bar slot 1 (`EraseModeSlot`, `V19Tags.ERASE_SLOT`):
+for an `ErasableTool` it reads `eraseLabel` or `erasingLabel`, draws open while erasing and toggles
+`setErase`; for any other tool it is v1.8's slot.
+
+Tests: `v19/a5/` (routing, cut, landing, tool erase, chooser and slot UI, Timing:
+`EraseCutPerfTest` 50 and 500 filled targets, `EraseRebuildPerfTest` a frame with 2000 objects
+within 8 ms per mode), `qa19/Qa19EraseModesUiTest` (360 and 392 dp, font scales 1.3 and 2.0), and
+compat row 10 (cut pieces) of `Qa19CompatBackFromV18RobolectricTest`.
+
 <!-- /v19-A5 -->
 
 ### Curve tools (A1)

@@ -21,6 +21,8 @@ import com.brushwork.paint.tools.vector.ShapeCodec
 import com.brushwork.paint.tools.vector.ShapeObject
 import com.brushwork.paint.tools.vector.ShapeStyle
 import com.brushwork.paint.tools.vector.ShapeType
+import com.brushwork.paint.ui.common.EraseLabels19
+import com.brushwork.paint.vector.CopyMaps
 import com.brushwork.paint.vector.ObjectCopies
 import com.brushwork.paint.vector.VAnchor
 import com.brushwork.paint.vector.VPaint
@@ -63,6 +65,7 @@ import kotlin.math.abs
  * (the preview stays meanwhile, the busy overlay shows after 400 ms); anything that records a step
  * lands it first; when the layer changed while it ran, the erase runs again on what it holds then.
  * The preview takes away what the cut will (except along the cut edges, which the result strokes).
+ * Step 9: one toast says what else happened (copies baked; objects too complex to cut, kept).
  */
 @RunWith(RobolectricTestRunner::class)
 class PartialCutsFillsTest {
@@ -356,5 +359,60 @@ class PartialCutsFillsTest {
         assertEquals(data, shape.dataSnapshot())
         assertTrue(shape.isShapeLayer)
         assertArrayEquals(cache, pixels(shape.bitmap))
+    }
+
+    /** A filled comb: a spine 6 px high at y 100 and [teeth] teeth 0.6 px wide, 1 px apart, down to y 130. */
+    private fun comb(teeth: Int): VPath {
+        val anchors = ArrayList<VAnchor>()
+        val right = 5f + teeth
+        anchors += VAnchor(5f, 100f, true)
+        anchors += VAnchor(right, 100f, true)
+        for (k in teeth - 1 downTo 0) {
+            val x = 5f + k
+            anchors += VAnchor(x + 0.6f, 106f, true)
+            anchors += VAnchor(x + 0.6f, 130f, true)
+            anchors += VAnchor(x, 130f, true)
+            anchors += VAnchor(x, 106f, true)
+        }
+        return VPath(0, subpaths = listOf(VSubpath(anchors, closed = true)), fill = VPaint.Solid(blue))
+    }
+
+    @Test
+    fun theCutSaysWhatElseHappenedInOneToast() {
+        val c = setup()
+        VectorDrawState.of(c).cutDispatcher = Dispatchers.Unconfined
+        // A box with a live copy 150 px to the right, cut through the source: every copy becomes a piece.
+        val shift = floatArrayOf(1f, 0f, 150f, 0f, 1f, 0f, 0f, 0f, 1f)
+        c.vectors.addObjects(c.vec, listOf(box(20f, 30f, 100f, 80f).copy(copies = CopyMaps.of(listOf(shift)))), "Add")
+        eraser(c)
+        var steps = c.undoManager.undoCount
+        c.swipe(60f to 10f, 60f to 100f)
+        idle()
+        assertEquals(steps + 1, c.undoManager.undoCount)
+        assertEquals(3, c.vec.vector!!.objects.size)
+        assertTrue(c.vec.vector!!.objects.none { ObjectCopies.hasCopies(it) })
+        assertEquals(EraseLabels19.COPIES_BAKED, c.message)
+
+        // A comb of 270 teeth whose spine is erased would fall into more than 256 pieces: it stays,
+        // no step, and the toast says so.
+        c.message = null
+        c.vectors.addObjects(c.vec, listOf(comb(270)), "Add")
+        val before = c.vec.vector
+        steps = c.undoManager.undoCount
+        c.swipe(-10f to 103f, 150f to 103f, 310f to 103f)
+        idle()
+        assertEquals(steps, c.undoManager.undoCount)
+        assertSame(before, c.vec.vector)
+        assertEquals(EraseLabels19.TOO_COMPLEX, c.message)
+
+        // With a stroke cut in the same gesture (down at x 290): one step, and the same toast.
+        c.message = null
+        c.vectors.addObjects(c.vec, listOf(stroke(290f, 60f, 290f, 200f)), "Add")
+        steps = c.undoManager.undoCount
+        c.swipe(-10f to 103f, 150f to 103f, 310f to 103f)
+        idle()
+        assertEquals(steps + 1, c.undoManager.undoCount)
+        assertTrue("the comb stays", c.vec.vector!!.objects.any { it is VPath && it.subpaths[0].anchors.size == 2 + 4 * 270 })
+        assertEquals(EraseLabels19.TOO_COMPLEX, c.message)
     }
 }

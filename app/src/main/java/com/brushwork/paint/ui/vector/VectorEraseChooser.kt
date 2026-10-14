@@ -7,21 +7,31 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsPropertyKey
 import androidx.compose.ui.semantics.SemanticsPropertyReceiver
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.ui.common.EraseLabels19
 import com.brushwork.paint.ui.common.V19Tags
@@ -32,6 +42,7 @@ import com.brushwork.paint.ui.theme.BrushworkColors
 import com.brushwork.paint.ui.tools.strip.StripContext
 import com.brushwork.paint.ui.tools.strip.StripItem
 import com.brushwork.paint.ui.tools.strip.StripKeysV19
+import com.brushwork.paint.ui.tools.strip.StripLayout
 import com.brushwork.paint.ui.tools.strip.StripRow
 import com.brushwork.paint.vector.draw.VectorEraseMode
 
@@ -83,8 +94,46 @@ object VectorEraseChooser {
         val key = StripKeysV19.ERASE_PIXELS
         return StripItem(key.key, EraseLabels19.TURN_INTO_PIXELS, key.widthDp.dp, StripRow.MORE) {
             Box(Modifier.testTag(V19Tags.ERASE_PIXELS).semantics(properties = warned)) {
-                StripTextButton(EraseLabels19.TURN_INTO_PIXELS, key.widthDp.dp, onClick = onPixels, color = WARNING_TINT)
+                // (StripTextButton pads its text 4 dp on each side.)
+                FittingFontScale(EraseLabels19.TURN_INTO_PIXELS, (key.widthDp - 8).dp, StripLayout.LINE_DP.dp) {
+                    StripTextButton(EraseLabels19.TURN_INTO_PIXELS, key.widthDp.dp, onClick = onPixels, color = WARNING_TINT)
+                }
             }
+        }
+    }
+
+    /**
+     * I27: [content] under the largest font scale, at most the device's and at least 1 (so the
+     * text stays at least 11 sp), at which [text] laid out as `StripTextButton` lays it out (11 sp
+     * on 13 sp lines, at most two lines) fits [width] × [height]: at a large font scale the button
+     * keeps its text inside its declared width and its More-row line instead of cutting it.
+     */
+    @Composable
+    internal fun FittingFontScale(text: String, width: Dp, height: Dp, content: @Composable () -> Unit) {
+        val density = LocalDensity.current
+        val measurer = rememberTextMeasurer()
+        val style = LocalTextStyle.current.merge(TextStyle(fontSize = BUTTON_SP.sp, lineHeight = BUTTON_LINE_SP.sp))
+        val scale = remember(text, width, height, density, style, measurer) {
+            var s = density.fontScale
+            while (s > 1f) {
+                val at = Density(density.density, s)
+                val r = measurer.measure(
+                    text,
+                    style = style,
+                    overflow = TextOverflow.Ellipsis,
+                    maxLines = 2,
+                    constraints = Constraints(maxWidth = with(at) { width.roundToPx() }, maxHeight = with(at) { height.roundToPx() }),
+                    density = at,
+                )
+                if (!r.hasVisualOverflow && !r.multiParagraph.didExceedMaxLines) break
+                s = maxOf(1f, s - SCALE_STEP)
+            }
+            s
+        }
+        if (scale == density.fontScale) {
+            content()
+        } else {
+            CompositionLocalProvider(LocalDensity provides Density(density.density, scale), content = content)
         }
     }
 
@@ -147,4 +196,11 @@ object VectorEraseChooser {
 
     /** Widest text column of the mode cell's menu (dp): a description wraps rather than widening the menu past a phone. */
     private const val MENU_TEXT_MAX_DP = 220
+
+    /** `StripTextButton`'s text size and line height (sp). */
+    private const val BUTTON_SP = 11
+    private const val BUTTON_LINE_SP = 13
+
+    /** [FittingFontScale] tries font scales this far apart. */
+    private const val SCALE_STEP = 0.05f
 }

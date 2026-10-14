@@ -6,6 +6,7 @@ import com.brushwork.paint.EditorController
 import com.brushwork.paint.engine.LayerConvert
 import com.brushwork.paint.engine.PerfTrace
 import com.brushwork.paint.model.Layer
+import com.brushwork.paint.ui.common.EraseLabels19
 import com.brushwork.paint.vector.VObject
 import com.brushwork.paint.vector.VectorContent
 import kotlinx.coroutines.CancellationException
@@ -167,14 +168,34 @@ internal class EraseLanding(
         land(p.final, cuts, p.finish)
     }
 
-    /** Applies [final]'s result with the region cut's pieces [cuts] (the layer holds [EraseSession.content]). */
+    /**
+     * Applies [final]'s result with the region cut's pieces [cuts] (the layer holds
+     * [EraseSession.content]). Once the step is recorded one note says what else happened (a
+     * toast shows one text): [EraseLabels19.TOO_COMPLEX] when objects were left as they were (a
+     * cap or a failed cut), else [EraseLabels19.COPIES_BAKED] when an object's live copies became
+     * pieces of their own. Objects left as they were with nothing else erased (no step) say so too.
+     */
     private fun land(final: EraseSession, cuts: EraseCut.Cuts, finish: () -> Unit) {
         val converting = layer.vector == null
+        // (result() first: it sets the session's bakedCopies.)
         val after = final.result(cuts.pieces)
-        if (after == null) { done(false, finish); return }
+        val note = when {
+            cuts.tooComplex -> EraseLabels19.TOO_COMPLEX
+            cuts.copiesBaked || final.bakedCopies -> EraseLabels19.COPIES_BAKED
+            else -> null
+        }
+        if (after == null) {
+            if (cuts.tooComplex && c.doc.indexOf(layer) >= 0) c.toast(EraseLabels19.TOO_COMPLEX)
+            done(false, finish)
+            return
+        }
+        val landed = { ok: Boolean ->
+            if (ok && note != null) c.toast(note)
+            done(ok, finish)
+        }
         try {
             if (!converting) {
-                state.update(c, layer, after, label) { ok -> done(ok, finish) }
+                state.update(c, layer, after, label, landed)
             } else if (c.doc.effectiveLocked(layer) || !c.doc.effectiveVisible(layer)) {
                 // (The update would refuse it: no conversion either.)
                 done(false, finish)
@@ -183,7 +204,7 @@ internal class EraseLanding(
                 // synchronously inside the step).
                 c.groupUndo(label) {
                     LayerConvert.toVectorAction(c, layer, label = label)?.let(c::pushUndo)
-                    state.update(c, layer, after, label) { ok -> done(ok, finish) }
+                    state.update(c, layer, after, label, landed)
                 }
             }
         } catch (e: Throwable) {
