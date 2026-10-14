@@ -15,7 +15,7 @@ import android.graphics.Paint
  * - Metrics ([TextKerningMode.METRICS_LATIN]): the font's kerning of a pair is taken back where
  *   the pair is not inside one run of Latin, Greek or Cyrillic letters ([ScriptRuns]): the extra
  *   advance is the difference between the pair's advance without and with the font's kerning.
- * - Optical ([TextKerningMode.OPTICAL]): as Auto for now (step 4 measures the letter shapes).
+ * - Optical ([TextKerningMode.OPTICAL]): each pair set from the letters' shapes, see [OpticalKerning].
  *
  * A mode moves letters only where a manual kern could ([TextKerns.applies]: no line break on
  * either side, between grapheme clusters, in a paragraph drawn one cluster at a time); a
@@ -40,8 +40,7 @@ internal object KerningModes {
     fun advancesPx(mode: TextKerningMode?, source: String, from: Int, paint: Paint, factors: FloatArray? = null): FloatArray? = when (mode) {
         null -> null
         TextKerningMode.METRICS_LATIN -> metrics(source, from, paint, factors)
-        // Optical lays out as Auto until its glyph profiles land (A3 step 4).
-        TextKerningMode.OPTICAL -> null
+        TextKerningMode.OPTICAL -> OpticalKerning.advancesPx(source, from, paint, factors)
     }
 
     /** [a] plus [b] (each the extra advances of one source range, or null). */

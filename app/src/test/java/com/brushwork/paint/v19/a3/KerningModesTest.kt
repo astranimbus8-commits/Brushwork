@@ -3,7 +3,9 @@ package com.brushwork.paint.v19.a3
 import android.graphics.Canvas
 import android.graphics.Paint
 import com.brushwork.paint.engine.BitmapUtils
+import com.brushwork.paint.engine.MemoryPressure
 import com.brushwork.paint.tools.text.KerningModes
+import com.brushwork.paint.tools.text.OpticalKerning
 import com.brushwork.paint.tools.text.ScriptRuns
 import com.brushwork.paint.tools.text.TextBoxPreset
 import com.brushwork.paint.tools.text.TextBoxSpec
@@ -38,7 +40,7 @@ import java.nio.ByteBuffer
 import java.util.zip.CRC32
 
 /**
- * v1.9 A3 step 3 (R5): the "Pair kerning" modes Off, Auto and Metrics (Optical: step 4).
+ * v1.9 A3 steps 3 and 4 (R5): the "Pair kerning" modes Off, Auto, Metrics and Optical.
  *
  * - Auto (and Metrics on Latin text, which has nothing to take back) draws the v1.8 pixels: the
  *   goldens of `UnscaledParityGoldenTest` (Windows hashes) and the StaticLayout route.
@@ -46,6 +48,9 @@ import java.util.zip.CRC32
  *   every other pair by its plain advances ("テキ" untouched by the font's kerning), with manual
  *   kerns on top; a mode that moves a letter exports as outlines.
  * - "Off" is the "Font kerning" switch: it keeps the stored mode, which the switch brings back.
+ * - Optical sets each pair of letters from their shapes: deterministic (the same with the profile
+ *   cache emptied), within ±0.15 em of the plain advances, "nn" at its plain advance (the target),
+ *   "AV" closer than plain, pairs with a space left as the font sets them, manual kerns on top.
  * - Straight vertical text keeps the font's pairs; text on a path takes its mode.
  */
 @RunWith(RobolectricTestRunner::class)
@@ -150,6 +155,50 @@ class KerningModesTest {
         assertEquals(px[te] + 0.2f * spec.sizePx, kerned[te], 1e-3f)
         // Auto adds nothing to the same text.
         assertNull(TextRenderer.kernPx(spec.copy(kerningMode = null), text, emptyList(), 0, null))
+    }
+
+    @Test
+    fun opticalSetsPairsFromTheirShapesWithinTheClamp() {
+        val text = "AVATAR Tony r. nnn LT"
+        val spec = TextSpec(sizePx = 60f, kerningMode = TextKerningMode.OPTICAL)
+        val item = TextItem(text, spec, 250f, 200f)
+        val block = requireNotNull(TextRenderer.prepare(item).block)
+        val paint = Paint(block.textPaint)
+        val unkerned = Paint(paint).apply { fontFeatureSettings = KerningModes.withoutKerning(paint.fontFeatureSettings) }
+        val on = FloatArray(text.length)
+        val plainAdv = FloatArray(text.length)
+        paint.getTextWidths(text, 0, text.length, on)
+        unkerned.getTextWidths(text, 0, text.length, plainAdv)
+
+        val px = requireNotNull(TextRenderer.kernPx(spec, text, emptyList(), 0, null)) { "Optical moves letters" }
+        OpticalKerning.trim(MemoryPressure.CRITICAL)
+        assertEquals(0, OpticalKerning.size())
+        assertTrue("deterministic: the same with the profiles measured again", px.contentEquals(TextRenderer.kernPx(spec, text, emptyList(), 0, null)))
+        val clamp = OpticalKerning.CLAMP_EM * spec.sizePx
+        for (i in 0 until text.length - 1) {
+            val pair = "${text[i]}${text[i + 1]}"
+            if (text[i] == ' ' || text[i + 1] == ' ') {
+                assertEquals("\"$pair\" (a space) is left as the font sets it", 0f, px[i], 0f)
+                continue
+            }
+            val kern = on[i] + px[i] - plainAdv[i]
+            assertTrue("\"$pair\": ${kern / spec.sizePx} em from its plain advance, within the clamp", kern >= -clamp - 1e-3f && kern <= clamp + 1e-3f)
+        }
+        // "nn" is the target: its plain advance. "AV" closes up.
+        val nn = text.indexOf("nn")
+        assertEquals("nn at its plain advance", plainAdv[nn], on[nn] + px[nn], 1e-3f)
+        assertEquals(plainAdv[nn + 1], on[nn + 1] + px[nn + 1], 1e-3f)
+        assertTrue("AV closer than plain: ${on[0] + px[0]} < ${plainAdv[0]}", on[0] + px[0] < plainAdv[0] - 0.02f * spec.sizePx)
+        // Manual kerns add on top.
+        val kerned = requireNotNull(TextRenderer.kernPx(spec, text, listOf(TextKern(0, 100)), 0, null))
+        assertEquals(px[0] + 0.1f * spec.sizePx, kerned[0], 1e-3f)
+        // It moves letters: drawn unlike Auto, exported as outlines.
+        assertTrue(TextRenderer.modeMovesLetters(item))
+        assertNotEquals(crc(item.mode(null)), crc(item))
+        assertNull(TextExport.lines(item))
+        // Off and vertical text: nothing optical.
+        assertNull(TextRenderer.kernPx(spec.copy(fontKerning = false), text, emptyList(), 0, null))
+        assertNull(KerningModes.modeOf(spec.copy(vertical = true)))
     }
 
     @Test
