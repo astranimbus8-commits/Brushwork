@@ -8,8 +8,10 @@ import java.io.File
 
 /**
  * v1.9 A7a step 4 (design 2.4.13 and 3.2 A7a, R9): no coroutine of the main sources runs outside
- * `ErrorReporter.handler`, so in a release build an error in any job is kept, toasted and survived
- * instead of closing the app.
+ * `ErrorReporter.handler`, so in a release build an error in any job is kept as a report: in a
+ * supervisor scope it is said and survived; in a composable's `rememberCoroutineScope` (no
+ * supervisor: the error has ended the window's Recomposer) it is handed on and the app stops with
+ * the report instead of leaving a dead screen (`ErrorReporterScopeTest`).
  *
  * Read from the sources (comments left out, a call followed across lines):
  * - every `CoroutineScope(...)` carries the handler and a `SupervisorJob()` (one failed job never

@@ -1012,14 +1012,22 @@ policy for errors no job caught, and the two tools' jobs guarded and moved off t
   while an activity is started and no debugger is attached (under 0.1 ms a second); unanswered
   for 4 s, it takes the main thread's stack once and writes one quiet `FREEZE` report ("Freeze:
   4.2 s", section "Main thread"). A gap of more than two ticks (the phone slept) starts it over.
+  Its start and stop run on its own thread, in order with the ticks (a rotation never leaves two
+  tick loops).
 - **Errors no job caught** (`ErrorReporter.handler`, in every scope the app makes:
   `BrushworkApp.appScope`, `EditorSession.scope`, `FontStore`, every `rememberCoroutineScope`;
   `UnguardedLaunchGateTest` fails a scope without it, and `GlobalScope` always). Release builds
   (not debuggable): the error is kept as a quiet report, the open tool's touch is cancelled
   (`Tool.onCancel`), `StabilityLabels19.ERROR_TOAST` names the tool (outside the editor, the
-  error's class), and the app goes on (`SupervisorJob`: only the failed job ends). Debug builds,
-  tests and a JVM with no app hand it to the thread's uncaught handler, as v1.8 did, so a bug is
-  never hidden. `EditorSession` keeps its open, save and close failures as reports too.
+  error's class), and the app goes on (`SupervisorJob`: only the failed job ends). Not where the
+  error has already ended the job's scope (`ErrorReporter.tookItsScopeDown`: the parent job is
+  no longer active): a composable's `rememberCoroutineScope` is no supervisor (Compose makes it a
+  plain child of the window's Recomposer and refuses a job of ours), so its job's error has
+  cancelled the Recomposer too and going on would leave a screen that never draws or takes a
+  touch again; that error is handed on and the app stops with the report (v1.8's outcome).
+  Debug builds, tests and a JVM with no app hand every error to the thread's uncaught handler,
+  as v1.8 did, so a bug is never hidden. `EditorSession` keeps its open, save and close failures
+  as reports too.
 - **Line numbers in release.** `app/proguard-rules.pro`: `-keepattributes
   SourceFile,LineNumberTable` and `-renamesourcefileattribute SourceFile`, so a stack reads
   `at a.b.c(SourceFile:120)`. Keep each release's `app/build/outputs/mapping/release/mapping.txt`;
@@ -1060,9 +1068,12 @@ policy for errors no job caught, and the two tools' jobs guarded and moved off t
   said (`ERROR_TOAST` with "Save selection" or "Update saved selection").
 - **Not A7a's** (lead requests): excluding `files/diagnostics/` and `shared_prefs/diagnostics.xml`
   from Auto Backup and from the backup folder (the manifest's backup rules, A8); compat row 15's
-  generator; `LabelsV19` entries for the report kinds (private stand-ins in `ReportText`).
+  generator; `LabelsV19` entries for the report kinds (private stand-ins in `ReportText`); a
+  supervisor scope for the composables' jobs (their `rememberCoroutineScope` sites), so that
+  their errors too are survived rather than handed on.
 - **Tests** (`app/src/test/java/com/brushwork/paint/v19/a7a/`): `CrashLogTest`,
   `ExitInfoReasonTest`, `FreezeWatchdogTest`, `ErrorReporterReleaseTest`,
+  `ErrorReporterScopeTest` (a real composition: its Recomposer is gone, the error handed on),
   `UnguardedLaunchGateTest`, `CrashCardRobolectricTest`, `DiagnosticsSectionRobolectricTest` (the
   one UI class: the card at 360 and 392 dp and the list, font scales 1, 1.3 and 2.0),
   `MagneticLassoGuardTest`, `ColorSelectNoProxyInDrawTest`, `RenderScaledTest`,

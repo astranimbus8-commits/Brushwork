@@ -9,6 +9,8 @@ import com.brushwork.paint.EditorSession
 import com.brushwork.paint.ui.common.StabilityLabels19
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineName
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlin.coroutines.CoroutineContext
 
 /**
@@ -19,7 +21,13 @@ import kotlin.coroutines.CoroutineContext
  * - Release builds: the error is kept as a handled report ([CrashLog.record]), then on the main
  *   thread the open editor's tool is reset (its touch cancelled: `Tool.onCancel`) and
  *   [StabilityLabels19.ERROR_TOAST] is shown with the tool's name (outside the editor, the error's
- *   class), and the app goes on: the scopes are `SupervisorJob`s, so only the failed job ends.
+ *   class), and the app goes on: the app, editor and font scopes are `SupervisorJob`s, so only
+ *   the failed job ends.
+ * - Release builds, a job whose error has already ended its scope ([tookItsScopeDown]): the scope
+ *   is no supervisor. Every composable's `rememberCoroutineScope` is one: Compose makes it a plain
+ *   child of the window's Recomposer, so the error has cancelled the Recomposer too, and the
+ *   screen would never draw or take a touch again. Going on would leave a dead screen, so the
+ *   error is handed on as in a debug build: the app stops with a report (v1.8's outcome, now kept).
  * - Debug builds, tests (Robolectric) and a JVM with no app: the error goes to the thread's
  *   uncaught-exception handler as in v1.8 (and so to [CrashLog]'s handler: the app stops with a
  *   report), so a bug is never hidden while the app is built.
@@ -44,7 +52,7 @@ object ErrorReporter {
     private val main by lazy { Handler(Looper.getMainLooper()) }
 
     internal fun handle(context: CoroutineContext, e: Throwable) {
-        if (!recovers) {
+        if (!recovers || tookItsScopeDown(context)) {
             val thread = Thread.currentThread()
             thread.uncaughtExceptionHandler?.uncaughtException(thread, e) ?: throw e
             return
@@ -58,6 +66,22 @@ object ErrorReporter {
             main.post { recover(e) }
         } catch (_: Throwable) {
         }
+    }
+
+    /**
+     * True when the failed job's scope ([context]'s job's parent) is no longer active. A job's
+     * error reaches this handler only after it has cancelled its parent, unless the parent is a
+     * supervisor; so the scope is no supervisor (a composable's `rememberCoroutineScope`, whose
+     * Recomposer is now cancelled too), or it had ended before (a late error: handed on, as v1.8
+     * did). A supervisor scope that is running stays active: its job's error is recovered from.
+     * A root job (no parent) is recovered from.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    internal fun tookItsScopeDown(context: CoroutineContext): Boolean = try {
+        context[Job]?.parent?.isActive == false
+    } catch (_: Throwable) {
+        // Not even the job's state can be read: never go on with a scope in doubt.
+        true
     }
 
     /** The editor's tool reset and the toast (main thread). */

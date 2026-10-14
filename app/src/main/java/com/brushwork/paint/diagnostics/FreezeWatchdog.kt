@@ -128,18 +128,26 @@ internal class FreezeWatchdog(
             handler.postDelayed(this, INTERVAL_MS)
         }
 
+        // The start and the stop run on the watchdog's thread, in order, like the ticks: a stop and
+        // a start within a tick (a rotation) never leave a tick that was running then posting a
+        // second loop beside the new one.
         override fun onActivityStarted(activity: Activity) {
             if (started++ == 0) {
-                ticking = true
-                handler.post { dog.reset() }
-                handler.post(this)
+                handler.post {
+                    ticking = true
+                    handler.removeCallbacks(this)
+                    dog.reset()
+                    handler.post(this)
+                }
             }
         }
 
         override fun onActivityStopped(activity: Activity) {
             if (started > 0 && --started == 0) {
-                ticking = false
-                handler.removeCallbacks(this)
+                handler.post {
+                    ticking = false
+                    handler.removeCallbacks(this)
+                }
             }
         }
 
