@@ -85,6 +85,13 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
     val isStroking: Boolean get() = stroke != null
 
     /**
+     * v1.9 A6 (I25): true when the last lift committed what the canvas already showed, so only
+     * what the lift itself added was redrawn (see [Stroke.previewIsCommit]). For tests.
+     */
+    internal var lastLiftShowedCommit: Boolean = false
+        private set
+
+    /**
      * True while the stroke in progress is a path stroke ([beginPath]) with parts drawn as a
      * draft (fewer dabs, see [updatePath]); an exact update or [onUp] makes it exact.
      */
@@ -440,6 +447,17 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
             controller.invalidateDoc(dirty)
             dirty.setEmpty()
         }
+
+        /**
+         * v1.9 A6 (I25): true when the canvas, as the stroke's preview draws it, shows exactly the
+         * pixels the commit writes, so the commit redraws nothing ([EditorController.commitEdit]'s
+         * `displayCurrent`) and only what the lift itself adds is redrawn (the last dabs, the end
+         * taper). `PreviewEqualsCommitParityTest` holds it for every case where it is true:
+         * an RGB document (other color modes are constrained at the commit) and no recorder
+         * (it may commit something else than the pixels).
+         */
+        protected open val previewIsCommit: Boolean
+            get() = recorder == null && controller.doc.colorMode == ColorMode.RGB
 
         abstract fun onDab(dab: Dab)
         abstract fun afterEvent()
@@ -1224,22 +1242,37 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
                 // Nothing was painted: the recorder does the whole edit.
                 dirty.setEmpty()
                 commitThrough(undoLabel(kind), bounds) { false }
-                release()
+                lastLiftShowedCommit = false
+                release(redraw = true)
                 return
             }
             retaper()
-            dirty.setEmpty()
+            val shown = previewIsCommit
+            // v1.9 A6 (I25): the dabs the lift added (its last point, the sampler's end) are not
+            // on the canvas yet; v1.8 left them to the commit's redraw.
+            if (shown) flushDirty() else dirty.setEmpty()
             val commitRect = Rect(bounds)
             // v1.8 D: a clone stroke's copies are committed with it, in the same step.
             for (k in 1 until copyDest.size) commitRect.union(copyDest[k])
             val sel = selection
             if (sel != null && !commitRect.intersect(sel.bounds)) commitRect.setEmpty()
-            commitThrough(undoLabel(kind), bounds) { commitPixels(commitRect, sel) }
-            release()
+            val committed = commitThrough(undoLabel(kind), bounds) { commitPixels(commitRect, sel, shown) }
+            lastLiftShowedCommit = shown && committed
+            release(redraw = !lastLiftShowedCommit)
         }
 
-        /** Composites the coverage into the layer (or its mask) within [commitRect]: the normal commit. */
-        private fun commitPixels(commitRect: Rect, sel: Selection?): Boolean {
+        /**
+         * v1.9 A6 (I25): path strokes and a clone stroke's copies keep v1.8's redraw, and so does a
+         * stroke whose preview another override replaced (the canvas did not show it).
+         */
+        override val previewIsCommit: Boolean
+            get() = super.previewIsCommit && !isPath && sourceCopies == null && controller.renderOverride === override
+
+        /**
+         * Composites the coverage into the layer (or its mask) within [commitRect]: the normal
+         * commit. v1.9 A6: [shown] = the canvas shows the result already ([previewIsCommit]).
+         */
+        private fun commitPixels(commitRect: Rect, sel: Selection?, shown: Boolean): Boolean {
             if (commitRect.isEmpty || !res.painter.isVisible(style)) return false
             val rec = controller.beginEdit(layer)
             val target = (if (rec.target == EditTarget.MASK) layer.mask else layer.bitmap) ?: return false
@@ -1261,8 +1294,8 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
                 commitCopies(canvas, r, sel)
                 res.painter.draw(canvas, coverage, r, style, sel?.mask)
             }
-            // v1.9 A6 (P1): only the touched tiles are redrawn.
-            return controller.commitStrokeEdit(rec, undoLabel(kind))
+            // v1.9 A6 (P1): only the touched tiles are redrawn; none when the canvas shows them (I25).
+            return controller.commitStrokeEdit(rec, undoLabel(kind), displayCurrent = shown)
         }
 
         /** Where the original (`[0]`) and each copy k of a clone stroke land within [commitRect]. */
@@ -1301,12 +1334,16 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
 
         override fun cancel() {
             recorder?.cancel()
-            release()
+            release(redraw = true)
         }
 
         private var released = false
 
-        private fun release() {
+        /**
+         * Ends the preview and clears the coverage. [redraw] = false (v1.9 A6, I25): the canvas
+         * shows the committed pixels already, so only the end taper's regions are redrawn.
+         */
+        private fun release(redraw: Boolean) {
             if (controller.renderOverride === override) controller.renderOverride = null
             if (!released) {
                 released = true
@@ -1336,7 +1373,7 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
                 // the end taper redrew; not the stroke's whole bounding box.
                 for (r in EditInvalidation.tilesAfterCommit(touchedTiles(bounds), bounds, displayCurrent = false)) {
                     res.clear(r)
-                    controller.invalidateDoc(r)
+                    if (redraw) controller.invalidateDoc(r)
                 }
                 for (r in retapered) {
                     res.clear(r)
@@ -1461,11 +1498,18 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
 
         override fun complete() {
             drain(final = true)
-            dirty.setEmpty()
+            val shown = previewIsCommit
+            // v1.9 A6 (I25): the dabs held back for the end taper are not on the canvas yet.
+            if (shown) flushDirty() else dirty.setEmpty()
             dropOverride()
-            // v1.9 A6 (P1): only the touched tiles are redrawn.
-            commitThrough(undoLabel(kind), reached) { controller.commitStrokeEdit(rec, undoLabel(kind)) }
+            // v1.9 A6 (P1): only the touched tiles are redrawn; none when the canvas shows them.
+            val committed = commitThrough(undoLabel(kind), reached) { controller.commitStrokeEdit(rec, undoLabel(kind), displayCurrent = shown) }
+            lastLiftShowedCommit = shown && committed
         }
+
+        /** v1.9 A6 (I25): the canvas shows the layer's own pixels, except through the 1-bit threshold. */
+        override val previewIsCommit: Boolean
+            get() = super.previewIsCommit && monochrome == null
 
         override fun cancel() {
             recorder?.cancel()
