@@ -65,8 +65,23 @@ data class WrapMetrics(val ascent: Float, val descent: Float, val extra: Float =
  * One laid-out line: the characters [start]..[end] (trailing spaces and the line break left
  * out), drawn with their left end at ([x], [baseline]) in the text area's coordinates; [width]
  * is their advance width.
+ *
+ * v1.9 (R4, justified text, see [Justify]): the free stretch of the band the line was placed in,
+ * from [runX], [runWidth] wide (the whole text area without a picture), and whether the line is
+ * the last of its paragraph ([lastOfParagraph]: it ends at a line break or at the end of the laid
+ * out text; a frame's last line whose paragraph goes on in the next frame is not). Alignment
+ * places the line inside its run; justification spreads it over the run.
  */
-data class WrapLine(val start: Int, val end: Int, val x: Float, val baseline: Float, val width: Float)
+data class WrapLine(
+    val start: Int,
+    val end: Int,
+    val x: Float,
+    val baseline: Float,
+    val width: Float,
+    val runX: Float = x,
+    val runWidth: Float = width,
+    val lastOfParagraph: Boolean = true,
+)
 
 /**
  * Lines of a wrapped text and the text's [height] (from the first line's top to the last line's
@@ -299,7 +314,7 @@ object WrapLayout {
             if (ps == pe) {
                 if (top + cell > stop) { end = ps; break@paragraphs }
                 // An empty line takes a band, wherever the picture is (it draws nothing).
-                lines += WrapLine(ps, ps, aligned(fullRun[0], 0f, align), (top + metrics.ascent).toFloat(), 0f)
+                lines += WrapLine(ps, ps, aligned(fullRun[0], 0f, align), (top + metrics.ascent).toFloat(), 0f, 0f, full, true)
                 lastTop = top
                 bands++
                 top += cell + extra
@@ -318,7 +333,7 @@ object WrapLayout {
                     if (end < 0) continue
                     val vis = trimEnd(text, pos, end)
                     val w = t.width(pos, vis)
-                    lines += WrapLine(pos, vis, aligned(r, w, align), baseline, w)
+                    lines += WrapLine(pos, vis, aligned(r, w, align), baseline, w, r.x0, r.width, end >= pe)
                     pos = end
                     placed = true
                 }

@@ -7,15 +7,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.FormatAlignLeft
-import androidx.compose.material.icons.automirrored.filled.FormatAlignRight
-import androidx.compose.material.icons.filled.FormatAlignCenter
 import androidx.compose.material.icons.filled.FormatBold
 import androidx.compose.material.icons.filled.FormatItalic
 import androidx.compose.material.icons.filled.TextRotateVertical
-import androidx.compose.material.icons.filled.VerticalAlignBottom
-import androidx.compose.material.icons.filled.VerticalAlignCenter
-import androidx.compose.material.icons.filled.VerticalAlignTop
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -46,7 +40,6 @@ import com.brushwork.paint.tools.text.KerningEditor
 import com.brushwork.paint.tools.text.PlaceholderAmount
 import com.brushwork.paint.tools.text.PlaceholderFit
 import com.brushwork.paint.tools.text.PlaceholderKind
-import com.brushwork.paint.tools.text.TextAlign
 import com.brushwork.paint.tools.text.TextBoxPreset
 import com.brushwork.paint.tools.text.TextRenderer
 import com.brushwork.paint.tools.text.TextSpec
@@ -219,19 +212,8 @@ fun TextEditorDialog(host: TextEditorHost) {
             ChoiceChips(listOf("Columns right to left", "Left to right"), if (spec.columnsLeftToRight) 1 else 0, { i -> style { it.copy(columnsLeftToRight = i == 1) } })
         }
 
-        if (!onPath) {
-            SectionHeader(if (spec.vertical) "Column alignment" else "Alignment")
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                TextAlign.entries.forEach { a ->
-                    val icon = when (a) {
-                        TextAlign.START -> if (spec.vertical) Icons.Filled.VerticalAlignTop else Icons.AutoMirrored.Filled.FormatAlignLeft
-                        TextAlign.CENTER -> if (spec.vertical) Icons.Filled.VerticalAlignCenter else Icons.Filled.FormatAlignCenter
-                        TextAlign.END -> if (spec.vertical) Icons.Filled.VerticalAlignBottom else Icons.AutoMirrored.Filled.FormatAlignRight
-                    }
-                    ToolIconButton(icon, if (spec.vertical) a.verticalLabel else a.horizontalLabel, onClick = { style { it.copy(align = a) } }, selected = spec.align == a)
-                }
-            }
-        }
+        // v1.9 (R4): the three buttons plus "Justify lines" / "Justify the last line too".
+        if (!onPath) TextAlignSection(spec) { style(it) }
 
         SectionHeader("Spacing")
         LabeledSlider(

@@ -38,6 +38,10 @@ object TextExport {
      * applies to its own characters ([kerned]) and for text with "Font kerning" off
      * ([TextSpec.fontKerning]): a run of text can carry neither (an SVG viewer or PDF reader would
      * set the letters with the font's kerning), so they export as outlines.
+     *
+     * v1.9 (R4): a justified line gives one run per word, each keeping its space, at the x its
+     * pixels have (so SVG matches them); null for text with a line spread between its letters
+     * (a line without word spaces, [Justified.spreadsClusters]), which exports as outlines.
      */
     fun lines(item: TextItem): List<TextLineRun>? {
         if (item.spec.letterScale.isOn) return null
@@ -49,6 +53,18 @@ object TextExport {
         if (block.isEmpty) return emptyList()
         val inset = block.inset
         val text = item.text
+        block.justified?.let { j ->
+            // v1.9 (R4): a justified line is one run per word, each keeping its space (so the
+            // exported text still reads with its spaces), at the x its pixels have. A line spread
+            // between its letters (no word spaces) can't be a run: outlines.
+            if (j.spreadsClusters) return null
+            val lines = block.wrapLines ?: return null
+            val out = ArrayList<TextLineRun>()
+            for (l in lines) Justify.forEachPiece(l, j.measured, j.offsets) { a, b, x ->
+                out += TextLineRun(text.substring(a, b), x + inset, l.baseline + inset, paint)
+            }
+            return out
+        }
         block.wrapLines?.let { lines ->
             return lines.filter { it.end > it.start }.map { TextLineRun(text.substring(it.start, it.end), it.x + inset, it.baseline + inset, paint) }
         }

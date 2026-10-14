@@ -74,6 +74,11 @@ internal class ScaledLetters(
      * 0 = draw every line (imported fonts, whose swashes may reach anywhere).
      */
     private val cullEms: Float = 0f,
+    /**
+     * v1.9 (R4): the extra advance before each character of a justified line ([Justified.offsets],
+     * indices as [text]'s), null when no line is justified.
+     */
+    private val justify: FloatArray? = null,
 ) {
     /** How far letter [f]'s baseline moves (negative = up) for [align]. */
     fun shift(f: Float): Float = when (align) {
@@ -91,7 +96,7 @@ internal class ScaledLetters(
             // smaller letters up by less than a cap height; accents and descenders stay within an em).
             val m = cullEms * base + paint.strokeWidth
             lines.filter { l ->
-                l.baseline + m >= clip.top && l.baseline - m <= clip.bottom && l.x + l.width + m >= clip.left && l.x - m <= clip.right
+                l.baseline + m >= clip.top && l.baseline - m <= clip.bottom && maxOf(l.x + l.width, l.runX + l.runWidth) + m >= clip.left && l.x - m <= clip.right
             }
         } else lines
         try {
@@ -153,7 +158,7 @@ internal class ScaledLetters(
                 if (!ramp.blank[c]) {
                     val e = min(bounds[c + 1] - offset, end)
                     val f = ramp.factors[offset + s]
-                    block(s, e, l.x + wt.width(l.start, s), l.baseline + shift(f), f)
+                    block(s, e, l.x + wt.width(l.start, s) + Justify.at(justify, s), l.baseline + shift(f), f)
                 }
                 c++
             }
