@@ -262,6 +262,50 @@ class PartialCutsFillsTest {
         assertNull(c.renderOverride)
     }
 
+    /**
+     * A cut that fails to land from the background (here: the layer's update throws) leaves the
+     * layer as it was and never holds the erases after it on that layer (review fix: they waited
+     * for VectorDrawState's stuck guard, 30 s).
+     */
+    @Test
+    fun aCutThatFailsToLandHoldsNoLaterErase() {
+        val c = setup()
+        val queued = held(c)
+        c.vectors.addObjects(c.vec, listOf(box(40f, 60f, 160f, 140f), box(200f, 60f, 260f, 140f)), "Add")
+        eraser(c)
+        val state = VectorDrawState.of(c)
+        val update = state.update
+        var fail = true
+        state.update = { ctl, layer, after, label, onDone ->
+            if (fail) {
+                fail = false
+                throw IllegalStateException("the update failed")
+            }
+            update(ctl, layer, after, label, onDone)
+        }
+        val before = c.vec.vector
+        val steps = c.undoManager.undoCount
+        c.swipe(100f to 40f, 100f to 160f)
+        assertEquals(1, queued.size)
+        queued.removeAt(0).run()
+        // (The failure goes to the editor scope's uncaught handler.)
+        runCatching { idle() }
+        assertFalse("the update was tried", fail)
+        assertSame(before, c.vec.vector)
+        assertEquals(steps, c.undoManager.undoCount)
+        assertNull(c.renderOverride)
+        // The next erase on the layer starts its cut at once.
+        c.swipe(230f to 40f, 230f to 160f)
+        assertEquals(1, queued.size)
+        queued.removeAt(0).run()
+        idle()
+        assertEquals(steps + 1, c.undoManager.undoCount)
+        val after = c.vec.vector!!
+        assertEquals("the first box, and the second one in two pieces", 3, after.objects.size)
+        assertSame(before!!.objects[0], after.objects[0])
+        assertNull(c.renderOverride)
+    }
+
     @Test
     fun anythingThatRecordsAStepLandsTheCutFirst() {
         val c = setup()

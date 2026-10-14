@@ -1258,9 +1258,12 @@ TO_INTERSECTION; v1.8's descriptions, which the frozen labels test reads as v1.8
 and the hint show `VectorEraseMode.note`, which for PARTIAL is `EraseLabels19.PARTIAL_NOTE`. What
 the user asked for as three ways of erasing:
 - Object (`OBJECT`): every object the eraser touches goes whole (all its copies too).
-- Partial (`PARTIAL`): strokes and open lines are cut as in v1.8 (`EraseSession`); shapes, filled
-  paths and closed outlines are cut by the region the eraser swept (`EraseCut`), the pieces
-  editable `VPath`s in the object's place and style.
+- Partial (`PARTIAL`): strokes and open lines (one open sub-path, no fill) are cut along the
+  eraser as in v1.8 (`EraseSession`); shapes of any style except lines and arrows, and paths with
+  a fill, are cut by the region the eraser swept (`EraseCut.cutsByRegion`), the pieces editable
+  `VPath`s in the object's place and style (a stroke-only shape's cut edge is stroked too, so its
+  gap closes into a dent at the lift); closed or multi-sub-path paths without a fill go whole, as
+  in v1.8, now without v1.8's hint.
 - Turn into pixels (`EraseLabels19.TURN_INTO_PIXELS`, the Eraser's More row, last, warning tint;
   also the last entry of the tools' mode cell): `ErasePixelsDialog` asks first
   (`PIXELS_TITLE`, `PIXELS_BODY`, `PIXELS_CONFIRM`), then `ErasePixels.turnIntoPixels` rasterizes
@@ -1317,8 +1320,9 @@ at a large font scale its text shrinks (never below 11 sp) to stay within two li
 (`VectorEraseChooser.FittingFontScale`, I27).
 The four tools while erasing such a layer get `VectorEraseChooser.modeCell`
 (`StripKeysV19.ERASE_MODE_CELL`, `EraseLabels19.MODE_CELL`), whose menu lists the modes with their
-notes, a divider and Turn into pixels. Bottom bar slot 1 (`EraseModeSlot`, `V19Tags.ERASE_SLOT`):
-for an `ErasableTool` it reads `eraseLabel` or `erasingLabel`, draws open while erasing and toggles
+notes, a divider and Turn into pixels. The cell is 56 dp at overflow rank 0 (frozen strip key):
+the four tools' strips (A1, A9) must leave room for it in row 1 (F1a G5).
+Bottom bar slot 1 (`EraseModeSlot`, `V19Tags.ERASE_SLOT`): for an `ErasableTool` it reads `eraseLabel` or `erasingLabel`, draws open while erasing and toggles
 `setErase`; for any other tool it is v1.8's slot.
 
 Tests: `v19/a5/` (routing, cut, landing, tool erase, chooser and slot UI, Timing:

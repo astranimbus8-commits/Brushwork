@@ -73,8 +73,14 @@ internal class EraseLanding(
         state.serial(layer) { finish -> apply(session, finish, reruns = 0) }
     }
 
+    /** [onDone] was called (it is called once). */
+    private var reported = false
+
     private fun done(applied: Boolean, finish: () -> Unit) {
-        onDone(applied)
+        if (!reported) {
+            reported = true
+            onDone(applied)
+        }
         finish()
     }
 
@@ -209,7 +215,9 @@ internal class EraseLanding(
                 }
             }
         } catch (e: Throwable) {
-            onDone(false)
+            // (A cut that lands from the background is outside VectorDrawState.run's guard: the
+            // erases queued behind it on this layer must not wait for the stuck guard.)
+            done(false, finish)
             throw e
         }
     }

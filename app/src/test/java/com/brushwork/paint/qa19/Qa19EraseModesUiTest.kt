@@ -43,8 +43,9 @@ import org.robolectric.annotation.Config
  * 360 dp, with a finger. Row 1 holds the three modes and the size; a "Partial" swipe through a
  * filled box cuts it into two editable filled paths in ONE "Erase" step (the shape layer becomes
  * a vector layer in the same step); an "Object" swipe then takes one piece away whole; undo
- * brings back what was there. At 392 dp the row is the same, and at font scales 1.3 and 2.0 the
- * strip, its More row and the pixels dialog keep their texts inside their boxes.
+ * brings back what was there. At 392 dp the row is the same, and at font scales 1.3 and 2.0, at
+ * 360 and at 392 dp, the strip, its More row and the pixels dialog keep their texts inside their
+ * boxes.
  *
  * One test (sections): Compose's frame clock only serves the first test of a Robolectric sandbox.
  */
@@ -147,27 +148,40 @@ class Qa19EraseModesUiTest {
             }
         }
 
-        for (scale in Qa19Ui.FONT_SCALES) for (kind in listOf("vector", "shape")) h.section("a $kind layer at font scale $scale at 360 dp") {
-            val where = "$kind layer, 360 dp at font scale $scale"
-            val c = h.editor(fontScale = scale) { objectsLayer(it, kind) }.c
-            Qa19Ui.click(VectorEraseMode.PARTIAL.label, exact = true)
-            assertTheStrip(where)
-            assertTrue(Qa19Ui.has(EraseLabels19.PARTIAL_NOTE, exact = true))
-            // Not A5's cells (lead requests): v1.8's readouts and brush chip (BrushStripItems.OPACITY_DP,
-            // SIZE_DP and CHOOSE_DP wide, in any row, for every brush tool) cannot hold their texts at
-            // these scales (the opacity from 1.3, the others at 2.0), and the frozen strip host ends a
-            // hint longer than StripLayout.MAX_HINT_LINES in an ellipsis (v1.8's mode hints too).
-            // The pixels action and the dialog are checked in full.
-            val notA5 = setOfNotNull(
-                percent(c.eraser.opacity), formatSize(c.eraser.size).takeIf { scale >= 2f }, c.eraser.name.takeIf { scale >= 2f },
-                EraseLabels19.PARTIAL_NOTE.takeIf { scale >= 2f },
-            )
-            Qa19Ui.assertNoTextOverflow("$where, the More row open", except = { it in notA5 })
-            Qa19Ui.click(EraseLabels19.TURN_INTO_PIXELS, exact = true)
-            assertTrue(Qa19Ui.has(EraseLabels19.PIXELS_BODY, exact = true))
-            Qa19Ui.assertNoTextOverflow("$where, the pixels dialog", except = { it in notA5 })
-            Qa19Ui.click("Cancel", exact = true)
-            assertFalse(Qa19Ui.has(EraseLabels19.PIXELS_TITLE, exact = true))
+        val widths = listOf(360 to Qa19Ui.Q360, 392 to Qa19Ui.Q392)
+        for ((dp, q) in widths) for (scale in Qa19Ui.FONT_SCALES) for (kind in listOf("vector", "shape")) h.section("a $kind layer at font scale $scale at $dp dp") {
+            val where = "$kind layer, $dp dp at font scale $scale"
+            RuntimeEnvironment.setQualifiers(q)
+            try {
+                fontScaleChecks(h, where, dp, scale, kind)
+            } finally {
+                RuntimeEnvironment.setQualifiers(Qa19Ui.Q360)
+            }
         }
+    }
+
+    /** At font scale [scale] on a phone [dp] wide: the strip, its More row and the pixels dialog keep their texts inside their boxes. */
+    private fun fontScaleChecks(h: Qa19Harness, where: String, dp: Int, scale: Float, kind: String) {
+        val s = h.editor(fontScale = scale) { objectsLayer(it, kind) }
+        assertEquals("$where: the phone's width", dp.toFloat(), s.widthDp, 1f)
+        val c = s.c
+        Qa19Ui.click(VectorEraseMode.PARTIAL.label, exact = true)
+        assertTheStrip(where)
+        assertTrue(Qa19Ui.has(EraseLabels19.PARTIAL_NOTE, exact = true))
+        // Not A5's cells (lead requests): v1.8's readouts and brush chip (BrushStripItems.OPACITY_DP,
+        // SIZE_DP and CHOOSE_DP wide, in any row, for every brush tool) cannot hold their texts at
+        // these scales (the opacity from 1.3, the others at 2.0), and the frozen strip host ends a
+        // hint longer than StripLayout.MAX_HINT_LINES in an ellipsis (v1.8's mode hints too).
+        // The pixels action and the dialog are checked in full.
+        val notA5 = setOfNotNull(
+            percent(c.eraser.opacity), formatSize(c.eraser.size).takeIf { scale >= 2f }, c.eraser.name.takeIf { scale >= 2f },
+            EraseLabels19.PARTIAL_NOTE.takeIf { scale >= 2f },
+        )
+        Qa19Ui.assertNoTextOverflow("$where, the More row open", except = { it in notA5 })
+        Qa19Ui.click(EraseLabels19.TURN_INTO_PIXELS, exact = true)
+        assertTrue(Qa19Ui.has(EraseLabels19.PIXELS_BODY, exact = true))
+        Qa19Ui.assertNoTextOverflow("$where, the pixels dialog", except = { it in notA5 })
+        Qa19Ui.click("Cancel", exact = true)
+        assertFalse(Qa19Ui.has(EraseLabels19.PIXELS_TITLE, exact = true))
     }
 }

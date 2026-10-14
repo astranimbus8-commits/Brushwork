@@ -97,9 +97,10 @@ class ToolEraseSession internal constructor(
      */
     fun update(outline: Path, strokeWidth: Float, filledRegion: Boolean) {
         if (ended) return
-        reroute()
         val f = OutlineFootprint(outline, strokeWidth, filledRegion)
         footprint = f
+        // (A layer that takes no erase now shows as it is: the commit then erases nothing.)
+        if (!reroute()) { dropPreview(); return }
         if (objects) showObjects(f) else showPixels(f)
     }
 
@@ -114,9 +115,7 @@ class ToolEraseSession internal constructor(
         if (now == EraseRoute.REFUSE) return false
         // (A shape layer that became a vector layer in another step keeps its objects' erase.)
         if (now == route || removesObjects(now) && objects) return true
-        removePreview()
-        doom = null
-        session = null
+        dropPreview()
         route = now
         return true
     }
@@ -225,6 +224,13 @@ class ToolEraseSession internal constructor(
     private fun end() {
         ended = true
         removePreview()
+    }
+
+    /** The preview goes for good (a [DoomPreview] is never installed again): the next [update] starts over. */
+    private fun dropPreview() {
+        removePreview()
+        doom = null
+        session = null
     }
 
     private fun removePreview() {

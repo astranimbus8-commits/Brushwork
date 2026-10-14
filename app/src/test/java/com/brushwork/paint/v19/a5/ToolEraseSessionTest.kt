@@ -365,6 +365,30 @@ class ToolEraseSessionTest {
         assertArrayEquals(drawn, pixels(c.layer.bitmap))
     }
 
+    /**
+     * An adjustment layer takes an erase in its mask only: an outline after its mask was deleted
+     * shows the layer as it is, and the commit erases nothing (review fix: the preview of the
+     * mask's erase stayed).
+     */
+    @Test
+    fun aLayerThatTakesNoEraseNowShowsAsItIsAndTheCommitErasesNothing() {
+        val c = setup()
+        c.layer.adjustment = AdjustmentSpec(filterId = "adjust.invert")
+        c.addMask(c.layer, fromSelection = false)
+        val drawn = pixels(c.layer.bitmap)
+        val t = tool(c)
+        assertNotNull(t.outline(line(100f, 30f, 100f, 200f), 10f))
+        assertNotNull("the mask's erase shows", c.renderOverride)
+        c.deleteMask(c.layer)
+        val steps = c.undoManager.undoCount
+        t.outline(line(120f, 30f, 120f, 200f), 10f)
+        assertNull("nothing shows over the content", c.renderOverride)
+        assertEquals(ToolEraseResult.Nothing, t.commit())
+        assertEquals(steps, c.undoManager.undoCount)
+        assertArrayEquals(drawn, pixels(c.layer.bitmap))
+        assertNull(c.renderOverride)
+    }
+
     @Test
     fun aCancelLeavesNoTrace() {
         for (kind in listOf("raster", "vector")) {

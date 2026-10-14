@@ -6,7 +6,10 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.array.ArraySources
+import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.model.ColorMode
+import com.brushwork.paint.model.Document
+import com.brushwork.paint.model.Layer
 import com.brushwork.paint.qa19.Qa19Ui
 import com.brushwork.paint.testing.StripTestKit
 import com.brushwork.paint.tools.ToolId
@@ -46,7 +49,8 @@ import org.robolectric.annotation.Config
  * size" and, last and in the warning tint, "Turn into pixels", which asks first: Cancel changes
  * nothing, "Erase pixels" turns the layer into pixels in ONE step (undo turns it back), and the
  * Eraser then has v1.8's raster row. The four tools' mode cell lists the modes with their
- * descriptions, a divider and "Turn into pixels".
+ * descriptions, a divider and "Turn into pixels"; at font scales 1.3 and 2.0 its menu keeps its
+ * texts inside their boxes (I27).
  *
  * One test (sections): Compose's frame clock only serves the first test of a Robolectric sandbox.
  */
@@ -199,6 +203,20 @@ class EraseChooserRobolectricTest {
             Qa19Ui.click(item.label, exact = true)
             Qa19Ui.click(EraseLabels19.TURN_INTO_PIXELS, exact = true)
             assertEquals(1, asked)
+        }
+
+        // I27 (review): the mode cell's menu keeps its texts inside their boxes at large font scales.
+        for (scale in Qa19Ui.FONT_SCALES) h.section("the mode cell's menu at font scale $scale") {
+            // (No editor behind it: only the cell and its menu are on screen.)
+            val doc = Document("m", "m", 40, 40)
+            val layer = Layer(doc.newLayerId(), "Vector", BitmapUtils.createLayerBitmap(40, 40)).also { it.vector = VectorContent.EMPTY }
+            val ctx = StripContext(selectionBarShown = false, vectorMode = true)
+            val item = VectorEraseChooser.modeCell(ctx, layer, VectorEraseMode.PARTIAL, {}, {})!!
+            h.show(fontScale = scale) { Box { item.content() } }
+            Qa19Ui.click(item.label, exact = true)
+            for (m in VectorEraseMode.entries) assertTrue(m.label, Qa19Ui.has(m.label, exact = true) && Qa19Ui.has(m.note, exact = true))
+            assertTrue(Qa19Ui.has(EraseLabels19.TURN_INTO_PIXELS, exact = true))
+            Qa19Ui.assertNoTextOverflow("the mode cell's menu at font scale $scale")
         }
     }
 }
