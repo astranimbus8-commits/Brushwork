@@ -1,10 +1,10 @@
 package com.brushwork.paint
 
-import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.brushwork.paint.diagnostics.Breadcrumbs
+import com.brushwork.paint.diagnostics.CrashLog
 import com.brushwork.paint.diagnostics.ErrorReporter
 import com.brushwork.paint.engine.PerfTrace
 import kotlinx.coroutines.CompletableDeferred
@@ -55,11 +55,13 @@ class EditorSession(private val app: BrushworkApp, val projectId: String) {
                 state = State.Ready(c)
                 autosaveLoop(c)
             } catch (e: OutOfMemoryError) {
+                // v1.9 (A7a): kept as a handled report (sizes only: no name, no path).
+                CrashLog.record(e, "open", fatal = false)
                 state = State.Failed("Not enough memory to open this artwork")
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
-                Log.e("Brushwork", "load failed", e)
+                CrashLog.record(e, "open", fatal = false)
                 state = State.Failed("Could not open the artwork: ${e.message ?: e.javaClass.simpleName}")
             }
         }
@@ -106,7 +108,7 @@ class EditorSession(private val app: BrushworkApp, val projectId: String) {
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Throwable) {
-                Log.e("Brushwork", "save failed", e)
+                CrashLog.record(e, "save", fatal = false)
                 c.toast("Autosave failed: ${e.message ?: e.javaClass.simpleName}")
             }
         }
@@ -127,12 +129,12 @@ class EditorSession(private val app: BrushworkApp, val projectId: String) {
                     // A vector edit still rendering in the background and the Object bar actions
                     // waiting for it (v1.5) land now, so they are saved (dispose() would drop
                     // them); before the tool lets go, as an action may lift its objects again.
-                    runCatching { c.settleVectorWork() }
-                    runCatching { c.currentTool.onDeactivate() }
+                    runCatching { c.settleVectorWork() }.onFailure { kept(it, "close: vector work") }
+                    runCatching { c.currentTool.onDeactivate() }.onFailure { kept(it, "close: tool") }
                     // (What the tool's commit rendered lands too.)
-                    runCatching { c.vectors.flushPending() }
+                    runCatching { c.vectors.flushPending() }.onFailure { kept(it, "close: vector renders") }
                     // A saved selection still compressing (v1.7) lands, so it is saved too.
-                    runCatching { c.landSavedSelections() }
+                    runCatching { c.landSavedSelections() }.onFailure { kept(it, "close: saved selections") }
                 }
                 save()
                 controller?.dispose()
@@ -143,5 +145,10 @@ class EditorSession(private val app: BrushworkApp, val projectId: String) {
             }
             onClosed()
         }
+    }
+
+    /** v1.9 (A7a): what closing could not finish is kept as a handled report (a cancellation is none). */
+    private fun kept(e: Throwable, where: String) {
+        if (e !is kotlinx.coroutines.CancellationException) CrashLog.record(e, where, fatal = false)
     }
 }

@@ -1,7 +1,13 @@
 package com.brushwork.paint.tools.select.colorrange
 
 import android.graphics.Bitmap
-import java.util.stream.IntStream
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.asExecutor
+import java.util.concurrent.Executor
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -38,7 +44,7 @@ class ColorPreview internal constructor(
 )
 
 /**
- * Color select's masks (v1.8, design §3.5 c), computed in row bands on every core:
+ * Color select's masks (v1.8, design §3.5 c), computed in row bands on up to [WORKERS] threads (v1.9; v1.8: every core):
  * [proxy] (the Lab cache), [previewMask] (the proxy's membership) and [fullMask] (the document's,
  * at full resolution, in [BAND_ROWS]-row bands). The preview and the commit share
  * [ColorRange.labQ] and [ColorRange.member], so the preview shows what the commit selects.
@@ -63,20 +69,105 @@ object ColorMasks {
     }
 
     /**
-     * Runs [band] for bands 0 until [bands], spread over the cores ([workers] at most); each
-     * worker gets its own scratch from [scratch]. False when [cancelled] stopped it.
+     * v1.9 (A7a step 6): at most this many threads work on one mask: the caller and up to three
+     * helpers of [pool].
      */
-    private inline fun <T> parallel(bands: Int, crossinline scratch: () -> T, crossinline cancelled: () -> Boolean, crossinline band: (Int, T) -> Unit): Boolean {
-        val workers = min(bands, Runtime.getRuntime().availableProcessors().coerceAtLeast(1))
-        IntStream.range(0, workers).parallel().forEach { w ->
-            val s = scratch()
-            var i = w
-            while (i < bands && !cancelled()) {
-                band(i, s)
-                i += workers
+    const val WORKERS = 4
+
+    /**
+     * v1.9 (A7a): the helpers' threads, at most [WORKERS] of `Dispatchers.Default` (no longer the
+     * common fork-join pool on every core, which no cancellation reached and the rest of the app
+     * shared).
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val pool: Executor = Dispatchers.Default.limitedParallelism(WORKERS).asExecutor()
+
+    /**
+     * Runs [band] for bands 0 until [bands], each once, on the calling thread and up to
+     * [WORKERS] - 1 helpers of [pool] (fewer on fewer cores); each thread gets its own scratch from
+     * [scratch]. A band starts only while [cancelled] is false: false when it stopped the work.
+     * v1.9 (A7a): nothing runs on after the call returns (a helper that starts late takes no
+     * band; the call waits for the bands running), and an error in any band stops the others and
+     * is thrown here.
+     */
+    private fun <T> parallel(bands: Int, scratch: () -> T, cancelled: () -> Boolean, band: (Int, T) -> Unit): Boolean {
+        if (bands <= 0) return !cancelled()
+        val work = Bands(bands, scratch, cancelled, band)
+        val helpers = min(bands, min(WORKERS, Runtime.getRuntime().availableProcessors().coerceAtLeast(1))) - 1
+        for (k in 0 until helpers) {
+            try {
+                pool.execute(work)
+            } catch (e: Throwable) {
+                break // fewer helpers: the caller takes their bands
             }
         }
+        work.work()
+        work.close()
+        work.error?.let { throw it }
         return !cancelled()
+    }
+
+    /** The bands of one [parallel] call, shared by its threads ([run]: a helper). */
+    private class Bands<T>(
+        private val count: Int,
+        private val scratch: () -> T,
+        private val cancelled: () -> Boolean,
+        private val band: (Int, T) -> Unit,
+    ) : Runnable {
+        private val next = AtomicInteger()
+        private val lock = ReentrantLock()
+        private val ended = lock.newCondition()
+        private var running = 0
+        private var closed = false
+
+        /** The first error of a band (the others stop). */
+        @Volatile
+        var error: Throwable? = null
+            private set
+
+        /** A helper: works only while the caller has not closed the bands. */
+        override fun run() {
+            lock.withLock {
+                if (closed) return
+                running++
+            }
+            try {
+                work()
+            } finally {
+                lock.withLock {
+                    running--
+                    if (running == 0) ended.signalAll()
+                }
+            }
+        }
+
+        /** Takes bands until none is left, the work is cancelled or a band failed. */
+        fun work() {
+            var s: Any? = NONE
+            try {
+                while (error == null && !cancelled()) {
+                    val i = next.getAndIncrement()
+                    if (i >= count) return
+                    if (s === NONE) s = scratch()
+                    @Suppress("UNCHECKED_CAST")
+                    band(i, s as T)
+                }
+            } catch (e: Throwable) {
+                lock.withLock { if (error == null) error = e }
+            }
+        }
+
+        /** The caller's end: no helper starts after this; returns once the running ones have ended. */
+        fun close() {
+            lock.withLock {
+                closed = true
+                while (running > 0) ended.awaitUninterruptibly()
+            }
+        }
+
+        private companion object {
+            val NONE = Any()
+        }
     }
 
     /** The Lab cache of [pixels] (ARGB, unpremultiplied, [w] × [h]); null when cancelled. */

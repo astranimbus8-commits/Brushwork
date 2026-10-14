@@ -12,3 +12,9 @@
     *** Companion;
     kotlinx.serialization.KSerializer serializer(...);
 }
+# v1.9 (A7a, R9): crash reports keep line numbers ("at a.b.c(SourceFile:120)"); the file names
+# themselves are replaced by "SourceFile". With the release's mapping.txt
+# (app/build/outputs/mapping/release/mapping.txt, kept with each release) R8's retrace turns the
+# obfuscated names and lines of a shared report back into the source's.
+-keepattributes SourceFile,LineNumberTable
+-renamesourcefileattribute SourceFile

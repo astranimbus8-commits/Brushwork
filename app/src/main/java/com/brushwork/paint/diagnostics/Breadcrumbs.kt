@@ -13,12 +13,21 @@ object Breadcrumbs {
     private var next = 0
     private var count = 0
 
+    /**
+     * A7a: counts the events added (the freeze watchdog hands Android the newest ones as the
+     * process's summary when it changed: `ExitReasons.publishSummary`).
+     */
+    @Volatile
+    var added = 0
+        private set
+
     /** Thread-safe ring. Never personal data: tool ids, sizes, counts. */
     fun add(event: String) {
         synchronized(ring) {
             ring[next] = event
             next = (next + 1) % SIZE
             if (count < SIZE) count++
+            added++
         }
     }
 

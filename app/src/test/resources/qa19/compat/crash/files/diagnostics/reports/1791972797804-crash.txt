@@ -1,0 +1,46 @@
+Brushwork crash report
+Kind: CRASH
+Fatal: yes
+Time: 2026-10-14 10:13:17 UTC
+Where: compat row 15
+App: 1.1.0 (1) debug
+Device: robolectric robolectric, Android 14 (API 34), armeabi-v7a
+Memory: Java heap 73 of 1536 MB, native heap 73 MB, PSS 0 MB
+Summary: Crash: RuntimeException
+
+Breadcrumbs, oldest first:
+
+Stack:
+java.lang.RuntimeException: compat row 15
+	at com.brushwork.paint.qa19.Qa19CompatBackFromV18RobolectricTest.writeCrashReports(Qa19CompatBackFromV18RobolectricTest.kt:362)
+	at com.brushwork.paint.qa19.Qa19CompatBackFromV18RobolectricTest.access$writeCrashReports(Qa19CompatBackFromV18RobolectricTest.kt:58)
+	at com.brushwork.paint.qa19.Qa19CompatBackFromV18RobolectricTest$generators$1.invoke(Qa19CompatBackFromV18RobolectricTest.kt:347)
+	at com.brushwork.paint.qa19.Qa19CompatBackFromV18RobolectricTest$generators$1.invoke(Qa19CompatBackFromV18RobolectricTest.kt:347)
+	at com.brushwork.paint.qa19.Qa19CompatBackFromV18RobolectricTest.generateFixtures(Qa19CompatBackFromV18RobolectricTest.kt:439)
+	at java.base/jdk.internal.reflect.NativeMethodAccessorImpl.invoke0(Native Method)
+	at java.base/jdk.internal.reflect.NativeMethodAccessorImpl.invoke(NativeMethodAccessorImpl.java:77)
+	at java.base/jdk.internal.reflect.DelegatingMethodAccessorImpl.invoke(DelegatingMethodAccessorImpl.java:43)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:569)
+	at org.junit.runners.model.FrameworkMethod$1.runReflectiveCall(FrameworkMethod.java:59)
+	at org.junit.internal.runners.model.ReflectiveCallable.run(ReflectiveCallable.java:12)
+	at org.junit.runners.model.FrameworkMethod.invokeExplosively(FrameworkMethod.java:56)
+	at org.junit.internal.runners.statements.InvokeMethod.evaluate(InvokeMethod.java:17)
+	at org.junit.internal.runners.statements.RunBefores.evaluate(RunBefores.java:26)
+	at org.junit.runners.ParentRunner$3.evaluate(ParentRunner.java:306)
+	at org.robolectric.RobolectricTestRunner$HelperTestRunner$1.evaluate(RobolectricTestRunner.java:542)
+	at org.robolectric.internal.SandboxTestRunner.lambda$executeInSandbox$4(SandboxTestRunner.java:429)
+	at org.robolectric.internal.SandboxTestRunner.runInSandbox(SandboxTestRunner.java:455)
+	at org.robolectric.internal.SandboxTestRunner.executeInSandbox(SandboxTestRunner.java:420)
+	at org.robolectric.internal.SandboxTestRunner$5.evaluate(SandboxTestRunner.java:405)
+	at org.junit.runners.BlockJUnit4ClassRunner$1.evaluate(BlockJUnit4ClassRunner.java:100)
+	at org.junit.runners.ParentRunner.runLeaf(ParentRunner.java:366)
+	at org.junit.runners.BlockJUnit4ClassRunner.runChild(BlockJUnit4ClassRunner.java:103)
+	at org.robolectric.internal.SandboxTestRunner.access$000(SandboxTestRunner.java:64)
+	at org.robolectric.internal.SandboxTestRunner$4.evaluate(SandboxTestRunner.java:294)
+	at org.robolectric.internal.SandboxTestRunner$2.evaluate(SandboxTestRunner.java:260)
+	at org.robolectric.internal.SandboxTestRunner$3.lambda$evaluate$0(SandboxTestRunner.java:280)
+	at org.robolectric.internal.bytecode.Sandbox.lambda$runOnMainThreadWithClassLoader$1(Sandbox.java:112)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:264)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1136)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:635)
+	at java.base/java.lang.Thread.run(Thread.java:840)

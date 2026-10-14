@@ -35,9 +35,9 @@ class MagneticOutOfMemoryTest {
         ShadowLog.stream = null
         val c = Smoke.controller(ApplicationProvider.getApplicationContext(), Smoke.document(400, 300, whiteBottom = true))
         val tool = c.tools[ToolId.MAGNETIC_LASSO] as MagneticLassoTool
-        val real = tool.takeSnapshot
+        val real = tool.renderSource
         var tries = 0
-        tool.takeSnapshot = { _, _ ->
+        tool.renderSource = { _ ->
             tries++
             throw OutOfMemoryError("test")
         }
@@ -69,7 +69,7 @@ class MagneticOutOfMemoryTest {
         tool.discard()
 
         // The next activation tries again; with memory now, the map is built and nothing is said.
-        tool.takeSnapshot = real
+        tool.renderSource = real
         c.selectTool(ToolId.BRUSH)
         c.message = null
         c.selectTool(ToolId.MAGNETIC_LASSO)

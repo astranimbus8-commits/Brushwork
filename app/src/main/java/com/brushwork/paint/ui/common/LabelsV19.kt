@@ -97,6 +97,16 @@ object StabilityLabels19 {  // R9, R13
     const val DIAGNOSTICS = "Diagnostics"; const val CRASH_REPORTS = "Crash reports (%d)"; const val DELETE_REPORTS = "Delete all reports"
     /** Per-row buttons of the Diagnostics list (%s = the report's time, "12 Oct 14:03"), so no two read alike. */
     const val COPY_REPORT = "Copy report %s"; const val SHARE_REPORT = "Share report %s"; const val SHARE_ALL = "Share all"
+    /**
+     * A7a (lead, at its merge): the report kinds as the Diagnostics rows and the reports' "Summary"
+     * name them (`ReportText.kindTitle`; "Crash: IllegalStateException"). Not on a rule-4 screen:
+     * a row shows the composed summary, never a kind alone.
+     */
+    const val KIND_CRASH = "Crash"; const val KIND_HANDLED = "Handled error"; const val KIND_OUT_OF_MEMORY = "Out of memory"
+    const val KIND_FREEZE = "Freeze"; const val KIND_NATIVE = "Native crash"; const val KIND_ANR = "Not responding"
+    const val KIND_LOW_MEMORY_KILL = "Closed by Android for memory"
+    /** A7a (lead, at its merge): a report's first line, and the title of its clip and of its share. */
+    const val REPORT_TITLE = "Brushwork crash report"
     /** A7b: a DeferredStep wait that hit its 1.5 s limit (%s = the action's name). */
     const val TOO_SLOW = "%s took too long and was cancelled"
     const val SHOW_FRAME_TIMES = "Show frame times"

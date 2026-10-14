@@ -10,6 +10,8 @@ import androidx.compose.runtime.setValue
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.core.LengthUnit
 import com.brushwork.paint.core.Vec2
+import com.brushwork.paint.diagnostics.CrashLog
+import com.brushwork.paint.engine.RenderScaled
 import com.brushwork.paint.engine.ViewTransform
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.SelectionMode
@@ -23,11 +25,11 @@ import com.brushwork.paint.tools.ToolPoint
 import com.brushwork.paint.tools.select.LassoCommit
 import com.brushwork.paint.tools.select.MagneticSettings
 import com.brushwork.paint.tools.select.PersistedOption
-import com.brushwork.paint.tools.select.PixelSnapshot
 import com.brushwork.paint.tools.select.SampleSource
 import com.brushwork.paint.tools.select.SelectionOverlay
 import com.brushwork.paint.ui.common.MagneticLabels18
 import com.brushwork.paint.ui.common.PillLabels
+import com.brushwork.paint.ui.common.StabilityLabels19
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -59,6 +61,13 @@ import kotlin.math.hypot
  * names when the tool activates and again when they change (the source, the active layer, a layer
  * edit). Segments are traced on the same worker, newest outline first; until a segment is traced
  * (and before the map is ready) it is drawn straight and dashed.
+ *
+ * v1.9 (A7a step 6, R9): the pixels are rendered on the worker at the map's size
+ * ([RenderScaled], at most 2048 px, on the paper), never flattened at full size on the main
+ * thread. Every job is guarded: a failure of the edge map, a trace or the closing is kept as a
+ * report ([CrashLog]) and said ([StabilityLabels19.ERROR_TOAST]; out of memory:
+ * [MagneticLabels18.OUT_OF_MEMORY]); the tool goes back to straight segments (the touch ends, the
+ * map goes and is not built again for the same pixels) and the outline still closes. Never a crash.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class MagneticLassoTool(controller: EditorController) : Tool(controller), PillPositionTool, DeletingTool {
@@ -104,8 +113,14 @@ class MagneticLassoTool(controller: EditorController) : Tool(controller), PillPo
     private var wire = LiveWire()
     private var mapKey: MapKey? = null
     private var failedKey: MapKey? = null
-    /** Copies the pixels the edge map is built from ([PixelSnapshot.take]); a test makes it run out of memory. */
-    internal var takeSnapshot: (SampleSource, Bitmap) -> Bitmap = { source, layerBitmap -> PixelSnapshot.take(controller, source, layerBitmap) }
+    /**
+     * Renders the pixels the edge map is built from at the map's size, on [worker] (v1.9:
+     * [RenderScaled], on the paper as the canvas shows it); a test makes it run out of memory or fail.
+     */
+    internal var renderSource: (RenderScaled.Source) -> Bitmap = { RenderScaled.render(it, EdgeMap.MAX_SIDE, withPaper = true) }
+
+    /** Runs on [worker] before each segment is traced (a test makes a trace fail). */
+    internal var beforeTrace: () -> Unit = {}
     private var mapJob: Job? = null
     private var traceJob: Job? = null
 
@@ -210,50 +225,97 @@ class MagneticLassoTool(controller: EditorController) : Tool(controller), PillPo
      */
     private fun ensureEdgeMap() {
         val c = controller
-        val source = settings.source
         val key = currentKey()
         if (key == mapKey && (edgeMap != null || mapJob?.isActive == true)) return
-        // Out of memory for these pixels once: segments stay straight, no new try on every touch.
+        // Out of memory (or a failure) for these pixels once: segments stay straight, no new try on every touch.
         if (key == failedKey) return
         mapJob?.cancel()
         dropEdgeMap()
         points.forgetSegments()
         livePath = null
         mapKey = key
-        val snapshot = try {
-            takeSnapshot(source, c.activeLayer.bitmap)
-        } catch (e: OutOfMemoryError) {
-            mapFailed(key)
-            return
-        }
         val docW = c.doc.width
+        // v1.9 (A7a): only the source is taken here (no pixel read); it is rendered on the worker.
+        var source = sourceOf(key)
         mapJob = c.scope.launch {
-            try {
-                val map = withContext(worker) { EdgeMap.build(snapshot, docW) { !isActive } }
-                if (map != null && mapKey == key) {
-                    edgeMap = map
-                    edgeMapReady = true
-                    points.forgetSegments()
-                    requestTrace()
-                    c.invalidateOverlay()
+            var tries = 0
+            while (true) {
+                try {
+                    val map = withContext(worker) {
+                        val pixels = renderSource(source)
+                        try {
+                            EdgeMap.build(pixels, docW) { !isActive }
+                        } finally {
+                            pixels.recycle()
+                        }
+                    }
+                    if (map != null && mapKey == key) {
+                        edgeMap = map
+                        edgeMapReady = true
+                        points.forgetSegments()
+                        requestTrace()
+                        c.invalidateOverlay()
+                    }
+                    return@launch
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: OutOfMemoryError) {
+                    if (mapKey == key) mapFailed(key, e)
+                    return@launch
+                } catch (e: Throwable) {
+                    if (mapKey != key) return@launch
+                    // A layer recycled or replaced while it was read: once more, from the pixels as they are now.
+                    if (e is RuntimeException && ++tries == 1 && currentKey() == key) {
+                        source = sourceOf(key)
+                        continue
+                    }
+                    mapFailed(key, e)
+                    return@launch
                 }
-            } catch (e: OutOfMemoryError) {
-                if (mapKey == key) mapFailed(key)
-            } finally {
-                snapshot.recycle()
             }
         }
     }
 
+    /** What [key] names, to render off the main thread: the layer's pixels or the canvas. Main thread. */
+    private fun sourceOf(key: MapKey): RenderScaled.Source {
+        val bitmap = key.bitmap
+        return if (key.source == SampleSource.LAYER && bitmap != null) RenderScaled.Source.layer(bitmap) else RenderScaled.Source.canvas(controller.doc)
+    }
+
     /**
-     * No memory for the edge map of [key]'s pixels: said once ([MagneticLabels18.OUT_OF_MEMORY]),
-     * and segments stay straight (no new try on every touch; the next activation or other pixels
-     * try again).
+     * No edge map of [key]'s pixels ([e]: no memory, or a failure kept as a report): said once
+     * ([MagneticLabels18.OUT_OF_MEMORY], else [StabilityLabels19.ERROR_TOAST]), and segments
+     * stay straight (no new try on every touch; the next activation or other pixels try again).
      */
-    private fun mapFailed(key: MapKey) {
+    private fun mapFailed(key: MapKey, e: Throwable) {
         mapKey = null
         failedKey = key
-        controller.toast(MagneticLabels18.OUT_OF_MEMORY)
+        failed(e, "edge map")
+    }
+
+    /**
+     * v1.9 (A7a): a job of the tool failed with [e] at [where]: kept as a report (no personal
+     * data: the place and the error's class and stack) and said once; never thrown on.
+     */
+    private fun failed(e: Throwable, where: String) {
+        CrashLog.record(e, "magnetic lasso: $where", fatal = false)
+        controller.toast(if (e is OutOfMemoryError) MagneticLabels18.OUT_OF_MEMORY else StabilityLabels19.ERROR_TOAST.format(id.label))
+    }
+
+    /**
+     * v1.9 (A7a): a trace failed with [e]: the tool goes back to straight segments. The touch
+     * ends (its loupe goes), the edge map goes and is not built again for these pixels (the next
+     * activation or other pixels try again); the anchors and the segments traced so far stay, and
+     * the outline still closes.
+     */
+    private fun traceFailed(e: Throwable) {
+        failed(e, "trace")
+        mapJob?.cancel()
+        failedKey = mapKey ?: currentKey()
+        mapKey = null
+        dropEdgeMap()
+        endTouch()
+        controller.invalidateOverlay()
     }
 
     // ------------------------------------------------------------------ tracing
@@ -264,18 +326,27 @@ class MagneticLassoTool(controller: EditorController) : Tool(controller), PillPo
     private fun requestTrace() {
         if (edgeMap == null || traceJob?.isActive == true) return
         traceJob = controller.scope.launch {
-            while (true) {
-                val map = edgeMap ?: break
-                val seg = nextSegment() ?: break
-                val floor = floor
-                val path = withContext(worker) { trace(map, seg, floor) { !isActive } } ?: straight(seg)
-                if (map !== edgeMap || floor != this@MagneticLassoTool.floor) continue
-                if (seg.index == LIVE) {
-                    if (liveEnds()?.let { same(it, seg) } == true) livePath = path
-                } else if (!points.setSegment(seg.index, seg.ax, seg.ay, seg.bx, seg.by, path)) {
-                    continue
+            try {
+                while (true) {
+                    val map = edgeMap ?: break
+                    val seg = nextSegment() ?: break
+                    val floor = floor
+                    val path = withContext(worker) {
+                        beforeTrace()
+                        trace(map, seg, floor) { !isActive }
+                    } ?: straight(seg)
+                    if (map !== edgeMap || floor != this@MagneticLassoTool.floor) continue
+                    if (seg.index == LIVE) {
+                        if (liveEnds()?.let { same(it, seg) } == true) livePath = path
+                    } else if (!points.setSegment(seg.index, seg.ax, seg.ay, seg.bx, seg.by, path)) {
+                        continue
+                    }
+                    controller.invalidateOverlay()
                 }
-                controller.invalidateOverlay()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                traceFailed(e)
             }
         }
     }
@@ -521,22 +592,37 @@ class MagneticLassoTool(controller: EditorController) : Tool(controller), PillPo
                     val n = xy.size / 2
                     fun s(i: Int, j: Int) = Seg(i, xy[2 * i], xy[2 * i + 1], xy[2 * j], xy[2 * j + 1])
                     for (i in segs.indices) {
-                        if (segs[i] == null) segs[i] = map?.let { trace(it, s(i, i + 1), floor) { !isActive } } ?: straight(s(i, i + 1))
+                        if (segs[i] == null) segs[i] = map?.let { beforeTrace(); trace(it, s(i, i + 1), floor) { !isActive } } ?: straight(s(i, i + 1))
                     }
-                    val closing = map?.let { trace(it, s(n - 1, 0), floor) { !isActive } } ?: straight(s(n - 1, 0))
+                    val closing = map?.let { beforeTrace(); trace(it, s(n - 1, 0), floor) { !isActive } } ?: straight(s(n - 1, 0))
                     outline(xy, segs, closing)
                 }
             } catch (e: CancellationException) {
                 busy = false
                 committing = null
                 throw e
+            } catch (e: Throwable) {
+                // v1.9 (A7a): the outline as it was drawn (traced where it was, straight elsewhere) is still selected.
+                failed(e, "close")
+                outline(xy, segs, null)
             }
             committing = path
-            LassoCommit.apply(controller, path, mode, antiAlias, ToolId.MAGNETIC_LASSO.label, onFinished = {
+            try {
+                LassoCommit.apply(controller, path, mode, antiAlias, ToolId.MAGNETIC_LASSO.label, onFinished = {
+                    busy = false
+                    committing = null
+                    controller.invalidateOverlay()
+                })
+            } catch (e: CancellationException) {
                 busy = false
                 committing = null
+                throw e
+            } catch (e: Throwable) {
+                busy = false
+                committing = null
+                failed(e, "select")
                 controller.invalidateOverlay()
-            })
+            }
         }
     }
 

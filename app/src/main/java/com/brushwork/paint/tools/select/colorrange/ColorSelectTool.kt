@@ -9,8 +9,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.core.Vec2
+import com.brushwork.paint.diagnostics.CrashLog
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.CompositeTarget
+import com.brushwork.paint.engine.RenderScaled
 import com.brushwork.paint.engine.ViewTransform
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.SelectionMode
@@ -26,6 +28,8 @@ import com.brushwork.paint.tools.select.SelectionJobs
 import com.brushwork.paint.tools.select.SelectionMasks
 import com.brushwork.paint.tools.select.magnetic.Loupe
 import com.brushwork.paint.ui.common.ColorSelectLabels18
+import com.brushwork.paint.ui.common.StabilityLabels19
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.isActive
@@ -51,6 +55,12 @@ import kotlin.math.floor
  *   resolution, combined by [mode]; the samples stay, to refine and select again.
  *
  * Leaving the tool selects nothing: the samples stay for the next visit, their steps end.
+ *
+ * v1.9 (A7a step 6, R9): the proxy's pixels are rendered off the main thread at the proxy's size
+ * ([RenderScaled], on the paper), never in a draw: a draw that finds the pixels changed keeps
+ * drawing the last preview and asks for a new proxy, built after it. The proxy, the preview and
+ * the commit are guarded: a failure is kept as a report ([CrashLog]) and said
+ * ([StabilityLabels19.ERROR_TOAST], out of memory [StabilityLabels19.NO_MEMORY_FOR]); never a crash.
  */
 class ColorSelectTool(controller: EditorController) : Tool(controller) {
     override val id = ToolId.COLOR_SELECT
@@ -84,8 +94,17 @@ class ColorSelectTool(controller: EditorController) : Tool(controller) {
     internal var proxy: ColorProxy? = null
         private set
 
-    /** True while no proxy build, preview or commit is running (tests wait for it). */
-    internal val idle: Boolean get() = proxyJob?.isActive != true && previewJob?.isActive != true && !busy
+    /** True while no proxy build (or one asked for by a draw), preview or commit is running (tests wait for it). */
+    internal val idle: Boolean get() = proxyJob?.isActive != true && proxyRequest?.isActive != true && previewJob?.isActive != true && !busy
+
+    /**
+     * Renders the Refer pixels at the proxy's size ([ColorMasks.proxySize]), off the main thread
+     * (v1.9: [RenderScaled], on the paper as the canvas shows it); a test watches or fails it.
+     */
+    internal var renderSource: (RenderScaled.Source) -> Bitmap = { s ->
+        val (w, h) = ColorMasks.proxySize(s.width, s.height)
+        RenderScaled.renderAt(s, w, h, withPaper = true)
+    }
 
     override val hasPendingWork: Boolean get() = samples.undoCount > 0
     override val canUndoStep: Boolean get() = samples.undoCount > 0
@@ -93,6 +112,8 @@ class ColorSelectTool(controller: EditorController) : Tool(controller) {
 
     private var proxyKey: ProxyKey? = null
     private var proxyJob: Job? = null
+    /** v1.9 (A7a): a new proxy asked for by a draw ([drawOverlay]), built after it. */
+    private var proxyRequest: Job? = null
     private var previewJob: Job? = null
     private var previewWanted = false
     private var previewVersion = 0
@@ -194,6 +215,10 @@ class ColorSelectTool(controller: EditorController) : Tool(controller) {
         } catch (e: OutOfMemoryError) {
             c.toast("Not enough memory for \"${ToolId.COLOR_SELECT.label}\"")
             return
+        } catch (e: Throwable) {
+            // v1.9 (A7a): a layer that went away meanwhile, or worse: kept and said, never a crash.
+            failed(e, "select")
+            return
         }
         // Confirmed: the samples' steps end only now (a selection that never starts keeps them).
         samples.resetHistory()
@@ -219,12 +244,14 @@ class ColorSelectTool(controller: EditorController) : Tool(controller) {
         endTouch()
         // Nothing is selected on the way out; the samples stay, their steps end with the tool.
         samples.resetHistory()
+        proxyRequest?.cancel()
         proxyJob?.cancel()
         previewJob?.cancel()
         dropProxy()
     }
 
     override fun onDispose() {
+        proxyRequest?.cancel()
         proxyJob?.cancel()
         previewJob?.cancel()
         dropProxy()
@@ -263,35 +290,70 @@ class ColorSelectTool(controller: EditorController) : Tool(controller) {
         proxy = null
         proxyReady = false
         proxyKey = key
-        val bitmap = try {
-            proxyBitmap(key)
-        } catch (e: OutOfMemoryError) {
-            proxyKey = null
-            return
-        }
+        // v1.9 (A7a): only the source is taken here (no pixel read); it is rendered off the main thread.
+        var source = sourceOf(key)
         proxyJob = c.scope.launch {
-            try {
-                val px = withContext(Dispatchers.Default) { ColorMasks.proxy(bitmap) { !isActive } }
-                if (px != null && proxyKey == key) {
-                    proxy = px
-                    proxyReady = true
-                    requestPreview()
+            var tries = 0
+            while (true) {
+                try {
+                    val px = withContext(Dispatchers.Default) {
+                        val bitmap = renderSource(source)
+                        try {
+                            ColorMasks.proxy(bitmap) { !isActive }
+                        } finally {
+                            bitmap.recycle()
+                        }
+                    }
+                    if (px != null && proxyKey == key) {
+                        proxy = px
+                        proxyReady = true
+                        requestPreview()
+                    }
+                    return@launch
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: OutOfMemoryError) {
+                    // No preview (as in v1.8: nothing said); the strip's check still selects at full size.
+                    if (proxyKey == key) proxyKey = null
+                    CrashLog.record(e, "color select: proxy", fatal = false)
+                    return@launch
+                } catch (e: Throwable) {
+                    if (proxyKey != key) return@launch
+                    // A layer recycled or replaced while it was read: once more, from the pixels as they are now.
+                    if (e is RuntimeException && ++tries == 1 && currentKey() == key) {
+                        source = sourceOf(key)
+                        continue
+                    }
+                    proxyKey = null
+                    failed(e, "proxy")
+                    return@launch
                 }
-            } catch (e: OutOfMemoryError) {
-                proxyKey = null
-            } finally {
-                bitmap.recycle()
             }
         }
     }
 
-    /** The Refer pixels at the proxy's size (main thread; the caller recycles). */
-    private fun proxyBitmap(key: ProxyKey): Bitmap {
-        val c = controller
-        val layerBitmap = key.bitmap ?: return c.compositor.renderThumbnail(ColorMasks.PROXY_MAX)
-        val (pw, ph) = ColorMasks.proxySize(layerBitmap.width, layerBitmap.height)
-        return if (pw == layerBitmap.width && ph == layerBitmap.height) layerBitmap.copy(Bitmap.Config.ARGB_8888, false)
-        else Bitmap.createScaledBitmap(layerBitmap, pw, ph, true)
+    /** What [key] names, to render off the main thread: the layer's pixels or the canvas. Main thread. */
+    private fun sourceOf(key: ProxyKey): RenderScaled.Source {
+        val bitmap = key.bitmap
+        return if (bitmap != null) RenderScaled.Source.layer(bitmap) else RenderScaled.Source.canvas(controller.doc)
+    }
+
+    /**
+     * v1.9 (A7a): a draw found the pixels changed under the tool (an undo, a redo): a new proxy,
+     * built after the draw (never in it); the last preview is drawn until the new one is ready.
+     */
+    private fun requestProxy() {
+        proxyRequest = controller.scope.launch(Dispatchers.Main) { ensureProxy() }
+    }
+
+    /**
+     * v1.9 (A7a): a job of the tool failed with [e] at [where]: kept as a report (no personal
+     * data: the place and the error's class and stack) and said; never thrown on.
+     */
+    private fun failed(e: Throwable, where: String) {
+        CrashLog.record(e, "color select: $where", fatal = false)
+        val label = ToolId.COLOR_SELECT.label
+        controller.toast(if (e is OutOfMemoryError) String.format(StabilityLabels19.NO_MEMORY_FOR, label) else StabilityLabels19.ERROR_TOAST.format(label))
     }
 
     /** Computes the preview of what counts now; a change while one runs is taken up when it ends. */
@@ -300,19 +362,27 @@ class ColorSelectTool(controller: EditorController) : Tool(controller) {
         if (proxy == null || previewJob?.isActive == true) return
         val c = controller
         previewJob = c.scope.launch {
-            while (previewWanted) {
+            try {
+                while (previewWanted) {
+                    previewWanted = false
+                    val px = proxy ?: break
+                    val p = params()
+                    val made = withContext(Dispatchers.Default) {
+                        val mask = ColorMasks.previewMask(px, p) { !isActive } ?: return@withContext null
+                        mask to BitmapUtils.bytesToAlpha8(mask, px.width, px.height)
+                    } ?: continue
+                    if (proxy !== px) { made.second.recycle(); continue }
+                    val old = preview
+                    preview = ColorPreview(++previewVersion, made.first, px.width, px.height, made.second)
+                    old?.bitmap?.recycle()
+                    c.invalidateOverlay()
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                // v1.9 (A7a): the last preview stays; the next change tries again.
                 previewWanted = false
-                val px = proxy ?: break
-                val p = params()
-                val made = withContext(Dispatchers.Default) {
-                    val mask = ColorMasks.previewMask(px, p) { !isActive } ?: return@withContext null
-                    mask to BitmapUtils.bytesToAlpha8(mask, px.width, px.height)
-                } ?: continue
-                if (proxy !== px) { made.second.recycle(); continue }
-                val old = preview
-                preview = ColorPreview(++previewVersion, made.first, px.width, px.height, made.second)
-                old?.bitmap?.recycle()
-                c.invalidateOverlay()
+                failed(e, "preview")
             }
         }
     }
@@ -397,8 +467,9 @@ class ColorSelectTool(controller: EditorController) : Tool(controller) {
     private val mapped = FloatArray(2)
 
     override fun drawOverlay(canvas: Canvas, t: ViewTransform) {
-        // Pixels changed under the tool (an undo, a redo): a new proxy.
-        if (!busy && proxyKey != null && proxyKey != currentKey()) ensureProxy()
+        // Pixels changed under the tool (an undo, a redo): a new proxy, asked for here and built
+        // after this draw (v1.9, A7a: never in it); the last preview is drawn meanwhile.
+        if (!busy && proxyRequest?.isActive != true && proxyKey != null && proxyKey != currentKey()) requestProxy()
         val doc = controller.doc
         preview?.let { pv ->
             if (!pv.bitmap.isRecycled) {
