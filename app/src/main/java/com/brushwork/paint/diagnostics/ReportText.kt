@@ -1,5 +1,6 @@
 package com.brushwork.paint.diagnostics
 
+import com.brushwork.paint.ui.common.StabilityLabels19
 import java.text.SimpleDateFormat
 import java.util.Collections
 import java.util.Date
@@ -38,7 +39,8 @@ import java.util.TimeZone
  * links, no e-mail addresses; only class names, line numbers, sizes, counts and ids of the app.
  */
 internal object ReportText {
-    const val TITLE = "Brushwork crash report"
+    /** The report's first line ([StabilityLabels19.REPORT_TITLE]). */
+    const val TITLE = StabilityLabels19.REPORT_TITLE
 
     /** The line the cut section ends with: "[cut: N more lines]". */
     const val CUT = "[cut: %d more lines]"
@@ -50,23 +52,14 @@ internal object ReportText {
     internal const val MAX_FRAMES = 120
     private const val MAX_THROWABLES = 10
 
-    // Stand in for StabilityLabels19 entries (lead request): the report kinds as the Diagnostics rows show them.
-    private const val KIND_CRASH = "Crash"
-    private const val KIND_HANDLED = "Handled error"
-    private const val KIND_OUT_OF_MEMORY = "Out of memory"
-    private const val KIND_FREEZE = "Freeze"
-    private const val KIND_NATIVE = "Native crash"
-    private const val KIND_ANR = "Not responding"
-    private const val KIND_LOW_MEMORY_KILL = "Closed by Android for memory"
-
-    /** How the Diagnostics list names a report of [kind] ([fatal]: the app stopped). */
+    /** How the Diagnostics list names a report of [kind] ([fatal]: the app stopped); the texts are [StabilityLabels19]'s. */
     fun kindTitle(kind: CrashReport.Kind, fatal: Boolean = true): String = when (kind) {
-        CrashReport.Kind.CRASH -> if (fatal) KIND_CRASH else KIND_HANDLED
-        CrashReport.Kind.OUT_OF_MEMORY -> KIND_OUT_OF_MEMORY
-        CrashReport.Kind.FREEZE -> KIND_FREEZE
-        CrashReport.Kind.NATIVE -> KIND_NATIVE
-        CrashReport.Kind.ANR -> KIND_ANR
-        CrashReport.Kind.LOW_MEMORY_KILL -> KIND_LOW_MEMORY_KILL
+        CrashReport.Kind.CRASH -> if (fatal) StabilityLabels19.KIND_CRASH else StabilityLabels19.KIND_HANDLED
+        CrashReport.Kind.OUT_OF_MEMORY -> StabilityLabels19.KIND_OUT_OF_MEMORY
+        CrashReport.Kind.FREEZE -> StabilityLabels19.KIND_FREEZE
+        CrashReport.Kind.NATIVE -> StabilityLabels19.KIND_NATIVE
+        CrashReport.Kind.ANR -> StabilityLabels19.KIND_ANR
+        CrashReport.Kind.LOW_MEMORY_KILL -> StabilityLabels19.KIND_LOW_MEMORY_KILL
     }
 
     /** True when [t] or one of its causes is an [OutOfMemoryError]. */

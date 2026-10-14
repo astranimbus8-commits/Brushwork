@@ -29,7 +29,7 @@ import java.util.TimeZone
 internal object ReportSharing {
     private const val TAG = "Brushwork"
 
-    /** The clip's and the share's title (stands in for a LabelsV19 entry: not shown as a control). */
+    /** The clip's and the share's title ([StabilityLabels19.REPORT_TITLE]; not shown as a control). */
     private const val CLIP_LABEL = ReportText.TITLE
 
     /** Shared as one text up to this many bytes (an intent's extras stay well under the 1 MB binder limit). */
