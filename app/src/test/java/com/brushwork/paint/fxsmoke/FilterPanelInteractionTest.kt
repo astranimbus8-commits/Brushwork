@@ -172,7 +172,7 @@ class FilterPanelInteractionTest {
         assertTrue("dragging moves the point down: $moved", moved[1].y < curve[1].y - 0.2f)
         Fx.awaitPreview(s, "curve edited")
         assertNotNull(c.renderOverride)
-        visible { byText("Reset") }.tap() // the curve editor's own reset
+        visible { byDescription("Reset Curve") }.tap() // v1.9 (R8): the curve row's reset icon (one step)
         assertEquals("curve reset", 2, s.values.curve("curve").size)
         assertEquals("the channel is kept by the curve reset", 1, s.values.choice("channel"))
         byDescription("Reset to defaults").tap()
