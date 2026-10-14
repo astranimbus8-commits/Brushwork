@@ -36,6 +36,8 @@ class DisplayTiles(val docWidth: Int, val docHeight: Int, val tileSize: Int = 51
     /** v1.9 A6 (P2): the canvas and composite target of each tile's current bitmap. */
     private val canvases = arrayOfNulls<Canvas>(cols * rows)
     private val targets = arrayOfNulls<CompositeTarget>(cols * rows)
+    /** v1.9 A6: the allocation of each tile's current bitmap (their sum is [heldBytes]). */
+    private val tileBytes = IntArray(cols * rows)
     /** The part of each tile waiting to be rendered; meaningful only where [isDirtyAt] is set. */
     private val dirty = Array(cols * rows) { Rect() }
     private val isDirtyAt = BooleanArray(cols * rows)
@@ -124,6 +126,8 @@ class DisplayTiles(val docWidth: Int, val docHeight: Int, val tileSize: Int = 51
             bmp = Bitmap.createBitmap(tr.width(), tr.height(), Bitmap.Config.ARGB_8888)
             bmp.setHasMipMap(true)
             tiles[idx] = bmp
+            heldBytes += bmp.allocationByteCount - tileBytes[idx]
+            tileBytes[idx] = bmp.allocationByteCount
             c = Canvas(bmp)
             canvases[idx] = c
             target = CompositeTarget.displayTile(bmp, tr.left, tr.top)
@@ -231,7 +235,28 @@ class DisplayTiles(val docWidth: Int, val docHeight: Int, val tileSize: Int = 51
         canvas.drawBitmap(bmp, tr.left.toFloat(), tr.top.toFloat(), drawPaint)
     }
 
+    /**
+     * v1.9 A6 (design 2.4.3): bytes the tile bitmaps hold now (the "display tiles" entry of the
+     * MemoryGovernor; read from any thread).
+     */
+    @Volatile var heldBytes: Long = 0L
+        private set
+
+    /**
+     * v1.9 A6: frees every tile bitmap under memory pressure and marks the whole document for
+     * rendering, so the next [update] renders what is shown again, with the same pixels. Returns
+     * the bytes freed. Main thread.
+     */
+    fun freeBitmaps(): Long {
+        val freed = heldBytes
+        release()
+        if (freed > 0L) invalidate(null)
+        return freed
+    }
+
     fun release() {
         for (i in tiles.indices) { tiles[i]?.recycle(); tiles[i] = null; canvases[i] = null; targets[i] = null }
+        tileBytes.fill(0)
+        heldBytes = 0L
     }
 }

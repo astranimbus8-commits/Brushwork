@@ -15,6 +15,8 @@ import com.brushwork.paint.engine.AdjustmentStage
 import com.brushwork.paint.engine.CompositeTarget
 import com.brushwork.paint.engine.DisplayTiles
 import com.brushwork.paint.engine.FolderComposite
+import com.brushwork.paint.engine.MemoryGovernor
+import com.brushwork.paint.engine.MemoryPressure
 import com.brushwork.paint.model.Layer
 import kotlin.math.hypot
 import kotlin.math.min
@@ -591,12 +593,40 @@ class LiveAdjust(private val c: EditorController) {
         override fun onLowMemory() = onTrimMemory(ComponentCallbacks2.TRIM_MEMORY_COMPLETE)
     }
 
+    /**
+     * v1.9 A6 (design 2.4.3): the proxies' entry in the [MemoryGovernor] registry (priority 10)
+     * while they exist, beside the session's own ComponentCallbacks2 (v1.6): under the policy's
+     * pressure they are freed as [trimFor] says.
+     */
+    private var governed: MemoryGovernor.Registration? = null
+
+    /**
+     * The governor's trim (main thread): above NORMAL, proxies kept after a session are freed; a
+     * running session ends at LOW or worse (the next frame renders exactly). Returns the bytes
+     * freed.
+     */
+    private fun trimFor(pressure: MemoryPressure): Long {
+        if (pressure == MemoryPressure.NORMAL) return 0L
+        val held = proxyBytes
+        when {
+            session == null -> freeBuffers()
+            pressure >= MemoryPressure.LOW -> abort(null)
+            else -> return 0L
+        }
+        return held
+    }
+
     private fun registerTrim() {
+        if (governed == null) {
+            governed = WeakRegistration.register(this, "live proxies", PROXY_PRIORITY, { it.proxyBytes }, { l, p -> l.trimFor(p) })
+        }
         if (trimRegistered) return
         runCatching { c.appContext.registerComponentCallbacks(trim) }.onSuccess { trimRegistered = true }
     }
 
     private fun unregisterTrim() {
+        governed?.close()
+        governed = null
         if (!trimRegistered) return
         trimRegistered = false
         runCatching { c.appContext.unregisterComponentCallbacks(trim) }
@@ -605,6 +635,8 @@ class LiveAdjust(private val c: EditorController) {
     companion object {
         /** §3.1 C2: about 8 B per proxy pixel (frame plus below-cache), at most 32 MB per session. */
         const val MEMORY_CAP_BYTES: Long = 32L shl 20
+        /** v1.9 A6: the proxies' MemoryGovernor priority (0 display caches, 10 proxies, 20 below-caches). */
+        const val PROXY_PRIORITY = 10
         const val SLOW_FRAME_NANOS: Long = 33_000_000L
         const val IDLE_NANOS: Long = 150_000_000L
         const val REFINE_BUDGET_NANOS: Long = 8_000_000L

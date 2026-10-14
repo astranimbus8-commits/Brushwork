@@ -8,14 +8,17 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import com.brushwork.paint.AppSettings
 import com.brushwork.paint.EditorController
+import com.brushwork.paint.ui.common.StabilityLabels19
 import com.brushwork.paint.ui.common.ToggleRow
 
 /** Label of the "Fast adjustment preview" switch (v1.6 §3.1a; the same in the Masks tool's sheet and in Settings). */
 const val FAST_ADJUST_PREVIEW_LABEL = "Fast adjustment preview"
 
-/** What the switch does, under its label. */
-const val FAST_ADJUST_PREVIEW_DESCRIPTION =
-    "Adjustment sliders and mask handles show a quick preview while you drag and sharpen it as soon as you stop. Turn off to always draw the exact image."
+/**
+ * What the switch does, under its label (the Masks tool's sheet and Settings). v1.9 A6: the
+ * shorter note of R13, which also names the masks and effects the preview now covers.
+ */
+const val FAST_ADJUST_PREVIEW_DESCRIPTION = StabilityLabels19.FAST_ADJUST_NOTE
 
 /**
  * The "Fast adjustment preview" switch of the Masks tool's sheet (v1.6 §3.1a): live adjustment

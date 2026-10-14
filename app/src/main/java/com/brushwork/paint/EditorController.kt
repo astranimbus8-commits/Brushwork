@@ -224,6 +224,24 @@ class EditorController(
         tiles.invalidate(rect)
         onInvalidate?.invoke()
     }
+
+    /**
+     * v1.9 A6 (design 2.4.3): the display tiles in the [MemoryGovernor] registry at priority 0,
+     * the first to go: what they hold now, and under any pressure above NORMAL their bitmaps are
+     * freed and the canvas draws itself again from the document. Held weakly: an editor that is
+     * gone reads as 0 bytes. The policy calls it on the main thread (onTrimMemory).
+     */
+    @Suppress("unused")
+    private val displayMemory: MemoryGovernor.Registration = com.brushwork.paint.engine.live.WeakRegistration.register(
+        this, "display tiles", 0, { it.tiles.heldBytes }, { c, pressure -> c.trimDisplay(pressure) },
+    )
+
+    private fun trimDisplay(pressure: com.brushwork.paint.engine.MemoryPressure): Long {
+        if (pressure == com.brushwork.paint.engine.MemoryPressure.NORMAL) return 0L
+        val freed = tiles.freeBitmaps()
+        if (freed > 0L) onInvalidate?.invoke()
+        return freed
+    }
     // endregion
 
     /** Redraw overlays only (handles, guides, marching ants). */
