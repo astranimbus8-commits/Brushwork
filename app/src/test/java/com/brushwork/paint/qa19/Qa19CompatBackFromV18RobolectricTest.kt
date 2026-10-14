@@ -13,6 +13,9 @@ import com.brushwork.paint.compat18.TextCodecV18
 import com.brushwork.paint.compat18.TextTransformsV18
 import com.brushwork.paint.compat18.ToolSettingsV18
 import com.brushwork.paint.compat18.VectorCodecV18
+import com.brushwork.paint.diagnostics.CrashLog
+import com.brushwork.paint.diagnostics.CrashReport
+import com.brushwork.paint.diagnostics.ReportText
 import com.brushwork.paint.model.Document
 import com.brushwork.paint.storage.ProjectRepository
 import com.brushwork.paint.tools.vector.CurveSettings
@@ -288,10 +291,36 @@ class Qa19CompatBackFromV18RobolectricTest {
         assertEquals("v1.8 reads its own shape values and writes no newLayerEachTime", ToolSettingsV18.write(ShapeSettingsV18()), ToolSettingsV18.write(ToolSettingsV18.shape(shape)))
     }
 
-    @Ignore("5.2 row 15 (crash reports), app files outside the projects: owner A7a, un-ignored by the lead")
+    /**
+     * 5.2 row 15 (crash reports), app files outside the projects: owner A7a, un-ignored by the lead
+     * at A7a's merge; fixture by [writeCrashReports]. v1.8 lists and opens only `files/projects/`,
+     * so it never sees a report, and the "diagnostics" preferences are a file of their own that
+     * v1.8 never reads.
+     */
     @Test
     fun row15CrashReports() {
-        assertTrue("written outside any project", text("crash/files.txt").lines().none { it.startsWith("projects/") })
+        val files = text("crash/files.txt").lines().filter { it.isNotBlank() }
+        assertTrue("written outside any project: $files", files.none { it.startsWith("projects/") || it.startsWith("files/projects/") })
+        assertEquals("one report and the diagnostics preferences: $files", 2, files.size)
+        val report = files.singleOrNull { Regex("""files/${CrashLog.DIR}/\d{13}-crash\.txt""").matches(it) }
+        assertNotNull("the report is files/${CrashLog.DIR}/<13-digit millis>-crash.txt: $files", report)
+        assertEquals("the diagnostics preferences, not v1.8's", "shared_prefs/${CrashLog.PREFS}.xml", files.single { it != report })
+        val lines = text("crash/$report").lines()
+        assertEquals("a report starts with its title", ReportText.TITLE, lines.first())
+        assertTrue("a fatal crash", lines.contains("Kind: CRASH") && lines.contains("Fatal: yes"))
+        assertTrue("its place", lines.contains("Where: compat row 15"))
+        assertTrue("its stack", lines.contains("java.lang.RuntimeException: compat row 15"))
+        assertTrue("the gallery's card was dismissed for it", text("crash/shared_prefs/${CrashLog.PREFS}.xml").contains("name=\"${CrashLog.SEEN_AT}\""))
+        // v1.9 reads its own report back, from the folder only (no index, no preference).
+        val dir = File(app.filesDir, CrashLog.DIR)
+        CrashLog.deleteAll(app)
+        dir.mkdirs()
+        File(dir, report!!.substringAfterLast('/')).writeBytes(resource("crash/$report"))
+        val back = CrashLog.reports(app).single()
+        assertEquals(report.substringAfterLast('/').removeSuffix(".txt"), back.id)
+        assertEquals(CrashReport.Kind.CRASH, back.kind)
+        assertEquals("${ReportText.kindTitle(CrashReport.Kind.CRASH)}: RuntimeException", back.summary)
+        CrashLog.deleteAll(app)
     }
 
     @Ignore("5.2 row 15 (backup-state.json), app files outside the projects: owner A8")
@@ -315,8 +344,33 @@ class Qa19CompatBackFromV18RobolectricTest {
      * Each area adds its rows' writers.
      */
     private val generators: Map<String, (File) -> Unit> = mapOf(
+        "crash" to ::writeCrashReports,
         "prefs" to ::writePrefs,
     )
+
+    /**
+     * Row 15, crash reports (A7a's `CrashLog`, written by the lead at A7a's merge): one fatal
+     * report as the uncaught handler writes it (synchronously, `files/diagnostics/reports/`), and
+     * the gallery's card dismissed for it (the "diagnostics" preferences). `files.txt` lists every
+     * file of the app's data folder those writes added or changed, copied alongside (as [writePrefs]).
+     */
+    private fun writeCrashReports(dir: File) {
+        CrashLog.deleteAll(app)
+        CrashLog.prefs(app).edit().clear().commit()
+        CrashLog.resetRepeats()
+        val before = snapshot(app.dataDir)
+        CrashLog.record(RuntimeException("compat row 15"), "compat row 15", fatal = true)
+        val id = CrashLog.reports(app).first().id
+        CrashLog.markSeen(app, id)
+        assertTrue("diagnostics committed", app.getSharedPreferences(CrashLog.PREFS, Context.MODE_PRIVATE).edit().commit())
+        CrashLog.drain()
+        val after = snapshot(app.dataDir)
+        val changed = after.filter { (path, bytes) -> before[path]?.contentEquals(bytes) != true }.keys.sorted()
+        assertTrue("the report was written: $changed", "files/${CrashLog.DIR}/$id.txt" in changed)
+        assertTrue("the preferences were written: $changed", "shared_prefs/${CrashLog.PREFS}.xml" in changed)
+        for (path in changed) File(app.dataDir, path).copyTo(File(dir, path), overwrite = true)
+        File(dir, "files.txt").writeText(changed.joinToString("\n", postfix = "\n"))
+    }
 
     /**
      * Row 14 (lead, F1a): every v1.9 preference written by v1.9's code (AppSettings' new keys,

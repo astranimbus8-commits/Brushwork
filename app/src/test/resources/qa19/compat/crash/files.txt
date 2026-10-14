@@ -1,0 +1,2 @@
+files/diagnostics/reports/1791972797804-crash.txt
+shared_prefs/diagnostics.xml
