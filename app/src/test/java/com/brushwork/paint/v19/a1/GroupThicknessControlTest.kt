@@ -40,10 +40,12 @@ import java.time.Duration
  * v1.9 R1 and R2 (design 1 R1 (e)): several selected points use the one point's row
  * ([com.brushwork.paint.ui.vector.GroupThicknessControl]) in the editor at 392 dp, driven through
  * its controls: a thumb drag is relative (a taper keeps its ratios, "×1.25" while dragging, one
- * step), a point at 0 % rises by the offset and points all at 0 % take the thumb, a tap or a
- * double tap on the track changes nothing, ‹ › move each point on the configured Percent grid
- * (0 % to one step), typed "*2", "/2", "+10", "-10" and a number; and the one-point report of R2
- * (a point at 0 % goes up again by its slider and by ›).
+ * step, one undo and one redo), a point at 0 % rises by the offset and points all at 0 % take the
+ * thumb, a tap or a double tap on the track changes nothing, ‹ › move each point on the
+ * configured Percent grid (0 % to one step), typed "*2", "/2", "+10", "-10" and a number; and the
+ * one-point report of R2 on Polyline, Curve and Path: a point at 0 % goes up again when its thumb
+ * is dragged, also from a finger that lands just short of it, in the › button's box (it ticked ›
+ * once and dragged nothing before the review; the group form likewise), and by ›.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = Qa19Ui.Q392, instrumentedPackages = ["com.brushwork.paint.v19.a1.groupthicknesssandbox"])
@@ -68,6 +70,8 @@ class GroupThicknessControlTest {
             assertEquals("one drag, one step", before + 1, steps(t))
             t.undoStep()
             assertArrayEquals(floatArrayOf(50f, 100f, 150f), percents(t), 1e-3f)
+            assertTrue(t.redoStep())
+            assertArrayEquals("one redo", floatArrayOf(62.5f, 125f, 187.5f), percents(t), 1e-3f)
         }
 
         h.section("from 0 %: a point rises by the offset; points all at 0 take the thumb") {
@@ -82,6 +86,15 @@ class GroupThicknessControlTest {
             dragThumb(s, from = 0f, by = 50f)
             assertArrayEquals(floatArrayOf(50f, 50f), percents(t), 1e-3f)
             assertTrue(Qa19Ui.has("$POINT_THICKNESS_LABEL 50 %", exact = true))
+            // R2: all at 0 % again, a drag that starts just beside the thumb (in ›'s box, past
+            // its icon) takes the thumb: the points rise together, not by ›'s one step.
+            group(t, 0f, 0f)
+            val before = steps(t)
+            val beside = layer().positionInWindow.x - BESIDE_DP * s.density
+            touch(slider(s), (0..6).map { beside + it * 6f * s.density })
+            val p = percents(t)
+            assertTrue("both rose together by the drag: ${p.toList()}", p[0] == p[1] && p[0] > 50f)
+            assertEquals("one drag, one step", before + 1, steps(t))
         }
 
         h.section("a tap and a double tap on the track change nothing") {
@@ -89,8 +102,8 @@ class GroupThicknessControlTest {
             group(t, 50f, 150f)
             Qa19Ui.openMoreRow()
             val before = steps(t)
-            val el = slider()
-            val far = layer().positionInWindow.x + layer().size.width * 0.85f
+            val el = slider(s)
+            val far =layer().positionInWindow.x + layer().size.width * 0.85f
             touch(el, listOf(far))
             assertArrayEquals(floatArrayOf(50f, 150f), percents(t), 0f)
             touch(el, listOf(far))
@@ -135,24 +148,68 @@ class GroupThicknessControlTest {
             }
         }
 
-        h.section("R2: one point at 0 % goes up again by its slider and by ›") {
-            val (_, t) = editor(h, ToolId.POLYLINE)
+        for (id in listOf(ToolId.POLYLINE, ToolId.CURVE, ToolId.PATH)) h.section("R2, $id: one point at 0 % goes up again: its thumb dragged, from beside it too, and ›") {
+            val (s, t) = editor(h, id)
             t.select(1)
             t.setWidth(1, 0f)
             t.endNumericEdit()
+            // (Counting the steps walks the history to its start and back, which leaves another
+            // point selected: point 1 is selected again after each count.)
+            fun count(): Int = steps(t).also {
+                t.select(1)
+                Qa19Ui.settle()
+            }
+            val before = count()
             Qa19Ui.openMoreRow()
             assertTrue(Qa19Ui.has("$POINT_THICKNESS_LABEL 0 %", exact = true))
-            val el = slider()
-            // (A press anywhere on the one-point track takes the thumb there: from the middle, rightwards.)
-            val mid = el.node.positionInWindow.x + el.node.size.width / 2f
-            touch(el, (0..10).map { mid + it * el.node.size.width * 0.02f })
-            assertTrue("the slider raised it: ${t.widthOf(1)}", t.widthOf(1) > 0.5f)
+            val el = slider(s)
+            val d = s.density
+            // The slider's layout starts SLIDER_REACH_DP inside its semantics node; at 0 % the
+            // thumb's centre is THUMB_INSET past that, flush against the › button's 40 dp box.
+            val start = el.node.positionInWindow.x + SLIDER_REACH_DP * d
+            val thumb0 = start + GroupSliderGeometry.THUMB_INSET.value * d
+            val beside = start - BESIDE_DP * d
+            // The user's report: a finger that lands just short of the thumb at 0 % (in ›'s box,
+            // past its icon). A tap there ticks nothing, and a drag from there takes the thumb.
+            touch(el, listOf(beside))
+            assertEquals("$id: a tap beside the thumb at 0 % ticks nothing", 0f, t.widthOf(1), 0f)
+            assertEquals("$id: and makes no step", before, count())
+            touch(el, (0..10).map { beside + it * 4f * d })
+            val dragged = t.widthOf(1)
+            assertTrue("$id: the drag from beside the thumb at 0 % raised it: $dragged", dragged > 0.5f)
+            assertEquals("$id: one drag, one step", before + 1, count())
+            t.undoStep()
+            assertEquals("$id: one undo, 0 % again", 0f, t.widthOf(1), 0f)
+            assertTrue(t.redoStep())
+            assertEquals("$id: one redo", dragged, t.widthOf(1), 0f)
+            // The thumb itself at 0 %, dragged right.
+            t.select(1)
+            t.setWidth(1, 0f)
+            t.endNumericEdit()
+            Qa19Ui.settle()
+            touch(el, (0..10).map { thumb0 + it * 4f * d })
+            assertTrue("$id: the thumb dragged from 0 % raised it: ${t.widthOf(1)}", t.widthOf(1) > 0.3f)
+            // With the thumb far from it (100 %), the same touch is ›'s again: one step up.
+            t.setWidth(1, 1f)
+            t.endNumericEdit()
+            Qa19Ui.settle()
+            touch(el, listOf(beside))
+            assertEquals("$id: › beside a far thumb", 1.05f, t.widthOf(1), 1e-6f)
+            // › from 0 % gives one step.
             t.setWidth(1, 0f)
             t.endNumericEdit()
             Qa19Ui.settle()
             Qa19Ui.click(ThicknessRowLabels.THICKER, exact = true)
-            assertEquals("› from 0 %", 0.05f, t.widthOf(1), 1e-6f)
+            assertEquals("$id: › from 0 %", 0.05f, t.widthOf(1), 1e-6f)
         }
+    }
+
+    private companion object {
+        /** How far the material3 slider's semantics node reaches past its layout at each end (dp). */
+        const val SLIDER_REACH_DP = 10f
+
+        /** Where the user's finger lands short of the thumb at 0 %: this far before the slider's layout (dp). */
+        const val BESIDE_DP = 4f
     }
 
     // ---- helpers
@@ -176,8 +233,10 @@ class GroupThicknessControlTest {
 
     private fun percents(t: CurveTool) = t.selectedWidths().map { it * 100f }.toFloatArray()
 
-    private fun slider(): RobolectricUi.Element = RobolectricUi.elements().last { e ->
-        e.node.config.contains(SemanticsActions.SetProgress) &&
+    /** The thickness slider of [s]'s window (an earlier section's window may still be listed). */
+    private fun slider(s: ChromeScreen): RobolectricUi.Element = RobolectricUi.elements().last { e ->
+        e.window === s.activity.window.decorView &&
+            e.node.config.contains(SemanticsActions.SetProgress) &&
             e.node.config.getOrNull(SemanticsProperties.ContentDescription)?.contains(ThicknessRowLabels.SLIDER) == true
     }
 
@@ -192,7 +251,7 @@ class GroupThicknessControlTest {
 
     /** A finger down on the thumb at [from] %, moved by [by] % of the track, [beforeUp] while it is still down, then up. */
     private fun dragThumb(s: ChromeScreen, from: Float, by: Float, beforeUp: () -> Unit = {}) {
-        val el = slider()
+        val el = slider(s)
         val x0 = thumbX(s, from)
         val track = layer().size.width - 2f * GroupSliderGeometry.THUMB_INSET.value * s.density
         val dx = by / 300f * track

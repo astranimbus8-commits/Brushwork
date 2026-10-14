@@ -82,6 +82,7 @@ class Qa19PolylineBevelUiTest {
 
         // The tap on the canvas that closes the popup adds no point (the More row closed first: it covers the top).
         Qa19Ui.closeMoreRow()
+        assertTrue("$where: the popup stays with the More row closed", Qa19Ui.tagged(V19Tags.BEVEL_POPUP) != null && t.bevelPopupShown)
         val (x, y) = s.screen(200f, 30f)
         Finger.tapAt(s, (x - s.root.left) / d, (y - s.root.top) / d)
         assertFalse("$where: the canvas tap closes the popup", t.bevelPopupShown)

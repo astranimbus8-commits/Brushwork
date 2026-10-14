@@ -598,7 +598,9 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
     /**
      * v1.9 (R14): bumped once each time a tap on a line of this tool's kind switched to this tool
      * from another curve tool ([switchAndReopen]; the toast [CurveLabels19.SWITCHED_TO] names it).
-     * The bottom bar's tool slot flashes once, for [SLOT_FLASH_MS], on each change (Compose state).
+     * The bottom bar's tool slot flashes once, for [SLOT_FLASH_MS], on each change (Compose state);
+     * it reads the three curve tools' signals summed ([slotFlashes]), since the switch and the
+     * bump land in the same frame.
      */
     var slotFlash by mutableIntStateOf(0)
         private set
@@ -4193,6 +4195,19 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         const val EDIT_PATH_LABEL = "Edit path"
         /** v1.9 (R14): how long the bottom bar's tool slot flashes after a switch ([slotFlash]). */
         const val SLOT_FLASH_MS = 200L
+
+        /**
+         * v1.9 (R14): the [slotFlash] signals of the Curve, Polyline and Path tools of [tools] (the
+         * controller's), summed (Compose state). It rises by one with each switch that reopens a
+         * line in another curve tool, and never with a tool change of its own, so the bottom bar
+         * flashes its tool slot once, for [SLOT_FLASH_MS], each time it rises.
+         */
+        fun slotFlashes(tools: Map<ToolId, Tool>): Int =
+            (tools[ToolId.CURVE] as? CurveTool)?.slotFlash.orZero() +
+                (tools[ToolId.POLYLINE] as? CurveTool)?.slotFlash.orZero() +
+                (tools[ToolId.PATH] as? CurveTool)?.slotFlash.orZero()
+
+        private fun Int?.orZero(): Int = this ?: 0
         /** Undo label of ✓ of a new Path-tool path. */
         const val PATH_LABEL = "Path"
         /** Shown when ✓ of the Curve tool stores a former Path-tool path without its spline. */

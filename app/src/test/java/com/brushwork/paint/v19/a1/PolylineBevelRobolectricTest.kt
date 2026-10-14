@@ -63,11 +63,18 @@ class PolylineBevelRobolectricTest {
         assertEquals(cut, dist(t.anchors[1].pos, before[1].pos), 1e-3f)
         assertEquals(cut, dist(t.anchors[2].pos, before[1].pos), 1e-3f)
         assertTrue("new polyline points are sharp", t.anchors.all { it.sharp })
+        val bevelled = t.anchors
         // steps() walks undo and redo, which end the session: count last.
         assertEquals("one bevel, one step", stepsBefore + 1, steps(t))
         assertTrue(t.undoStep())
         assertEquals("one undo takes it back", before, t.anchors)
         assertEquals("with the selection then", listOf(1, 3), t.pointSelection.indices)
+        assertFalse(t.bevelPopupShown)
+        // One redo brings the bevel back exactly, its new points selected; the popup stays closed.
+        assertTrue(t.redoStep())
+        assertEquals("one redo", bevelled, t.anchors)
+        assertEquals(listOf(1, 2, 4, 5), t.pointSelection.indices)
+        assertNull("the session ended with the undo", t.bevelSession)
         assertFalse(t.bevelPopupShown)
     }
 

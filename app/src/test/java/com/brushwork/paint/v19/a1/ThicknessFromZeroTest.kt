@@ -9,13 +9,15 @@ import com.brushwork.paint.v19.a1.A1Tools.steps
 import com.brushwork.paint.v19.a1.A1Tools.withPoints
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 
 /**
  * v1.9 R2 (design 1 R2 (e)): point thickness never sticks at 0 %, on Polyline, Curve and Path.
- * Several points all at 0 % dragged to 50 % all read 50 %; points at 0 % and 40 % dragged from
+ * Several points all at 0 % dragged to 50 % all read 50 % (one undo and one redo restore each
+ * side exactly); points at 0 % and 40 % dragged from
  * their mean 20 % to 30 % read 10 % and 60 %; › from 0 % reads one step (5 %); one point at 0 %
  * goes up again by its slider and by ›. Tool level, through [CurveGroupEdit] (what the group
  * control runs), no composition.
@@ -50,6 +52,8 @@ class ThicknessFromZeroTest {
             assertEquals("$id: one drag, one step", before + 1, steps(t))
             t.undoStep()
             assertArrayEquals("$id: one undo, back at 0", floatArrayOf(0f, 0f, 0f), percentsOf(t), 0f)
+            assertTrue(t.redoStep())
+            assertArrayEquals("$id: one redo, 50 % again", floatArrayOf(50f, 50f, 50f), percentsOf(t), 1e-3f)
         }
     }
 

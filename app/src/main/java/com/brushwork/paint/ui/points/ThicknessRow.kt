@@ -27,7 +27,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onPlaced
+import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
@@ -69,6 +72,9 @@ import com.brushwork.paint.ui.theme.BrushworkColors
  * With a [group] (R1, several points) the slider is the same but only a drag that starts on its
  * thumb moves values, through [group]; a tap on the track does nothing. [onSlide] / [onSlideEnd]
  * then come only from TalkBack's set-progress (or a key).
+ *
+ * R2: in both forms a drag that starts just beside the slider's start edge, with the thumb near
+ * it (at 0 %), takes the thumb instead of ticking › ([thumbBesideSlider]).
  */
 @Composable
 internal fun ThicknessRow(
@@ -91,7 +97,24 @@ internal fun ThicknessRow(
     group: GroupSlider? = null,
 ) {
     val style = fittedValueStyle(text)
-    Row(modifier.width(ThicknessRowDefaults.WIDTH), verticalAlignment = Alignment.CenterVertically) {
+    val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
+    val latest by rememberUpdatedState(group)
+    // R2: the slider's slot in the row (its left and width, px) and its thumb as one point's
+    // (the newest value and callbacks), for a drag that starts beside it (thumbBesideSlider).
+    val slot = remember { floatArrayOf(Float.NaN, Float.NaN) }
+    val latestValue by rememberUpdatedState(value)
+    val latestRange by rememberUpdatedState(range)
+    val latestSlide by rememberUpdatedState(onSlide)
+    val latestSlideEnd by rememberUpdatedState(onSlideEnd)
+    val onePoint = remember { OnePointThumb({ latestValue }, { latestRange }, { latestSlide(it) }, { latestSlideEnd() }) }
+    val placed = Modifier.onPlaced { c ->
+        slot[0] = c.positionInParent().x
+        slot[1] = c.size.width.toFloat()
+    }
+    Row(
+        modifier.width(ThicknessRowDefaults.WIDTH).thumbBesideSlider(rtl, slot) { latest ?: onePoint },
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
         RepeatIconButton(Icons.AutoMirrored.Filled.KeyboardArrowLeft, ThicknessRowLabels.THINNER, onRelease = onArrowRelease) {
             onThinner()
         }
@@ -131,6 +154,7 @@ internal fun ThicknessRow(
                 modifier = Modifier
                     .weight(1f)
                     .widthIn(min = ThicknessRowDefaults.SLIDER_MIN)
+                    .then(placed)
                     .then(sliderModifier)
                     .then(sliderSemantics),
             )
@@ -138,8 +162,7 @@ internal fun ThicknessRow(
             // R1, group form: the same slider under a layer that takes every touch, so only a
             // drag that starts on the thumb moves the values (a tap on the track does nothing);
             // TalkBack's set-progress still reaches the slider's onValueChange.
-            val latest by rememberUpdatedState(group)
-            Box(Modifier.weight(1f).widthIn(min = ThicknessRowDefaults.SLIDER_MIN)) {
+            Box(Modifier.weight(1f).widthIn(min = ThicknessRowDefaults.SLIDER_MIN).then(placed)) {
                 Slider(
                     value = value.coerceIn(range.start, range.endInclusive),
                     onValueChange = onSlide,
@@ -153,7 +176,7 @@ internal fun ThicknessRow(
                     Modifier
                         .matchParentSize()
                         .testTag(ThicknessRowDefaults.GROUP_TOUCHES_TAG)
-                        .groupSliderTouches(LocalLayoutDirection.current == LayoutDirection.Rtl) { latest },
+                        .groupSliderTouches(rtl) { latest ?: onePoint },
                 )
             }
         }
@@ -273,6 +296,13 @@ internal object GroupSliderGeometry {
     /** How far from the thumb's centre a touch still takes the thumb (half a 48 dp touch target). */
     val THUMB_REACH: Dp = 24.dp
 
+    /**
+     * R2: how far beside the slider's start edge a touch still takes its thumb (when the thumb
+     * is within [THUMB_REACH]): the part of the › button's 40 dp box past its 24 dp icon, which
+     * ends flush with the slider, where the thumb at 0 % sits.
+     */
+    val EDGE_REACH: Dp = 8.dp
+
     /** The thumb centre's x (px) for [fraction] on a slider [width] px wide, with [inset] px. */
     fun thumbX(fraction: Float, width: Float, inset: Float, rtl: Boolean = false): Float {
         val f = fraction.coerceIn(0f, 1f)
@@ -310,4 +340,73 @@ internal fun Modifier.groupSliderTouches(rtl: Boolean = false, group: () -> Grou
             if (onThumb) g.end()
         }
     }
+}
+
+/**
+ * R2, the user's report ("point thickness doesnt seem to work when you are at 0% and try to move
+ * it up again"): at 0 % the thumb sits at the slider's start edge, flush against the › button's
+ * 40 dp box, so a finger that landed a few dp short of the thumb ticked › once (+5 %) and its drag
+ * moved nothing. A touch within [GroupSliderGeometry.EDGE_REACH] beside the slot's start edge
+ * ([slot]: its left and width in this row, px) takes the thumb when the thumb is within
+ * [GroupSliderGeometry.THUMB_REACH] of it: seen first (the Initial pass) and consumed, so ›
+ * stays silent, and dragged as [GroupSlider] (the group form's, or [OnePointThumb]). Any other
+ * touch passes untouched.
+ */
+internal fun Modifier.thumbBesideSlider(rtl: Boolean, slot: FloatArray, slider: () -> GroupSlider): Modifier = pointerInput(rtl) {
+    val inset = GroupSliderGeometry.THUMB_INSET.toPx()
+    val reach = GroupSliderGeometry.THUMB_REACH.toPx()
+    val edge = GroupSliderGeometry.EDGE_REACH.toPx()
+    awaitEachGesture {
+        val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+        val left = slot[0]
+        val w = slot[1]
+        if (left.isNaN() || !(w > 0f)) return@awaitEachGesture
+        val x = down.position.x
+        val beside = if (rtl) x >= left + w && x < left + w + edge else x < left && x >= left - edge
+        if (!beside) return@awaitEachGesture
+        val g = slider()
+        if (kotlin.math.abs(x - (left + GroupSliderGeometry.thumbX(g.fraction(), w, inset, rtl))) > reach) return@awaitEachGesture
+        down.consume()
+        g.begin()
+        try {
+            while (true) {
+                val e = awaitPointerEvent(PointerEventPass.Initial)
+                val ch = e.changes.firstOrNull { it.id == down.id }
+                e.changes.forEach { it.consume() }
+                if (ch == null || !ch.pressed) break
+                g.drag(GroupSliderGeometry.deltaFraction(ch.position.x - x, w, inset, rtl))
+            }
+        } finally {
+            g.end()
+        }
+    }
+}
+
+/**
+ * R2: the one-point slider's thumb as a [GroupSlider], for [thumbBesideSlider]: a drag moves it
+ * by the finger's travel from where it sat ([slide], as the slider's own drag), [slideEnd] when
+ * the finger lifts; a touch that does not move changes nothing.
+ */
+private class OnePointThumb(
+    private val value: () -> Float,
+    private val range: () -> ClosedFloatingPointRange<Float>,
+    private val slide: (Float) -> Unit,
+    private val slideEnd: () -> Unit,
+) : GroupSlider {
+    private var start = 0f
+
+    private fun span(r: ClosedFloatingPointRange<Float>): Float = (r.endInclusive - r.start).coerceAtLeast(1e-6f)
+
+    override fun fraction(): Float = range().let { r -> ((value() - r.start) / span(r)).coerceIn(0f, 1f) }
+
+    override fun begin() {
+        start = fraction()
+    }
+
+    override fun drag(deltaFraction: Float) {
+        val r = range()
+        slide(r.start + (start + deltaFraction).coerceIn(0f, 1f) * span(r))
+    }
+
+    override fun end() = slideEnd()
 }
