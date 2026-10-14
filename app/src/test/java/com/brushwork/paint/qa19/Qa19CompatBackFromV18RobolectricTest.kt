@@ -25,6 +25,7 @@ import com.brushwork.paint.compat18.ShapeSettingsV18
 import com.brushwork.paint.compat18.ShapeTypeV18
 import com.brushwork.paint.compat18.TextAlignV18
 import com.brushwork.paint.compat18.TextCodecV18
+import com.brushwork.paint.compat18.TextPathTypeV18
 import com.brushwork.paint.compat18.TextTransformsV18
 import com.brushwork.paint.compat18.ToolSettingsV18
 import com.brushwork.paint.compat18.VObjectV18
@@ -68,6 +69,9 @@ import com.brushwork.paint.tools.text.TextKerningMode
 import com.brushwork.paint.tools.text.TextListSpec
 import com.brushwork.paint.tools.text.TextListType
 import com.brushwork.paint.tools.text.TextNumbering
+import com.brushwork.paint.tools.text.TextPathNodes
+import com.brushwork.paint.tools.text.TextPathSpec
+import com.brushwork.paint.tools.text.TextPathType
 import com.brushwork.paint.tools.text.TextRenderer
 import com.brushwork.paint.tools.text.TextSpec
 import com.brushwork.paint.tools.text.TextTool
@@ -88,6 +92,8 @@ import com.brushwork.paint.vector.VAnchor
 import com.brushwork.paint.vector.VPaint
 import com.brushwork.paint.vector.VPath
 import com.brushwork.paint.vector.VShape
+import com.brushwork.paint.vector.VSpline
+import com.brushwork.paint.vector.VSplinePoint
 import com.brushwork.paint.vector.VStroke
 import com.brushwork.paint.vector.VStrokeStyle
 import com.brushwork.paint.vector.VSubpath
@@ -117,6 +123,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import java.io.File
+import kotlin.math.hypot
 
 /**
  * v1.9 (design 2.2 and 5.2, modelled on `qa18/Qa18CompatBackFromV17RobolectricTest`): what v1.8
@@ -289,11 +296,29 @@ class Qa19CompatBackFromV18RobolectricTest {
         }
     }
 
-    @Ignore("5.2 row 4, TextPathSpec.nodes (NEVER; sanitized writes the CURVE or LINE fallback): owner A3")
     @Test
     fun row04TextPathNodes() {
         v18Reads("text-path-nodes", listOf("nodes"))
         // A3: v1.8 reads the CURVE or LINE fallback (a closed guide becomes an open curve); the nodes are dropped.
+        for ((name, type) in listOf("Path nodes" to TextPathTypeV18.CURVE, "Closed" to TextPathTypeV18.CURVE, "Two points" to TextPathTypeV18.LINE)) {
+            val data = firstText("text-path-nodes", name)
+            val old = requireNotNull(TextCodecV18.decode(data)) { "v1.8 reads $name" }
+            assertEquals(name, type, old.path.type)
+            // v1.9 reads its nodes back. An open guide's fallback runs between its end nodes.
+            val nodes = requireNotNull(TextPathNodes.of(TextCodec.decode(data)!!.path)) { "v1.9 reads the nodes of $name" }
+            if (TextPathNodes.isClosed(nodes)) continue
+            assertEquals("$name: the fallback starts at the first node", nodes.points.first().x, old.path.x1, 0.05f)
+            assertEquals("$name: the fallback starts at the first node", nodes.points.first().y, old.path.y1, 0.05f)
+            assertEquals("$name: the fallback ends at the last node", nodes.points.last().x, old.path.x2, 0.05f)
+            assertEquals("$name: the fallback ends at the last node", nodes.points.last().y, old.path.y2, 0.05f)
+        }
+        // A closed guide's fallback runs once around its curve (through, not on, its nodes): it
+        // starts and ends at one point of the circle.
+        val closed = requireNotNull(TextCodecV18.decode(firstText("text-path-nodes", "Closed"))).path
+        assertTrue("the circle's nodes are closed", TextPathNodes.isClosed(TextPathNodes.of(TextCodec.decode(firstText("text-path-nodes", "Closed"))!!.path)!!))
+        assertEquals("Closed: the fallback ends where it starts", closed.x1, closed.x2, 0.05f)
+        assertEquals("Closed: the fallback ends where it starts", closed.y1, closed.y2, 0.05f)
+        assertEquals("Closed: it starts on the circle", 40f, hypot(closed.x1 - 120f, closed.y1 - 100f), 0.5f)
     }
 
     @Test
@@ -691,6 +716,7 @@ class Qa19CompatBackFromV18RobolectricTest {
         "text-justify" to ::writeTextJustify,
         "text-kerning" to ::writeTextKerning,
         "text-list" to ::writeTextList,
+        "text-path-nodes" to ::writeTextPathNodes,
         "text-several" to ::writeTextSeveral,
         "text-transform" to ::writeTextTransform,
         "text-array-lift" to ::writeTextArrayLift,
@@ -1158,6 +1184,22 @@ class Qa19CompatBackFromV18RobolectricTest {
             "Numbered" to TextItem(TEXT_LIST, TextSpec(sizePx = 16f, box = box, list = numbered), cx = 120f, cy = 45f),
             "Bullets" to TextItem(TEXT_LIST, TextSpec(sizePx = 16f, box = box, list = TextListSpec(type = TextListType.BULLETS, bullet = "★")), cx = 120f, cy = 115f),
         )
+    }
+
+    /**
+     * Row 4 (A3): texts along edited points (R12): "Path nodes" (5 path nodes, the middle one a
+     * corner), "Closed" (a circle as 8 closed path nodes) and "Two points" (a polyline of 2).
+     */
+    private fun writeTextPathNodes(dir: File) {
+        val open = VSpline(
+            listOf(VSplinePoint(20f, 60f), VSplinePoint(70f, 20f), VSplinePoint(120f, 60f, sharp = true), VSplinePoint(170f, 20f), VSplinePoint(220f, 60f)),
+            order = 4,
+        )
+        val closed = requireNotNull(TextPathNodes.asPath(TextPathSpec(type = TextPathType.CIRCLE, cx = 120f, cy = 100f, radius = 40f, startAngleDeg = -90f)))
+        val two = VSpline(listOf(VSplinePoint(20f, 150f), VSplinePoint(220f, 140f)), order = 2)
+        fun along(text: String, nodes: VSpline) =
+            TextItem(text, TextSpec(sizePx = 16f), cx = 120f, cy = 80f, path = TextPathNodes.withNodes(TextPathSpec(type = TextPathType.CURVE), nodes))
+        saveTexts(dir, "Path nodes" to along("Along the path nodes", open), "Closed" to along("Round and round", closed), "Two points" to along("Two points", two))
     }
 
     /** Row 5 (A3): "Two texts" (one layer, two texts, R14) and "One text" (v1.8's format). */

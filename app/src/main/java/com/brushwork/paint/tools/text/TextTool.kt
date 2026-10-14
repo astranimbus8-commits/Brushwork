@@ -871,7 +871,10 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
 
     /**
      * Sets the text path. Switching to another shape places a sensible default of that shape
-     * around the text ([TextOnPath.defaultFor]); straight keeps the shape for later.
+     * around the text ([TextOnPath.defaultFor]); straight keeps the shape for later. v1.9 (R12):
+     * the edited points of a path ([TextPathSpec.nodes]) are kept for straight text too: going
+     * back to the shape they stand for ([TextPathNodes.fallbackType]) brings them back, moved so
+     * the text stays where it is; another shape drops them.
      */
     override fun setPath(spec: TextPathSpec) = update { cur ->
         if (spec.type == cur.path.type) return@update cur.copy(path = spec)
@@ -881,9 +884,21 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
             // Back to straight text: it appears where the text along the path was.
             cur.copy(path = spec, cx = at.x, cy = at.y)
         } else {
-            val next = TextOnPath.defaultFor(spec.type, at, TextRenderer.lineWidth(cur.text, cur.spec), cur.spec.sizePx, spec)
+            val kept = spec.nodes
+            if (!cur.path.isActive && kept != null && spec.type == TextPathNodes.fallbackType(kept)) {
+                restoredNodes(cur, spec, at)?.let { return@update it }
+            }
+            val next = TextOnPath.defaultFor(spec.type, at, TextRenderer.lineWidth(cur.text, cur.spec), cur.spec.sizePx, spec.copy(nodes = null))
             cur.copy(path = next)
         }
+    }
+
+    /** [cur] (straight) along [spec]'s kept nodes again, moved so its center is at [at]; null when they can't be its guide. */
+    private fun restoredNodes(cur: TextItem, spec: TextPathSpec, at: Vec2): TextItem? {
+        val nodes = TextPathNodes.of(spec) ?: return null
+        val back = cur.copy(path = TextPathNodes.withNodes(spec, nodes))
+        val a = anchorOf(back)
+        return back.copy(path = TextOnPath.transformed(back.path, at - a, 1f, 0f, at))
     }
 
     // ------------------------------------------------------------------ letter scaling (v1.6 §3.5)
@@ -1620,10 +1635,15 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
 
     /**
      * The text path handles that snap: those that put the path somewhere (line ends and middle,
-     * circle center and radius, rectangle center and size corner, curve points and middle), not
-     * the angle, corner rounding or text position ones.
+     * circle center and radius, rectangle center and size corner, curve points and middle, every
+     * node of edited points), not the angle, corner rounding or text position ones.
      */
-    private fun handleSnaps(type: TextPathType, index: Int): Boolean = when (type) {
+    private fun handleSnaps(path: TextPathSpec, index: Int): Boolean {
+        TextPathNodes.of(path)?.let { return index in it.points.indices }
+        return flatHandleSnaps(path.type, index)
+    }
+
+    private fun flatHandleSnaps(type: TextPathType, index: Int): Boolean = when (type) {
         TextPathType.NONE -> false
         TextPathType.LINE -> index in 0..2
         TextPathType.CIRCLE, TextPathType.RECT -> index == 0 || index == 1
@@ -1632,9 +1652,20 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
 
     /**
      * Handles of the same path that stay put while handle [index] moves and that it can line up
-     * with (none for the circle's radius and the rectangle's size: only the size changes there).
+     * with (none for the circle's radius and the rectangle's size: only the size changes there;
+     * a node's neighbours for edited points).
      */
-    private fun fixedHandles(type: TextPathType, index: Int): List<Int> = when (type) {
+    private fun fixedHandles(path: TextPathSpec, index: Int): List<Int> {
+        val nodes = TextPathNodes.of(path) ?: return flatFixedHandles(path.type, index)
+        val n = nodes.points.size
+        val closed = TextPathNodes.isClosed(nodes)
+        return listOf(index - 1, index + 1)
+            .map { if (closed) (it + n) % n else it }
+            .filter { it in 0 until n && it != index }
+            .distinct()
+    }
+
+    private fun flatFixedHandles(type: TextPathType, index: Int): List<Int> = when (type) {
         TextPathType.LINE -> when (index) { 0 -> listOf(1); 1 -> listOf(0); else -> emptyList() }
         TextPathType.CURVE -> if (index in 0..3) (0..3).filter { it != index } else emptyList()
         else -> emptyList()
@@ -1753,7 +1784,7 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
                 handleIndex = best
                 handleGrab = hs[best] - downDoc
                 // Its other ends are targets too (a level / upright line, aligned curve points).
-                if (handleSnaps(cur.path.type, best)) beginSnap(fixedHandles(cur.path.type, best).mapNotNull { hs.getOrNull(it) })
+                if (handleSnaps(cur.path, best)) beginSnap(fixedHandles(cur.path, best).mapNotNull { hs.getOrNull(it) })
             } else {
                 mode = Mode.MOVE
                 startBox = snapBox(cur, prep)
@@ -1869,9 +1900,9 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
             Mode.PATH_HANDLE -> {
                 val raw = q + handleGrab
                 var at = raw
-                if (handleSnaps(start.path.type, handleIndex)) at = snapPathHandle(start.path, handleIndex, raw)
+                if (handleSnaps(start.path, handleIndex)) at = snapPathHandle(start.path, handleIndex, raw)
                 // v1.6 increments: a point handle moves in Length steps on the axes no guide holds.
-                if (increments.step(IncrementKind.LENGTH) != null && stepsAsPoint(start.path.type, handleIndex)) {
+                if (increments.step(IncrementKind.LENGTH) != null && stepsAsPoint(start.path, handleIndex)) {
                     val d = increments.lengthDelta(q - downDoc)
                     val stepped = downDoc + handleGrab + d
                     // Which axes a guide or the grid placed (asked, not told from the snapped
@@ -1982,8 +2013,13 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
         return stepped
     }
 
-    /** Text path handles that are points (moved by Length steps); not sizes, angles or the text position. */
-    private fun stepsAsPoint(type: TextPathType, index: Int): Boolean = when (type) {
+    /** Text path handles that are points (moved by Length steps); not sizes, angles or the text position. Every node of edited points. */
+    private fun stepsAsPoint(path: TextPathSpec, index: Int): Boolean {
+        TextPathNodes.of(path)?.let { return index in it.points.indices }
+        return flatStepsAsPoint(path.type, index)
+    }
+
+    private fun flatStepsAsPoint(type: TextPathType, index: Int): Boolean = when (type) {
         TextPathType.NONE -> false
         TextPathType.LINE -> index in 0..2
         TextPathType.CIRCLE, TextPathType.RECT -> index == 0

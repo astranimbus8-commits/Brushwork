@@ -60,11 +60,28 @@ object TextOnPath {
 
     /**
      * The guide path (thin line shown while editing): the shape itself, plus the control arms of
-     * a curve and the stem of a rectangle's rotation handle.
+     * a curve and the stem of a rectangle's rotation handle. v1.9 (R12): with nodes, the curve
+     * through them ([TextPathNodes.guide]) and, for path nodes, the lines between the nodes.
      */
     fun guide(spec: TextPathSpec): Path {
         val s = TextPathGeometry.sanitized(spec)
         val p = Path()
+        val nodes = if (s.type == TextPathType.NONE) null else TextPathNodes.of(s)
+        if (nodes != null) {
+            val g = TextPathNodes.guide(nodes)
+            for (i in 0 until g.vertexCount) {
+                val v = g.vertex(i)
+                if (i == 0) p.moveTo(v.x, v.y) else p.lineTo(v.x, v.y)
+            }
+            if (g.closed) p.close()
+            if (!TextPathNodes.isPolyline(nodes)) {
+                val pts = nodes.points
+                p.moveTo(pts[0].x, pts[0].y)
+                for (i in 1 until pts.size) p.lineTo(pts[i].x, pts[i].y)
+                if (TextPathNodes.isClosed(nodes)) p.close()
+            }
+            return p
+        }
         when (s.type) {
             TextPathType.NONE -> {}
             TextPathType.LINE -> {
