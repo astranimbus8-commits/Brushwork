@@ -948,7 +948,8 @@ and the lead records them in `.wt/v19-p0.txt`.
 - `.wt/v19-p0.txt`: a header (date, commit, the PC's CPU, the T606 factor 6x, the definitions),
   then one line per measurement, `name value unit canvas zoom jvm`. The thresholds of 2.7 are
   compared with `value x 6`. A row with no JVM proxy (PSS after opening and after 50 strokes,
-  cold start, the CI Timing job's time) has the value `n/a` and the reason.
+  cold start) has the value `n/a` and the reason. The one CI row, `ci.timing.job` (5.5: at most
+  12 min with the compile), is the "Timing tests" job of F0's push and ends in `ci`, not `jvm`.
 - A6's checkpoint (2.9): after P1 and P2, A6 runs `phoneBrushAndRasterEraser` and
   `printBrushAndRasterEraser` on its branch and appends their `brush.lift` and `frame.erase` lines
   under a line `# a6-after-p2`; the lead signs off before A6's steps 8-10. The bench prints each
