@@ -1,6 +1,8 @@
 package com.brushwork.paint.ui.vector
 
 import android.view.View
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.runtime.Composable
@@ -29,7 +31,7 @@ import com.brushwork.paint.ui.theme.IbisDims
  * bevelled points stay in sight and ✓ stays reachable. It is its own window and not focusable:
  * touches outside it reach the canvas (pan and zoom pass by; the one-finger tap that closes it is
  * consumed by [CurveTool]). Its changes re-apply the same in-tool step ([CurveTool.setBevelAmount],
- * [CurveTool.setBevelSegments]); "Done" closes it ([CurveTool.closeBevelPopup]).
+ * [CurveTool.setBevelSegments]); "Done" and Back close it ([CurveTool.closeBevelPopup]).
  */
 @Composable
 internal fun CurveBevelPopupHost(tool: CurveTool) {
@@ -41,10 +43,13 @@ internal fun CurveBevelPopupHost(tool: CurveTool) {
     val widthDp = with(density) { view.width.toDp() }.value.takeIf { it > 0f } ?: LocalConfiguration.current.screenWidthDp.toFloat()
     val bottomPx = with(density) { CurveBevelPlacement.bottomDp(navDp, ChromeLayout.sliderRowCount(widthDp)).dp.roundToPx() }
     val position = remember(view, bottomPx) { AboveTheBottomChrome(view, bottomPx) }
+    // Back closes it (D25), the bevel staying: the popup is not focusable, so the editor's window
+    // gets the key; this handler, added when the popup opens, comes before the editor's own.
+    if (LocalOnBackPressedDispatcherOwner.current != null) BackHandler { tool.closeBevelPopup() }
     Popup(
         popupPositionProvider = position,
         onDismissRequest = { tool.closeBevelPopup() },
-        properties = PopupProperties(focusable = false, dismissOnBackPress = false, dismissOnClickOutside = false),
+        properties = PopupProperties(focusable = false, dismissOnBackPress = true, dismissOnClickOutside = false),
     ) {
         BevelPopup(
             amount = session.amount,

@@ -33,7 +33,7 @@ import org.robolectric.annotation.Config
  * its own window, inside the screen's width, at the bottom above the ✓ / ✕ bar and the bottom
  * bar, two lines with every control at least 40 dp and no text past its box. "More segments"
  * re-applies the step; the canvas tap that closes the popup adds no point; a re-tap of the item
- * reopens it; "Done" closes it; one Undo removes the bevel. One class: the widths and font
+ * reopens it; Back and "Done" close it; one Undo removes the bevel. One class: the widths and font
  * scales are sections.
  */
 @RunWith(RobolectricTestRunner::class)
@@ -93,7 +93,15 @@ class Qa19PolylineBevelUiTest {
         assertTrue("$where: reopened", t.bevelPopupShown)
         assertEquals("$where: not bevelled again", 8, t.pointCount)
         assertEquals(2, t.bevelSession?.segments)
-        val done = requireNotNull(popupNodes().firstOrNull { it.config.getOrNull(SemanticsActions.OnClick) != null && labels(it).contains(DONE) }) { "$where: Done" }
+        // Back closes it (the editor's window gets the key: the popup is not focusable), the bevel stays.
+        s.activity.onBackPressedDispatcher.onBackPressed()
+        Qa19Ui.settle()
+        assertFalse("$where: Back closes it", t.bevelPopupShown)
+        assertEquals("$where: Back keeps the bevel", 8, t.pointCount)
+        assertTrue("$where: and the polyline", t.hasPendingWork)
+        Qa19Ui.click(PointLabels19.BEVEL, exact = true)
+        assertTrue("$where: reopened after Back", t.bevelPopupShown)
+        val done =requireNotNull(popupNodes().firstOrNull { it.config.getOrNull(SemanticsActions.OnClick) != null && labels(it).contains(DONE) }) { "$where: Done" }
         requireNotNull(done.config.getOrNull(SemanticsActions.OnClick)?.action).invoke()
         Qa19Ui.settle()
         assertFalse("$where: Done closes it", t.bevelPopupShown)
