@@ -38,9 +38,13 @@ class DisplayTiles(val docWidth: Int, val docHeight: Int, val tileSize: Int = 51
     private val targets = arrayOfNulls<CompositeTarget>(cols * rows)
     /** v1.9 A6: the allocation of each tile's current bitmap (their sum is [heldBytes]). */
     private val tileBytes = IntArray(cols * rows)
-    /** The part of each tile waiting to be rendered; meaningful only where [isDirtyAt] is set. */
-    private val dirty = Array(cols * rows) { Rect() }
-    private val isDirtyAt = BooleanArray(cols * rows)
+    /**
+     * The part of each tile waiting to be rendered, null when it is clean (as in v1.8; perf tests
+     * read this field). v1.9 A6 (P2): a non-null entry is the tile's own rect in [dirtyRects],
+     * so marking a tile allocates nothing.
+     */
+    private val dirty = arrayOfNulls<Rect>(cols * rows)
+    private val dirtyRects = Array(cols * rows) { Rect() }
     private var dirtyCount = 0
     private val tmpRect = Rect()
     private val invRect = Rect()
@@ -85,8 +89,9 @@ class DisplayTiles(val docWidth: Int, val docHeight: Int, val tileSize: Int = 51
             val part = partRect
             part.set(left, top, right, bottom)
             if (!part.intersect(tmpRect)) continue
-            if (isDirtyAt[idx]) dirty[idx].union(part)
-            else { dirty[idx].set(part); isDirtyAt[idx] = true; dirtyCount++ }
+            val d = dirty[idx]
+            if (d != null) d.union(part)
+            else { dirty[idx] = dirtyRects[idx].apply { set(part) }; dirtyCount++ }
         }
     }
 
@@ -103,7 +108,7 @@ class DisplayTiles(val docWidth: Int, val docHeight: Int, val tileSize: Int = 51
         var changed = false
         val tr = updateRect
         for (idx in tiles.indices) {
-            if (!isDirtyAt[idx]) continue
+            if (dirty[idx] == null) continue
             val col = idx % cols; val row = idx / cols
             tileRect(col, row, tr)
             if (visibleDoc != null && !Rect.intersects(visibleDoc, tr)) continue
@@ -116,8 +121,8 @@ class DisplayTiles(val docWidth: Int, val docHeight: Int, val tileSize: Int = 51
     /** Renders the dirty part of tile [idx] (document rect [tr]) and marks it clean. */
     private fun render(compositor: Compositor, idx: Int, tr: Rect) {
         val d = renderClip
-        d.set(dirty[idx])
-        isDirtyAt[idx] = false
+        d.set(dirtyRects[idx])
+        dirty[idx] = null
         dirtyCount--
         var bmp = tiles[idx]
         var c = canvases[idx]
@@ -150,7 +155,7 @@ class DisplayTiles(val docWidth: Int, val docHeight: Int, val tileSize: Int = 51
     fun tileIndexOf(col: Int, row: Int): Int = row * cols + col
 
     /** True while tile [index] has a part waiting to be rendered. */
-    fun isDirty(index: Int): Boolean = index in isDirtyAt.indices && isDirtyAt[index]
+    fun isDirty(index: Int): Boolean = dirty.getOrNull(index) != null
 
     /** Time source of [updateBudgeted] in nanoseconds (replaceable in tests). */
     internal var nanoClock: () -> Long = System::nanoTime
@@ -174,7 +179,7 @@ class DisplayTiles(val docWidth: Int, val docHeight: Int, val tileSize: Int = 51
         var n = 0
         val tr = budgetRect
         for (idx in tiles.indices) {
-            if (!isDirtyAt[idx]) continue
+            if (dirty[idx] == null) continue
             tileRect(idx % cols, idx / cols, tr)
             if (visibleDoc != null && !Rect.intersects(visibleDoc, tr)) continue
             if (skip != null && skip(idx)) continue
@@ -196,19 +201,19 @@ class DisplayTiles(val docWidth: Int, val docHeight: Int, val tileSize: Int = 51
         var pos = 0
         while (pos < n) {
             val idx = order[pos++]
-            if (!isDirtyAt[idx]) continue
+            if (dirty[idx] == null) continue
             tileRect(idx % cols, idx / cols, tr)
             render(compositor, idx, tr)
             done++
             if (budgetNanos != Long.MAX_VALUE && nanoClock() - start >= budgetNanos) break
         }
         var more = false
-        while (pos < n) if (isDirtyAt[order[pos++]]) { more = true; break }
+        while (pos < n) if (dirty[order[pos++]] != null) { more = true; break }
         return TileUpdate.of(changed = done > 0, hasMore = more)
     }
 
     /** The part of tile [index] waiting to be rendered (document px; a copy), or null when it is clean. */
-    fun dirtyRect(index: Int): Rect? = if (isDirty(index)) Rect(dirty[index]) else null
+    fun dirtyRect(index: Int): Rect? = dirty.getOrNull(index)?.let { Rect(it) }
 
     /**
      * Draws the tiles into a canvas whose matrix already maps document -> screen.
