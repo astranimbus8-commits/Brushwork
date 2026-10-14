@@ -255,7 +255,10 @@ class ToolEraseSession internal constructor(
 
         private fun removesObjects(route: EraseRoute) = route == EraseRoute.OBJECTS || route == EraseRoute.CONVERT_THEN_OBJECTS
 
-        /** Stands in for `BrushTool`'s refusal of the Eraser on an alpha-locked layer (A6's file; the same words). */
+        /**
+         * The Eraser's refusal on an alpha-locked layer's pixels, one text for the Eraser brush
+         * (`BrushTool`) and the tools' erase (lead, at A5's merge).
+         */
         internal fun alphaLockedMessage(layer: Layer): String =
             "Transparency is locked on \"${layer.name}\": the eraser can't remove pixels"
     }

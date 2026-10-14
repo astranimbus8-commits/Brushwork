@@ -29,6 +29,7 @@ import com.brushwork.paint.vector.StrokeCopies
 import com.brushwork.paint.vector.draw.EraseRoute
 import com.brushwork.paint.vector.draw.EraseRouting
 import com.brushwork.paint.vector.draw.EraseSource
+import com.brushwork.paint.vector.draw.ToolEraseSession
 import kotlin.math.ceil
 import kotlin.math.hypot
 import kotlin.math.log2
@@ -120,7 +121,7 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
         val route = EraseRouting.route(layer, EraseSource.ERASER_BRUSH, maskTarget, isPath)
         val erasesObjects = route == EraseRoute.OBJECTS || route == EraseRoute.CONVERT_THEN_OBJECTS
         if (kind == StrokeKind.ERASE && layer.alphaLocked && !maskTarget && !erasesObjects) {
-            controller.toast("Transparency is locked on \"${layer.name}\": the eraser can't remove pixels")
+            controller.toast(ToolEraseSession.alphaLockedMessage(layer))
             return null
         }
         // v1.7 (item 18): the symmetry copies, placed from the first point (after the ruler).
