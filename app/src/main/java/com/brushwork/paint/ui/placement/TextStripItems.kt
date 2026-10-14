@@ -49,9 +49,12 @@ import com.brushwork.paint.vector.select.ObjectEdits
  * wrap button (AUTO: the first to go to the More row); the More row "Snap to objects", then
  * "Numbers" while a text is open (no slot kept without one), under v1.7's hint. The editor
  * dialog and the Numbers, Wrap and Letter scaling sheets are its overlays, as v1.7 hosted them.
- * v1.9 (R14) ends the More row with “New layer each time” while no text is open, and fades the
- * wrap button for a text that shares its layer with others; with a text open the More row ends
+ * v1.9 (R14) opens the More row with “New layer each time” while no text is open, and fades the
+ * wrap button for a text that shares its layer with others; with a text open the More row opens
  * with Duplicate and, for a text of a layer of several, Bring forward and Send backward (R19).
+ * Snap, then Numbers, still end the row as in v1.8.
+ * While the path's points are edited (R12) row 1 keeps "Edit text", the switch and "Letters",
+ * and [TextPathNodeBar] shows where the selection bar does.
  */
 @Composable
 internal fun textSpec(tool: TextTool): StripSpec {
@@ -71,7 +74,7 @@ internal fun textSpec(tool: TextTool): StripSpec {
         activeText != null -> "or tap a text to edit it, empty canvas to add"
         else -> "Tap the canvas to add text, or a text to edit it"
     }
-    val items = listOf(
+    val items = listOfNotNull(
         StripItem(T.EDIT, T.EDIT_LABEL, T.EDIT_DP.dp) {
             val strip = LocalStripContext.current
             StripTextButton(
@@ -98,20 +101,8 @@ internal fun textSpec(tool: TextTool): StripSpec {
         },
         StripItem(T.LETTERS, T.LETTERS_LABEL, T.LETTERS_DP.dp) { LettersButton(tool) },
         StripItem(T.WRAP, T.wrapLabel(tool), T.WRAP_DP.dp, overflowRank = 1) { WrapButton(tool) },
-        // Snap first, then the Numbers button only while a text is open: no empty slot without
-        // one, and Snap keeps its place whether a text is open or not (v1.8 polish).
-        snapItem(T.SNAP, on = { c.snapping.enabled }) { c.snapping.enabled = it },
-    ) + listOfNotNull(
-        if (item == null) null else StripItem(T.NUMBERS, T.NUMBERS_LABEL, T.NUMBERS_DP.dp, row = StripRow.MORE) {
-            val strip = LocalStripContext.current
-            StripTextButton(T.NUMBERS_LABEL, T.NUMBERS_DP.dp, icon = Icons.Filled.Tune, onClick = {
-                strip.closeMore()
-                tool.wrapSheetOpen = false
-                tool.lettersSheetOpen = false
-                tool.numbersOpen = true
-            })
-        },
-        // v1.9 (R14, R19): the open text as an item of its layer, after v1.8's More items.
+        // v1.9 (R14, R19): the open text as an item of its layer. The v1.9 More items stand before
+        // Snap: Snap, then Numbers while a text is open, end the More row as in v1.8.
         if (item == null) null else StripItem(T.DUPLICATE.key, LayerLabels19.DUPLICATE, T.DUPLICATE.widthDp.dp, row = StripRow.MORE) {
             ToolIconButton(
                 icon = Icons.Outlined.ControlPointDuplicate,
@@ -141,11 +132,30 @@ internal fun textSpec(tool: TextTool): StripSpec {
             )
         },
         // v1.9 (R14): “New layer each time” while no text is open (off, a new text joins the
-        // active text layer), after v1.8's More items.
+        // active text layer).
         if (item != null) null else StripItem(T.NEW_LAYER.key, PlaceLabels19.NEW_LAYER_EACH_TIME, T.NEW_LAYER.widthDp.dp, row = StripRow.MORE) {
             NewLayerEachTimeButton(tool)
         },
+        // Snap, then the Numbers button only while a text is open: no empty slot without one,
+        // and Snap keeps its line whether a text is open or not (v1.8 polish).
+        snapItem(T.SNAP, on = { c.snapping.enabled }) { c.snapping.enabled = it },
+    ) + listOfNotNull(
+        if (item == null) null else StripItem(T.NUMBERS, T.NUMBERS_LABEL, T.NUMBERS_DP.dp, row = StripRow.MORE) {
+            val strip = LocalStripContext.current
+            StripTextButton(T.NUMBERS_LABEL, T.NUMBERS_DP.dp, icon = Icons.Filled.Tune, onClick = {
+                strip.closeMore()
+                tool.wrapSheetOpen = false
+                tool.lettersSheetOpen = false
+                tool.numbersOpen = true
+            })
+        },
     )
+    // v1.9 (R12): while the path's points are edited the node bar (an overlay) sits where the
+    // selection bar does; row 1 keeps only what never leaves it, with no hint and no More row
+    // (which would move the X / Y pill and the bar under it).
+    if (onPath && tool.nodeEditor.active) {
+        return StripSpec(items.filter { it.row == StripRow.ROW1 && it.overflowRank == 0 }, hint = null, overlays = { TextOverlays(tool) })
+    }
     return StripSpec(items, hint = hint, overlays = { TextOverlays(tool) })
 }
 
@@ -185,6 +195,8 @@ private fun TextOverlays(tool: TextTool) {
     if (tool.wrapSheetOpen && item != null && !tool.editorOpen) TextWrapSheet(tool)
     // Also over the open editor (stacked on it), so the button always shows what it opens.
     if (tool.lettersSheetOpen && item != null) TextLetterScaleSheet(tool)
+    // v1.9 (R12): the node bar while the path's points are edited.
+    TextPathNodeBar(tool)
 }
 
 /**

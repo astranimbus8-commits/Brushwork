@@ -44,6 +44,8 @@ import com.brushwork.paint.tools.text.TextBoxPreset
 import com.brushwork.paint.tools.text.TextRenderer
 import com.brushwork.paint.tools.text.TextSpec
 import com.brushwork.paint.tools.text.TextEditorHost
+import com.brushwork.paint.tools.text.TextPathNodeEntry
+import com.brushwork.paint.tools.text.TextTool
 import com.brushwork.paint.tools.text.VerticalStyle
 import com.brushwork.paint.ui.color.ColorPickerDialog
 import com.brushwork.paint.ui.fonts.FontField
@@ -200,7 +202,9 @@ fun TextEditorDialog(host: TextEditorHost) {
         if (tool.supportsPath) {
             SectionHeader("Shape / path")
             Note("Make the text follow a line, a circle, a square or a curve. Drag the dots on the canvas to shape it.")
-            TextPathControls(item.path, doc.dpi) { tool.setPath(it) }
+            // v1.9 (R12): the Text tool also edits the guide's points on the canvas.
+            val nodeTool = tool as? TextTool
+            TextPathControls(item.path, doc.dpi, onNodes = if (nodeTool == null) null else { e: TextPathNodeEntry -> nodeTool.startNodes(e) }) { tool.setPath(it) }
         }
 
         if (tool.supportsVertical && spec.vertical && !onPath) {

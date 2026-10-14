@@ -1782,7 +1782,59 @@ options on them) and R14 ("a button to duplicate the selection in the same layer
 ### Text (A3)
 
 <!-- v19-A3 -->
+Steps 1-10 of 13 are built. Step 11 (`MergedNumberedTextsTest`) waits for A4's merge; steps 12
+(vertical justify) and 13 (tap the guide to insert a point) are cuttable and not built yet.
 
+- **Placeholder (R4).** `PlaceholderAmount.WORDS` ("3 words") is first in `CHIP_ORDER`; the
+  amount chips wrap in a `FlowRow` (`TextFlowChips.kt`).
+- **Justify (R4).** `Justify.kt` spreads the lines that `WrapLayout` broke and never changes a
+  break, so wrap, frame and overset passes are untouched. `TextJustify.ON` spreads every line
+  except a paragraph's last line, which keeps `align` ("Last line:" in `TextAlignSection.kt`).
+  `ALL` spreads that line too. The space goes into word gaps, or between clusters for CJK lines.
+  Export writes a justified line as one run per word (`TextExport`, `ExportSceneBuilder`).
+- **Kerning (R5).** `KerningModes.kt` turns a mode into extra advances on top of the font's
+  kerning, as the v1.7 manual kerns do (`TextKerns.advancesPx`). Every route that draws kerned
+  text therefore draws the modes, and a mode that moves nothing keeps v1.8's pixels. Auto is the
+  font's pairs. Off turns them off and is synced with the switch. Metrics keeps pairs only inside
+  Latin, Greek or Cyrillic runs (`ScriptRuns`). Optical (`OpticalKerning`) sets each pair from
+  banded letter profiles to the font's "nn" gap and takes back the font's own pair. Its profiles
+  live in a governed cache of about 850 KB.
+- **Lists (R7).** `ListMarkers.kt` gives each non-blank paragraph of horizontal text a bullet or
+  a number (`format`). Numbering counts per text: a story counts over its frames, and two texts
+  of one layer never continue each other (C22). Every line keeps the marker column's indent, for
+  every alignment. The marker size, weight and font come from `TextListSpec`
+  (`TextListSection.kt`: No list / Bullets / Numbering, then "List settings"). Vertical text and
+  text on a path draw no list and lose it (`ListMarkers.applies`); the sheet says why. SVG writes
+  the markers as separate `<text>`.
+- **Several texts per layer (R14).** With a text layer active, a tap on empty canvas places the
+  new text in that layer (`TextTool.joinTarget`). Exceptions: "New layer each time" is on, a
+  selection is active, or the layer cannot join (a linked frame, a wrap text, a live array, mask
+  editing, or `TextCodec.MAX_ITEMS` texts, which toasts `LAYER_FULL`). A tap edits one text
+  (`editLayer` with its index); a second tap cycles to the text under it (`cycleBelow`). ✓
+  re-renders only where the open text was and is. `TextLayerDraw` draws neighbours in picture
+  order. A pixel edit of a layer of several texts toasts `RASTERIZED_TEXTS` with the count (C13,
+  region `v19-A3 rasterizeMessage`).
+- **Text items (R14).** `TextItemOps.duplicateItems(c, layer, area, ids)` returns one
+  `UndoAction` for A4's Duplicate; the arrange items use `ArrangeOrder.step`. Duplicate and
+  Arrange commit the open text's pending changes first. In the Text More row, "New layer each
+  time" (no text open) or Duplicate, Bring forward and Send backward (a text open) stand before
+  Snap; Snap, then Numbers, end the row as in v1.8.
+- **Path nodes (R12).** `TextPathSpec.nodes` (frozen) holds a `VSpline`; `TextPathNodes` converts
+  a guide. `asPath` gives a curve's 4 control points, a circle's 8 nodes, or a rectangle's exact
+  arcs. `asPolyline` gives `CUBIC_POLYLINE_SEGMENTS + 1` points. The edits are
+  `withAddedPoints`, `withPointAfter`, `withoutPoint` (at least 2 stay) and `withSharpToggled`,
+  all capped at `TextPathSpec.MAX_NODES`. `TextPathGeometry` and `TextOnPath` lay text out along
+  the nodes. A closed guide's text starts at its point nearest node 0 and stands by its winding.
+  v1.8 reads the CURVE or LINE fallback (compat row 4).
+- **Node editor (R12, I22).** The path sheet's "Add points", "Edit as path" and "Edit as
+  polyline" (`TextPathNodeEntry`) close the sheet and call `TextTool.startNodes`. Node editing
+  then starts with the `NODES_STARTED` toast, and `TextPathNodeEditor` becomes
+  `EditorController.inToolHistory`. Each edit is one in-tool step of a
+  `ToolHistory<TextPathSpec>`: Add point, Delete point, Sharp corner, or a node dragged (picked
+  within 24 dp). `TextPathNodeBar` sits where the selection bar does: 44 dp high, tag
+  `V19Tags.TEXT_PATH_NODES`, placed by `TextPathNodeBar.topDp` from the `IbisDims`. Its ✓
+  (`DONE_POINTS`) and the floating ✓ return to the sheet; the next ✓ commits one document step.
+  While nodes are edited, two fingers zoom the view and node drags do not snap.
 <!-- /v19-A3 -->
 
 ### Drawing and mask preview (A6)

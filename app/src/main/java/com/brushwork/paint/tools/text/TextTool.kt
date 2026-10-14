@@ -122,8 +122,23 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
             // v1.7 (item 9): the pill's Scale is relative to the text as it was opened.
             if (value == null) scaleRefPx = 0f else if (itemState == null) scaleRefPx = value.spec.sizePx
             itemState = value
+            // v1.9 (R12): the node editing of a path ends with its text (placed, dropped).
+            if (value == null) endNodes()
             if (layerPreview != null) refreshLayerPreview()
         }
+
+    /**
+     * v1.9 (R12, D31): the node editing of the open text's path. The path sheet's three entries
+     * ([TextPathNodeEntry]) start it ([startNodes]); ✓ (TextLabels19.DONE_POINTS, [doneNodes])
+     * ends it. While it runs it is the controller's `inToolHistory` (Undo and Redo
+     * go through its steps first), fingers pick and drag the guide's nodes instead of moving the
+     * text, and the node bar shows.
+     */
+    val nodeEditor: TextPathNodeEditor = TextPathNodeEditor(object : TextPathNodeEditor.Host {
+        override val path: TextPathSpec? get() = item?.path
+        override fun setPath(spec: TextPathSpec) = update { it.copy(path = spec) }
+        override fun toast(message: String) = controller.toast(message)
+    })
 
     /** Appearance of the next new text (its color is taken from the drawing color). */
     var nextSpec by mutableStateOf<TextSpec?>(null)
@@ -289,6 +304,7 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
      * drawn in it (in place, on top of its texts) and ✓ adds it there; no layer is added.
      */
     fun startTextAt(x: Float, y: Float) {
+        endNodes()
         val join = joinTarget()
         if (join == null && !controller.canAddLayer) {
             controller.toast("Layer limit reached (${controller.maxLayers}) for this canvas size: delete or merge a layer to add text")
@@ -549,6 +565,8 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
      */
     fun openEditor() {
         val cur = item ?: return
+        // v1.9 (R12): "Edit text" while the path's points are edited ends that first.
+        endNodes()
         if (editorOpen) return
         editorBackup = cur
         editingNew = false
@@ -1140,9 +1158,60 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
 
     // ------------------------------------------------------------------ commit / discard
 
-    /** ✓: bakes the text; a text placed or opened while a vector layer was active goes back to it (v1.5). */
+    /**
+     * ✓: bakes the text; a text placed or opened while a vector layer was active goes back to it
+     * (v1.5). v1.9 (R12): while the path's points are edited, ✓ is TextLabels19.DONE_POINTS
+     * ([doneNodes]); the next ✓ bakes the text.
+     */
     override fun commit() {
+        if (nodeEditor.active) {
+            doneNodes()
+            return
+        }
         if (commitItem()) returnToVectorLayer()
+    }
+
+    // ------------------------------------------------------------------ node editing (v1.9 R12)
+
+    /**
+     * The path sheet's [entry] (TextLabels19.ADD_POINTS, EDIT_AS_PATH or EDIT_AS_POLYLINE): the
+     * sheet closes keeping its changes (as OK does), the guide becomes nodes and node editing starts
+     * with the toast TextLabels19.NODES_STARTED. False (nothing changes) for straight or empty
+     * text.
+     */
+    fun startNodes(entry: TextPathNodeEntry): Boolean {
+        val cur = item ?: return false
+        if (!cur.path.isActive || cur.text.isBlank()) return false
+        if (editorOpen) {
+            confirmEditor()
+            if (item == null || editorOpen) return false
+        }
+        numbersOpen = false
+        wrapSheetOpen = false
+        lettersSheetOpen = false
+        if (!nodeEditor.start(entry)) return false
+        controller.inToolHistory = nodeEditor
+        controller.invalidateOverlay()
+        return true
+    }
+
+    /**
+     * ✓ while the path's points are edited (TextLabels19.DONE_POINTS, the node bar's and the
+     * floating one): the editing ends with the nodes as they are, and the editor opens again at
+     * its path settings. The text is baked by the next ✓, as one step.
+     */
+    fun doneNodes() {
+        if (!nodeEditor.active) return
+        endNodes()
+        openEditor()
+        controller.invalidateOverlay()
+    }
+
+    /** Ends node editing (its nodes stay): Undo and Redo are v1.8's again. */
+    private fun endNodes() {
+        if (controller.inToolHistory === nodeEditor) controller.inToolHistory = null
+        if (nodeEditor.active) nodeEditor.end()
+        if (mode == Mode.NODE) mode = Mode.NONE
     }
 
     /** ✕ (and undo of pending text): drops the pending text, then back to the vector layer it came from (v1.5). */
@@ -1569,7 +1638,8 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
     // ------------------------------------------------------------------ gestures
 
     /** [DEPTH]: the box's other side (height of horizontal text, width of vertical text). */
-    private enum class Mode { NONE, CREATE, MOVE, ROTATE, SCALE, BOX, DEPTH, PATH_HANDLE }
+    /** NODE (v1.9 R12): a finger on the canvas while the path's points are edited ([nodeEditor]). */
+    private enum class Mode { NONE, CREATE, MOVE, ROTATE, SCALE, BOX, DEPTH, PATH_HANDLE, NODE }
 
     private var mode = Mode.NONE
     private var downDoc = Vec2.ZERO
@@ -1764,6 +1834,14 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
         }
         // Also while the editor is open (its sheet may be minimized): drags move and resize the text.
         gestureStart = cur
+        if (nodeEditor.active) {
+            // v1.9 (R12): the nearest node within 24 dp is selected and follows the finger;
+            // elsewhere nothing is selected (the text stays put).
+            mode = Mode.NODE
+            nodeEditor.down(downDoc, t.screenToDocLength(t.dp(NODE_PICK_DP)))
+            controller.invalidateOverlay()
+            return
+        }
         val prep = preparedFor(cur)
         gesturePrepared = prep
         downInside = prep.contains(cur, downDoc, t.screenToDocLength(t.dp(BOX_PAD_DP + 8f)))
@@ -1915,6 +1993,8 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
                 }
                 item = start.copy(path = TextOnPath.moveHandle(start.path, handleIndex, at))
             }
+            // v1.9 (R12): the picked node follows the finger, the text re-flows (one step on lift).
+            Mode.NODE -> nodeEditor.move(q)
             Mode.NONE, Mode.CREATE -> return
         }
         controller.invalidateOverlay()
@@ -2079,6 +2159,8 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
         endSnap()
         clearReadout()
         when {
+            // v1.9 (R12): a node that moved is one in-tool step; a tap only selected (or not).
+            m == Mode.NODE -> nodeEditor.up()
             moved -> {}
             // The editor is open (minimized to its pill while the canvas is used): the text can
             // be dragged and pinched, but a tap neither places it nor restarts the editor.
@@ -2141,11 +2223,13 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
     override fun onLongPress(p: ToolPoint): Boolean {
         if (item == null || gestureStart == null) return false
         return mode == Mode.ROTATE || mode == Mode.SCALE || mode == Mode.BOX || mode == Mode.DEPTH || mode == Mode.PATH_HANDLE ||
-            (mode == Mode.MOVE && downInside)
+            (mode == Mode.MOVE && downInside) || (mode == Mode.NODE && nodeEditor.dragging)
     }
 
     override fun onCancel() {
-        if (mode != Mode.NONE && mode != Mode.CREATE) gestureStart?.let { item = it }
+        // v1.9 (R12): a node being dragged goes back (no step).
+        if (mode == Mode.NODE) nodeEditor.cancel()
+        else if (mode != Mode.NONE && mode != Mode.CREATE) gestureStart?.let { item = it }
         mode = Mode.NONE
         gestureStart = null
         gesturePrepared = null
@@ -2169,6 +2253,9 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
         pinchStart = null
         // Pinching isn't snapped (and no guide of a cancelled drag stays).
         endSnap()
+        // v1.9 (R12): while the path's points are edited two fingers zoom the view (a pinch
+        // would move every node outside the node steps).
+        if (nodeEditor.active) return false
         val cur = item ?: return false
         val t = controller.viewTransform
         val prep = preparedFor(cur)
@@ -2352,7 +2439,35 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
         }
         canvas.drawPath(guideScreen, haloPaint)
         canvas.drawPath(guideScreen, dashPaint)
-        for (hp in TextOnPath.handles(cur.path)) drawHandle(canvas, t, t.docToScreen(hp), filled = true)
+        if (nodeEditor.active) drawNodes(canvas, t) else for (hp in TextOnPath.handles(cur.path)) drawHandle(canvas, t, t.docToScreen(hp), filled = true)
+    }
+
+    /**
+     * v1.9 (R12): the guide's nodes while they are edited: corners as squares, smooth nodes as
+     * dots, the selected one ringed [NODE_RING_DP] wide (where a finger picks it).
+     */
+    private fun drawNodes(canvas: Canvas, t: ViewTransform) {
+        val n = nodeEditor.nodes ?: return
+        val r = t.dp(HANDLE_RADIUS_DP)
+        val o = r + t.dp(1.5f)
+        for ((i, p) in n.points.withIndex()) {
+            val s = t.docToScreen(Vec2(p.x, p.y))
+            if (p.sharp) {
+                fillPaint.color = 0x99000000.toInt()
+                canvas.drawRect(s.x - o, s.y - o, s.x + o, s.y + o, fillPaint)
+                fillPaint.color = ACCENT
+                canvas.drawRect(s.x - r, s.y - r, s.x + r, s.y + r, fillPaint)
+            } else {
+                drawHandle(canvas, t, s, filled = true)
+            }
+            if (i == nodeEditor.selected) {
+                val ring = t.dp(NODE_RING_DP / 2f)
+                haloPaint.strokeWidth = t.dp(4f)
+                canvas.drawCircle(s.x, s.y, ring, haloPaint)
+                linePaint.strokeWidth = t.dp(2f)
+                canvas.drawCircle(s.x, s.y, ring, linePaint)
+            }
+        }
     }
 
     private val wrapPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; color = WRAP_OUTLINE_COLOR }
@@ -2471,6 +2586,10 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
         private const val BOX_PAD_DP = 6f
         private const val ROTATE_STEM_DP = 30f
         private const val TOUCH_SLOP_DP = 8f
+
+        /** v1.9 (R12): a finger picks the nearest node within this; the selected node's ring (diameter). */
+        private const val NODE_PICK_DP = 24f
+        private const val NODE_RING_DP = 40f
         private const val BOX_HANDLE_HALF_DP = 9f
         private const val BOX_HANDLE_WIDTH_DP = 6f
         /** Tapping this close to a text layer's box still counts as tapping its text. */
