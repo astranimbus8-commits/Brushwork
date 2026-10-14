@@ -361,7 +361,11 @@ class StrokeBelowCache internal constructor(private val c: EditorController) : D
          */
         const val FOR_STROKES = false
 
-        /** R11a (step 10) as shipped: the raster Eraser's strokes use the cache. */
+        /**
+         * R11a (step 10) as shipped: the raster Eraser's strokes use the cache. False: CUT (proxy)
+         * on A6's bench (it saves a quarter of the erasing composite on PHONE, a few percent of the
+         * frame, see ARCHITECTURE), code kept; flipping it ships R11a as built.
+         */
         const val FOR_ERASER = false
 
         /** P3 is on ([FOR_STROKES]; tests and the A6 bench turn it on and back off). */

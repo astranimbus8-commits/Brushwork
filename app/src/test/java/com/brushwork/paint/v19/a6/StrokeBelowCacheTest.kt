@@ -40,16 +40,16 @@ import org.robolectric.RobolectricTestRunner
 import kotlin.math.sin
 
 /**
- * v1.9 A6 step 9 (P3, I7): a painting stroke's frames draw the layers below its layer from an
- * exact cache ([StrokeBelowCache]), and the canvas stays a full redraw of the document bit for
- * bit: at every frame while the finger moves and after the lift.
+ * v1.9 A6 steps 9 and 10 (P3, R11a, I7): a painting or raster-erasing stroke's frames draw the
+ * layers below its layer from an exact cache ([StrokeBelowCache]), and the canvas stays a full
+ * redraw of the document bit for bit: at every frame while the finger moves and after the lift.
  *
  * Each case paints a wave across a 512 x 384 canvas whose display tiles are 128 px (4 x 3 tiles,
  * so the cache spans several tiles), rendering the canvas every second move as the view does, and
  * compares it then with a fresh render of the document with the stroke's override. Each case
  * also checks that the cache was used where it should be ([StrokeBelowCache.hits]), so an
- * exactness check can't pass by the cache staying off. P3 is turned on for these cases, shipped
- * or not.
+ * exactness check can't pass by the cache staying off. P3 is turned on for these cases, and R11a
+ * for the Eraser's, shipped or not.
  */
 @RunWith(RobolectricTestRunner::class)
 class StrokeBelowCacheTest {
@@ -344,10 +344,55 @@ class StrokeBelowCacheTest {
         assertEquals("no room: as before", 0, stroke(none, ToolId.BRUSH))
     }
 
+    /** R11a (step 10, turned on here): the raster Eraser (DST_OUT) draws the layers below from the cache, exactly. */
     @Test
-    fun theRasterEraserComposesAsBeforeUntilR11a() {
-        val c = editor("Paint", layers = ::rich)
-        assertEquals(StrokeBelowCache.eraserOn, stroke(c, ToolId.ERASER) > 0)
+    fun theRasterEraserDrawsFromTheCacheExactly() {
+        // R11a's own switch: P3's is off, so every hit below is the Eraser's (mask erases too).
+        StrokeBelowCache.strokesOn = false
+        StrokeBelowCache.eraserOn = true
+        // Soft (50 and 90 px), hard and pixel erasers on a middle layer.
+        for ((id, size) in listOf("softeraser" to 50f, "softeraser" to 90f, "eraser" to 40f, "pixeleraser" to 24f)) {
+            val c = editor("Paint", layers = ::rich)
+            c.eraser = BrushLibrary.byId(id)!!.copy(size = size)
+            assertTrue("$id $size px", stroke(c, ToolId.ERASER) > 0)
+        }
+        // A clipped layer (split at its base), and a clip base with a layer clipped to it.
+        assertTrue("clipped", stroke(editor("Clipped", layers = ::rich), ToolId.ERASER) > 0)
+        val base = editor("Paint") { d -> rich(d).also { ls -> ls.first { it.name == "Screen" }.clipping = true } }
+        assertTrue("clip base", stroke(base, ToolId.ERASER) > 0)
+        // A masked layer's pixels, then its mask (erasing the mask hides the layer there).
+        assertTrue("masked layer", stroke(editor("Masked", layers = ::rich), ToolId.ERASER) > 0)
+        val mask = editor("Masked", layers = ::rich)
+        mask.setEditingMask(mask.activeLayer, true)
+        assertTrue("its mask", stroke(mask, ToolId.ERASER) > 0)
+        // An adjustment layer's mask: the split is the adjustment layer.
+        val adjustment = editor("Invert", layers = ::rich)
+        adjustment.addMask(adjustment.activeLayer, fromSelection = false)
+        assertTrue("an adjustment's mask", stroke(adjustment, ToolId.ERASER) > 0)
+        // A selection, and blend modes on the layer and above it.
+        val selected = editor("Paint", layers = ::rich)
+        selected.setSelection(Selection.fromBytes(ByteArray(W * H) { i -> if ((i / W) in 120 until 300) -1 else 0 }, W, H))
+        assertTrue("selection", stroke(selected, ToolId.ERASER) > 0)
+        val blended = editor("Paint") { d ->
+            rich(d).also { ls ->
+                ls.first { it.name == "Paint" }.apply { blendMode = LayerBlendMode.OVERLAY; opacity = 0.7f }
+                ls.first { it.name == "Top" }.blendMode = LayerBlendMode.DIFFERENCE
+            }
+        }
+        assertTrue("blend modes", stroke(blended, ToolId.ERASER) > 0)
+        // A change below while erasing.
+        val changed = editor("Paint", layers = ::rich)
+        val multiply = changed.doc.layers.first { it.name == "Multiply" }
+        assertTrue("a change below", stroke(changed, ToolId.ERASER) { k ->
+            if (k == 16) {
+                Canvas(multiply.bitmap).drawRect(150f, 120f, 330f, 300f, Paint().apply { color = 0xFF2080F0.toInt() })
+                multiply.markChanged()
+                changed.invalidateDoc(android.graphics.Rect(150, 120, 330, 300))
+            }
+        } > 0)
+        // Off: the Eraser composites the whole stack, as v1.8.
+        StrokeBelowCache.eraserOn = false
+        assertEquals(0, stroke(editor("Paint", layers = ::rich), ToolId.ERASER))
     }
 
     /** As shipped each switch is its constant, and a stroke uses the cache only when it is on. */
@@ -377,6 +422,68 @@ class StrokeBelowCacheTest {
         // Off: every frame composites the whole stack, as v1.8.
         c.liveAdjust.strokeBelow.enabled = false
         assertEquals(0, stroke(c, ToolId.BRUSH))
+    }
+
+    /**
+     * Design 5.5's randomized check: 500 random changes to the document during brush and Eraser
+     * strokes (P3 and R11a on), each followed by a move and a frame; after every frame the canvas
+     * equals a fresh render bit for bit. Changes: pixels below or above (recorded or only
+     * invalidated), opacity, blend mode, visibility, clipping, a mask's pixels, an adjustment's
+     * opacity. Seeded (I8).
+     */
+    @Test
+    fun fiveHundredRandomChangesDuringStrokesStayExact() {
+        StrokeBelowCache.eraserOn = true
+        val rnd = kotlin.random.Random(1906)
+        val c = editor("Paint", layers = ::rich)
+        val modes = listOf(LayerBlendMode.NORMAL, LayerBlendMode.MULTIPLY, LayerBlendMode.SCREEN, LayerBlendMode.OVERLAY, LayerBlendMode.DIFFERENCE)
+        var ops = 0
+        var hits = 0
+        var stroke = 0
+        while (ops < 500) {
+            val active = 1 + rnd.nextInt(c.doc.layers.size - 1)
+            c.selectLayer(active)
+            val tool = if (stroke++ % 2 == 0) ToolId.BRUSH else ToolId.ERASER
+            c.selectTool(tool)
+            val before = c.liveAdjust.strokeBelow.hits
+            c.pointerDown(wave[0])
+            for (k in 1 until N - 1) {
+                if (ops == 500) break
+                val l = c.doc.layers[rnd.nextInt(c.doc.layers.size)]
+                val x = rnd.nextInt(W - 40)
+                val y = rnd.nextInt(H - 40)
+                val r = android.graphics.Rect(x, y, x + 20 + rnd.nextInt(120), y + 20 + rnd.nextInt(120))
+                val what = rnd.nextInt(8)
+                when {
+                    // Pixels (not the stroke's own layer, whose pixels the stroke holds).
+                    what <= 1 && l !== c.activeLayer && !l.isAdjustmentLayer -> {
+                        Canvas(l.bitmap).drawRect(android.graphics.RectF(r), Paint().apply { color = rnd.nextInt() or 0x40000000 })
+                        if (what == 0) l.markChanged()
+                        c.invalidateDoc(r)
+                    }
+                    what == 2 -> { l.opacity = 0.2f + 0.8f * rnd.nextFloat(); c.invalidateDoc(null) }
+                    what == 3 && !l.isAdjustmentLayer -> { l.blendMode = modes[rnd.nextInt(modes.size)]; c.invalidateDoc(null) }
+                    what == 4 && l !== c.activeLayer -> { l.visible = !l.visible; c.invalidateDoc(null) }
+                    what == 5 && l !== c.doc.layers[0] -> { l.clipping = !l.clipping; c.invalidateDoc(null) }
+                    what == 6 && l.mask != null && !(l === c.activeLayer && l.editingMask) -> {
+                        Canvas(l.mask!!).drawRect(android.graphics.RectF(r), Paint().apply { color = if (rnd.nextBoolean()) -1 else 0xFF000000.toInt() })
+                        l.markChanged()
+                        c.invalidateDoc(r)
+                    }
+                    else -> c.invalidateDoc(null)
+                }
+                ops++
+                c.pointerMove(wave[k])
+                c.tiles.update(c.compositor, null)
+                assertExact(c, "change $ops (kind $what on ${l.name}), $tool stroke $stroke on ${c.activeLayer.name}")
+            }
+            c.pointerUp(wave[N - 1])
+            c.tiles.update(c.compositor, null)
+            assertExact(c, "after stroke $stroke")
+            assertFalse(c.liveAdjust.strokeBelow.isActive)
+            hits += c.liveAdjust.strokeBelow.hits - before
+        }
+        assertTrue("frames were drawn from the cache ($hits)", hits > 100)
     }
 
     private companion object {

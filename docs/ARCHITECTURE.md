@@ -1891,8 +1891,8 @@ to insert a point).
 <!-- v19-A6 -->
 
 A6 makes drawing, erasing and the mask tools cheaper per frame without changing a committed pixel
-(I25) or v1.8's behaviour under Robolectric's EXACT policy (I8). Steps 1-9 of design 3.2 A6 (P3
-built, kept off); R11a (step 10) follows.
+(I25) or v1.8's behaviour under Robolectric's EXACT policy (I8). Steps 1-10 of design 3.2 A6; P4,
+P3 and R11a are built and kept off (CUT (proxy)), each behind one constant.
 
 **The lift (P1, I25).** A brush, eraser, smudge or blur lift redraws only the parts of the canvas
 in the 256 px undo tiles its dabs touched (`EditorController.commitStrokeEdit` in region `v19-A6 commitEdit`,
@@ -1939,7 +1939,7 @@ move previews at once at v1.8's scale and the release renders at once (I8).
   ComponentCallbacks2, closed with them): `LiveAdjust.proxyBytes`. Above NORMAL, proxies kept
   after a session (2 s) are freed; at LOW or worse a running session ends (its next frame renders
   exactly). MODERATE leaves a running session alone.
-- "below-caches", priority 20, while a stroke's below-cache (P3, below) holds tiles:
+- "below-caches", priority 20, while a stroke's below-cache (P3 and R11a, below) holds tiles:
   `StrokeBelowCache.bytes`, at most 24 MB. Above NORMAL it is freed and the rest of the stroke
   composites as v1.8.
 All hold their owner weakly (`engine/live/WeakRegistration`): an owner collected without closing
@@ -1991,6 +1991,18 @@ software blit of the screen is the rest), and `brush.lift`, the row that met P3'
 had no composite in it since P1. So `FOR_STROKES` is false: every stroke composites as v1.8.
 Flipping it ships P3 as built.
 
+**Raster Eraser below-cache (R11a): CUT (proxy), kept off.** The raster Eraser's strokes (soft,
+hard and pixel erasers, DST_OUT; on a layer's pixels or on a mask) begin the same cache when
+`StrokeBelowCache.eraserOn`, its own switch. Unlike P3 the saving is measurable: a 90 px soft
+eraser repaints each pixel over several frames, so more of each frame's part is already cached.
+`StrokeBelowBench` measured the composite per erasing frame, cached / full: PHONE 0.37 / 0.50 ms
+(0.74), PRINT 0.18 / 0.18 ms (one layer below), PHONE with 40 layers erasing the top one 0.43 /
+0.94 ms (0.45). The whole JVM frame moves by about 6 % at best (6.30 / 6.69 ms on PHONE; its
+rows are noisier than the composite's), short of the 20 % per frame that step 8 asked of P4, and
+the composite's share of a phone's CPU frame (where the blit is on the GPU) is a device
+measurement. So `FOR_ERASER` is false: the Eraser composites as v1.8. Flipping it ships R11a as
+built.
+
 **Guards.** `v19/a6/LiftInvalidationTest`, `PreviewEqualsCommitParityTest`,
 `DisplayTilesReuseTest`, `MaskInteractionScaleTest`, `BrushMaskIncrementalTest`,
 `MaskReleaseParityTest`, `GovernorRegistrationTest`, `DrawingPreviewGuardTest` (P4 off as
@@ -2002,7 +2014,10 @@ folders; a split inside a group is refused), `StrokeBelowCacheTest` (P3 turned o
 equals a fresh render at every second move and after the lift, with the cache used, across split
 positions, clipping groups, blend modes, adjustment layers, masks, "Safe compositing", folders,
 selection, symmetry, smudge, blur, a grayscale document, changes below during the stroke, the
-memory cap and the cancel; as shipped the switches decide);
+memory cap and the cancel; R11a turned on: the soft, hard and pixel erasers, clipped, masked and
+clip-base layers, a layer's mask, an adjustment's mask, selection, blend modes and a change below;
+500 seeded random changes below and above during brush and Eraser strokes, exact after every
+frame; as shipped the switches decide);
 Timing (`A6Bench`, the P0 bench's way of
 timing a laid-out `CanvasView`): `LiftPerfTest` (the brush lift and the raster Eraser's frame on a
 512 px canvas; locally the PRINT lift within Q5's 40 ms at the T606 factor 6 and the PHONE erase
