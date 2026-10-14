@@ -48,12 +48,13 @@ internal class A4Kit(val w: Int = 240, val h: Int = 180) {
 
     fun close() = scope.cancel()
 
-    fun controller(): EditorController {
+    /** The controller; the "Background" is white unless not [white] (then transparent). */
+    fun controller(white: Boolean = true): EditorController {
         val app = RuntimeEnvironment.getApplication()
         val settings = AppSettings(app)
         settings.prefs.edit().clear().commit()
         val doc = Document("t", "t", w, h)
-        doc.layers += Layer(doc.newLayerId(), "Background", BitmapUtils.createLayerBitmap(w, h).also { it.eraseColor(WHITE) })
+        doc.layers += Layer(doc.newLayerId(), "Background", BitmapUtils.createLayerBitmap(w, h).also { if (white) it.eraseColor(WHITE) })
         doc.activeLayerIndex = 0
         return EditorController(app, doc, scope, settings).also {
             it.viewTransform.set(Matrix())

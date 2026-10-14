@@ -3,6 +3,7 @@ package com.brushwork.paint.engine
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.LayerBlendMode
+import com.brushwork.paint.ui.common.LayerLabels19
 import com.brushwork.paint.vector.VectorContent
 import com.brushwork.paint.vector.select.ObjectTestKit
 import org.junit.After
@@ -23,7 +24,9 @@ import org.robolectric.RobolectricTestRunner
  * "Merge down" that undo restores, the same refusals. [LayerMerge.rasterReason] is null (A4 fills it).
  *
  * v1.9 A4 (R19, 2.8 forced update): a layer under 100 % whose objects don't overlap folds its
- * opacity into them, so the 50 % variants (one object each) keep their objects too.
+ * opacity into them, so the 50 % variants (one object each) keep their objects too; and
+ * [LayerMerge.rasterReason] names why two vector layers become pixels ([LayerLabels19.WHY_BLEND],
+ * [LayerLabels19.WHY_CLIP]).
  */
 @RunWith(RobolectricTestRunner::class)
 class LayerMergeExtractionTest {
@@ -81,7 +84,8 @@ class LayerMergeExtractionTest {
             apply(v, u, l)
             val expected = if (why == "plain" || why.endsWith("(kept)") || why.endsWith("(folded)") || why == "upper hidden") MergeKind.VECTOR_OBJECTS else MergeKind.RASTER
             assertEquals(why, expected, v.layerMerge.kindOf(u, l))
-            assertNull(why, v.layerMerge.rasterReason(u, l))
+            val reason = when (why) { "upper Multiply" -> LayerLabels19.WHY_BLEND; "upper clipping" -> LayerLabels19.WHY_CLIP; else -> null }
+            assertEquals(why, reason, v.layerMerge.rasterReason(u, l))
         }
         assertNull(merge.rasterReason(lower, background))
     }

@@ -9,6 +9,7 @@ import android.graphics.RectF
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.LayerListEvent
 import com.brushwork.paint.LayerListKind
+import com.brushwork.paint.brush.TipCache
 import com.brushwork.paint.EditEvent
 import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.Layer
@@ -27,6 +28,7 @@ import com.brushwork.paint.vector.VStroke
 import com.brushwork.paint.vector.VectorContent
 import com.brushwork.paint.vector.VectorLayerOps
 import com.brushwork.paint.vector.geom.ObjectIndex
+import com.brushwork.paint.vector.render.VectorLayerRenderer
 import kotlin.math.ceil
 import kotlin.math.floor
 
@@ -82,7 +84,7 @@ internal class LayerMerge(private val c: EditorController) {
         val doc = c.doc
         // v1.9 (R19): two text layers keep their texts, shape and vector layers their objects;
         // otherwise the result is pixels.
-        val kept = when (kindOf(layer, lower)) {
+        val kept = when (mergeKind(layer, lower)) {
             MergeKind.TEXT_ITEMS -> mergeTexts(layer, lower)
             MergeKind.VECTOR_OBJECTS -> mergeObjects(layer, lower)
             MergeKind.RASTER -> false
@@ -285,8 +287,9 @@ internal class LayerMerge(private val c: EditorController) {
      * The merged pixels: [lower]'s scaled by its opacity within its objects' paint bounds (DST_IN),
      * then [upper]'s drawn over them at its opacity within its objects' paint bounds (a shape
      * layer's: the whole layer); exactly the picture before the merge when the folds are exact
-     * ([foldsExactly]). ONE step "Merge down"; false (nothing done) when a shape does not decode or
-     * the pixels don't fit in memory.
+     * ([foldsExactly]). Otherwise ([LayerLabels19.KEEP_EDITABLE], [mergeDownEditable]) the merged objects are
+     * rendered anew wherever either layer painted. ONE step "Merge down"; false (nothing done) when
+     * a shape does not decode or the pixels don't fit in memory.
      */
     private fun mergeObjects(upper: Layer, lower: Layer): Boolean {
         // Renders still on their way land first: the pixels drawn are those of the objects.
@@ -294,11 +297,25 @@ internal class LayerMerge(private val c: EditorController) {
         val above = objectsOf(upper) ?: return false
         val below = objectsOf(lower) ?: return false
         val merged = faded(below, lower.opacity).plus(faded(above, upper.opacity).objects).first
+        val after = lower.dataSnapshot().copy(text = null, shape = null, vector = merged)
+        val props = lower.props().copy(opacity = 1f)
+        if (!foldsExactly(upper, above) || !foldsExactly(lower, below)) {
+            // LayerLabels19.KEEP_EDITABLE (WHY_OVERLAP): the folded objects look a little different where they
+            // overlap; the pixels are their rendering (I1), redrawn wherever either layer painted.
+            val all = Rect(paintArea(lower, below)).apply { union(paintArea(upper, above)) }
+            val document = Rect(0, 0, c.doc.width, c.doc.height)
+            return mergeData(upper, lower, after, all, props) { cv ->
+                cv.save()
+                cv.clipRect(all)
+                cv.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
+                VectorLayerRenderer.render(cv, merged, all, tips = TipCache(8L shl 20), document = document)
+                cv.restore()
+            }
+        }
         val upperArea = paintArea(upper, above)
         val lowerArea = if (lower.opacity < 1f) paintArea(lower, below) else Rect()
         val area = Rect(upperArea).apply { union(lowerArea) }
-        val props = lower.props().copy(opacity = 1f)
-        return mergeData(upper, lower, lower.dataSnapshot().copy(text = null, shape = null, vector = merged), area, props) { cv ->
+        return mergeData(upper, lower, after, area, props) { cv ->
             if (!lowerArea.isEmpty) {
                 cv.save()
                 cv.clipRect(lowerArea)
@@ -377,11 +394,54 @@ internal class LayerMerge(private val c: EditorController) {
         if (!(r.left < r.right && r.top < r.bottom)) Rect() else Rect(floor(r.left).toInt(), floor(r.top).toInt(), ceil(r.right).toInt(), ceil(r.bottom).toInt())
 
     /**
-     * Why kindOf is RASTER for two data layers, as a LayerLabels19.WHY_* text; null when either layer is raster.
-     * Non-null means the layers panel shows the merge dialog (R19) before calling mergeDown. F1b: null.
+     * Why [kindOf] is [MergeKind.RASTER] for two data layers (text, shape or vector), as a
+     * [LayerLabels19] WHY_* text: [LayerLabels19.WHY_KINDS] for two kinds, else the first condition
+     * of R19 that fails, [LayerLabels19.WHY_OVERLAP] last (so it is the reason only when it is the
+     * only one). Null when either layer is raster, an adjustment layer or a folder, when [lower] is
+     * not right below [upper], when the type is kept, and when a text or shape does not decode
+     * (merged as pixels as in v1.8). Non-null means the layers panel shows the merge dialog (R19)
+     * before calling mergeDown.
      */
-    @Suppress("UNUSED_PARAMETER")
-    fun rasterReason(upper: Layer, lower: Layer): String? = null
+    fun rasterReason(upper: Layer, lower: Layer): String? {
+        if (!isDataLayer(upper) || !isDataLayer(lower) || !adjacent(upper, lower)) return null
+        if (kindOf(upper, lower) != MergeKind.RASTER) return null
+        val why = when {
+            upper.isTextLayer && lower.isTextLayer -> textWhyOf(upper, lower)
+            holdsObjects(upper) && holdsObjects(lower) -> objectWhy(upper, lower)
+            else -> LayerLabels19.WHY_KINDS
+        }
+        return why?.takeUnless { it == UNREADABLE }
+    }
+
+    /** A layer whose type R19 keeps: text, a legacy shape or vector objects (never a folder or an adjustment layer). */
+    private fun isDataLayer(layer: Layer): Boolean =
+        !layer.isFolder && !layer.isAdjustmentLayer && (layer.isTextLayer || layer.isShapeLayer || layer.isVectorLayer)
+
+    /**
+     * R19 [LayerLabels19.KEEP_EDITABLE] (the merge dialog, when [rasterReason] is [LayerLabels19.WHY_OVERLAP]):
+     * [mergeDown], keeping the type although see-through overlapping parts change a little — two
+     * text layers append their texts (the lower layer's opacity applies to them all), shape and
+     * vector layers fold their opacities into their objects ([mergeObjects]). ONE step "Merge
+     * down". For any other pair it is [mergeDown].
+     */
+    fun mergeDownEditable(layer: Layer) {
+        keepEditable = true
+        try {
+            mergeDown(layer)
+        } finally {
+            keepEditable = false
+        }
+    }
+
+    /** True during [mergeDownEditable]. */
+    private var keepEditable = false
+
+    /** [kindOf], or during [mergeDownEditable] the type the pair keeps when overlap is the only reason against it. */
+    private fun mergeKind(upper: Layer, lower: Layer): MergeKind {
+        val kind = kindOf(upper, lower)
+        if (!keepEditable || kind != MergeKind.RASTER || rasterReason(upper, lower) != LayerLabels19.WHY_OVERLAP) return kind
+        return if (upper.isTextLayer) MergeKind.TEXT_ITEMS else MergeKind.VECTOR_OBJECTS
+    }
 
     private companion object {
         const val MERGE_LABEL = "Merge down"

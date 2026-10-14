@@ -27,6 +27,7 @@ import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.text.TextTool
 import com.brushwork.paint.tools.vector.ShapeTool
 import com.brushwork.paint.ui.common.FolderLabels
+import com.brushwork.paint.ui.common.LayerLabels19
 import com.brushwork.paint.vector.VectorLayerOps
 
 /**
@@ -151,8 +152,13 @@ object LayerOps {
      * Merges [layer] into the layer below. When both are clipped to the same base, the upper one
      * is flattened onto the lower one WITHOUT clipping it to the lower layer's pixels: on screen
      * both are clipped to the shared base, and the merged layer stays clipped to it.
+     *
+     * v1.9 (R19): with [ask], two data layers that would become pixels are not merged: once the
+     * guards pass, [ask] gets the reason ([com.brushwork.paint.engine.LayerMerge.rasterReason]) and
+     * the host shows the merge dialog, which calls this again without [ask] ([LayerLabels19.MERGE_CONFIRM]) or
+     * with [keepEditable] ([com.brushwork.paint.engine.LayerMerge.mergeDownEditable]).
      */
-    fun mergeDown(c: EditorController, layer: Layer) {
+    fun mergeDown(c: EditorController, layer: Layer, ask: ((String) -> Unit)? = null, keepEditable: Boolean = false) {
         // First: committing may insert a layer, which would change the layer below.
         commitPendingWork(c)
         // v1.7 (§4.4): merging a folder down is "Merge folder" (refused, as any merge, when the
@@ -182,10 +188,27 @@ object LayerOps {
         val sameGroup = layer.clipping && lower.clipping && idx - 1 > 0
         if (sameGroup) layer.clipping = false
         try {
-            guardMemory(c, "Merge down") { c.mergeDown(layer) }
+            // (The reason is that of the merge below: the same clipping as it sees.)
+            val why = if (ask != null) c.layerMerge.rasterReason(layer, lower) else null
+            when {
+                why != null -> ask?.invoke(why)
+                keepEditable -> guardMemory(c, "Merge down") { c.layerMerge.mergeDownEditable(layer) }
+                else -> guardMemory(c, "Merge down") { c.mergeDown(layer) }
+            }
         } finally {
             if (sameGroup) layer.clipping = true
         }
+    }
+
+    /**
+     * R19: the merge dialog's [LayerLabels19.MERGE_CONFIRM]: [mergeDown] without asking, then the confirmation
+     * toast [LayerLabels19.MERGED_AS_PIXELS] with [reason] when [layer] was merged into pixels.
+     */
+    fun mergeAsPixels(c: EditorController, layer: Layer, reason: String) {
+        val lower = siblingBelow(c, layer)
+        mergeDown(c, layer)
+        val merged = lower != null && c.doc.indexOf(layer) < 0 && c.doc.indexOf(lower) >= 0
+        if (merged && lower?.isTextLayer == false && !lower.isVectorLayer) c.toast(String.format(LayerLabels19.MERGED_AS_PIXELS, reason))
     }
 
     // ------------------------------------------------------------------ v1.7: folders (item 8)
