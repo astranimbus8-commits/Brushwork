@@ -206,9 +206,17 @@ class ChromaticAberrationMovingFilter : Filter("art.chromatic_aberration_moving"
         FilterParam.Slider("distance", "Distance", 0f, 200f, 5f, step = 1f, suffix = "px", pixels = true),
         FilterParam.Slider("angle", "Angle", 0f, 360f, 0f, step = 1f, suffix = "°"),
         fringes,
+        // v1.9 (R10): after the v1.8 controls.
+        CaBlend.modeParam,
+        CaBlend.opacityParam,
     )
 
-    override fun apply(src: PixelBuffer, values: FilterValues, ctx: FilterContext): PixelBuffer {
+    /** v1.9 (R10): the aberrated picture put onto the original with "Blend mode" and "Opacity" ([CaBlend]). */
+    override fun apply(src: PixelBuffer, values: FilterValues, ctx: FilterContext): PixelBuffer =
+        CaBlend.over(src, aberrate(src, values, ctx), values, ctx)
+
+    /** v1.8's result: the channels moved. */
+    private fun aberrate(src: PixelBuffer, values: FilterValues, ctx: FilterContext): PixelBuffer {
         val dist = ctx.px(values.float("distance").coerceAtLeast(0f))
         if (dist < 1e-3f) return src.copy()
         val angle = values.float("angle")
@@ -256,9 +264,17 @@ class ChromaticAberrationZoomingFilter : Filter("art.chromatic_aberration_zoomin
         FilterParam.Slider("distance", "Distance", 0f, 200f, 5f, step = 1f, suffix = "px", pixels = true),
         fringes,
         FilterParam.Point("center", "Center"),
+        // v1.9 (R10): after the v1.8 controls.
+        CaBlend.modeParam,
+        CaBlend.opacityParam,
     )
 
-    override fun apply(src: PixelBuffer, values: FilterValues, ctx: FilterContext): PixelBuffer {
+    /** v1.9 (R10): the aberrated picture put onto the original with "Blend mode" and "Opacity" ([CaBlend]). */
+    override fun apply(src: PixelBuffer, values: FilterValues, ctx: FilterContext): PixelBuffer =
+        CaBlend.over(src, aberrate(src, values, ctx), values, ctx)
+
+    /** v1.8's result: the channels zoomed. */
+    private fun aberrate(src: PixelBuffer, values: FilterValues, ctx: FilterContext): PixelBuffer {
         val dist = ctx.px(values.float("distance").coerceAtLeast(0f))
         if (dist < 1e-3f) return src.copy()
         val w = src.width; val h = src.height

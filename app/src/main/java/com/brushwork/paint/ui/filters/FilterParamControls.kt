@@ -37,6 +37,7 @@ import com.brushwork.paint.filters.FilterParam
 import com.brushwork.paint.filters.FilterSession
 import com.brushwork.paint.filters.FilterSessionMath
 import com.brushwork.paint.filters.FilterValues
+import com.brushwork.paint.filters.art.CaBlend
 import com.brushwork.paint.filters.art.FringeColors
 import com.brushwork.paint.ui.color.ColorPickerDialog
 import com.brushwork.paint.ui.common.ChoiceChips
@@ -123,7 +124,8 @@ internal fun FilterParamControl(host: ParamHost, param: FilterParam, enabled: Bo
                 )
                 ResetSlot(host, param, enabled)
             }
-            is FilterParam.Choice -> {
+            // v1.9 (R10): the chromatic-aberration blend modes are a dropdown, as in the layers panel.
+            is FilterParam.Choice -> if (CaBlend.isModeChoice(param)) ChoiceDropdown(host, param, enabled) else {
                 LabelRow(host, param, enabled)
                 ChoiceChips(param.options, host.values.choice(param.key), { if (enabled) { host.update(param.key, it); host.onChangeFinished(param.key) } })
             }
