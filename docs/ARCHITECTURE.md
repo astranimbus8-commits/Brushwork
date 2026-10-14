@@ -1286,7 +1286,9 @@ shapes are no operand (the v1.8 stroke cut handles them). Rules and caps:
 applied to what the layer holds now (the footprint fed again when it changed). The region cut runs
 on `Dispatchers.Default` (`VectorDrawState.cutDispatcher` is the test seam), the busy overlay after
 `EraseLanding.CUT_BUSY_AFTER_MS`; it runs on the main thread for few targets (a tool erase: up to 50),
-inside another step, under another busy operation or after two reruns. While it runs it is the
+inside another step, under another busy operation or after two reruns, and under a test's render
+policy (`VectorLayers.Policy` SYNC or ASYNC) unless the test sets `cutDispatcher`
+(`VectorDrawState.cutsInBackground`), so Robolectric tests stay deterministic. While it runs it is the
 editor's `DeferredStep`: anything else that records a step lands it first. A layer that changed
 meanwhile reruns the erase on its new content. Undo: one step labelled
 `VectorEraserRecorder.ERASE_LABEL` (the Eraser) or `EraseLabels19.STEP_*` (a tool).
