@@ -166,6 +166,9 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
             controller.toast("Not enough memory for this brush")
             return null
         }
+        // v1.9 A6 (P4): "Drawing preview: Faster" for a stroke that paints pixels the user drags
+        // (not a path, a recorded stroke or the clone stamp, which keep v1.8's preview).
+        s.live = !isPath && recorder == null && coverageSource == null && controller.liveAdjust.beginStroke(layer)
         stroke = s
         return s
     }
@@ -423,6 +426,7 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
             }
             sampler.end()
             complete()
+            endLive()
         }
 
         /** Very large brushes on fast strokes would stall a frame: space their dabs further apart. */
@@ -442,10 +446,24 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
             return r.commit(label, Rect(bounds), commitPixels)
         }
 
+        /**
+         * v1.9 A6 (P4): true while the stroke previews faster (`LiveAdjust.beginStroke`, decided
+         * when it starts): what it paints goes to the live session instead of being invalidated,
+         * and [endLive] ends the session after the lift or the cancel.
+         */
+        var live = false
+
         protected fun flushDirty() {
             if (dirty.isEmpty) return
-            controller.invalidateDoc(dirty)
+            if (live) controller.liveAdjust.touchStroke(layer, dirty) else controller.invalidateDoc(dirty)
             dirty.setEmpty()
+        }
+
+        /** v1.9 A6 (P4): the live session refines to exact pixels (after the commit or the cancel redrew). */
+        protected fun endLive() {
+            if (!live) return
+            live = false
+            controller.liveAdjust.end(layer)
         }
 
         /**
@@ -454,10 +472,11 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
          * `displayCurrent`) and only what the lift itself adds is redrawn (the last dabs, the end
          * taper). `PreviewEqualsCommitParityTest` holds it for every case where it is true:
          * an RGB document (other color modes are constrained at the commit) and no recorder
-         * (it may commit something else than the pixels).
+         * (it may commit something else than the pixels). Never while it previews faster (P4:
+         * the canvas showed proxies).
          */
         protected open val previewIsCommit: Boolean
-            get() = recorder == null && controller.doc.colorMode == ColorMode.RGB
+            get() = recorder == null && controller.doc.colorMode == ColorMode.RGB && !live
 
         abstract fun onDab(dab: Dab)
         abstract fun afterEvent()
@@ -1335,6 +1354,7 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
         override fun cancel() {
             recorder?.cancel()
             release(redraw = true)
+            endLive()
         }
 
         private var released = false
@@ -1528,6 +1548,7 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
             val touched = Rect(rec.touched)
             rec.abort()
             if (!touched.isEmpty) controller.invalidateDoc(touched)
+            endLive()
         }
 
         private fun dropOverride() {

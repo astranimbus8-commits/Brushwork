@@ -18,7 +18,9 @@ import com.brushwork.paint.engine.FolderComposite
 import com.brushwork.paint.engine.MemoryGovernor
 import com.brushwork.paint.engine.MemoryPressure
 import com.brushwork.paint.model.Layer
+import kotlin.math.abs
 import kotlin.math.hypot
+import kotlin.math.ln
 import kotlin.math.min
 
 /**
@@ -37,6 +39,11 @@ import kotlin.math.min
  * `touch(layer, MaskEdits.effectRegion(c, layer))` per move (NOT `previewLayerProps`, whose
  * `invalidateDoc(null)` re-renders every tile on every move), then record the step with
  * `commitLayerProps` and call [end].
+ *
+ * v1.9 A6 (P4, [StrokePreview]): a painting stroke may run a stroke session ([beginStroke],
+ * [touchStroke], [end]): the same frames and refinement, its proxies compositing the whole stack
+ * (no below-cache), ended by zooming faster than [StrokePreview.ZOOM_GUARD_PER_SECOND]. Hidden
+ * as shipped (LA2 cut it on its proxy numbers): [beginStroke] is then always false.
  *
  * How a frame is made while a session runs:
  * - Display tiles touched by the session ("session tiles") that are dirty and on screen are not
@@ -107,9 +114,17 @@ class LiveAdjust(private val c: EditorController) {
 
     // ------------------------------------------------------------------ state
 
-    private class Session(val tiles: DisplayTiles, var layer: Layer) {
+    /**
+     * [stroke] (v1.9 A6, P4): a painting stroke's session ([beginStroke]): [layer] is the layer
+     * painted, and the proxies composite the whole stack (split 0, no below-cache).
+     */
+    private class Session(val tiles: DisplayTiles, var layer: Layer, val stroke: Boolean = false) {
         /** Display tiles this session changed (drawn from proxies until they are rendered). */
         val inSession = BooleanArray(tiles.tileCount)
+
+        /** A stroke session's zoom at its last frame and when ([LiveAdjust.clock]); 0 before the first. */
+        var lastZoom = 0f
+        var lastZoomNanos = 0L
         val isSession: (Int) -> Boolean = { inSession[it] }
         val notSession: (Int) -> Boolean = { !inSession[it] }
         var lastTouch = 0L
@@ -203,27 +218,73 @@ class LiveAdjust(private val c: EditorController) {
     fun touch(layer: Layer, region: Rect?, resting: Boolean = false) {
         // A new drag picks up a setting changed elsewhere (Settings); frames use the cached value.
         if (session == null && policy == Policy.LIVE) fastPreview = c.settings.fastAdjustPreview
-        if (!canRun(layer) || refused === layer) {
+        touchSession(layer, region, resting, stroke = false)
+    }
+
+    // ------------------------------------------------------------------ v1.9 A6 (P4): stroke sessions
+
+    /** The layer whose stroke [beginStroke] let preview faster (until [end]). */
+    private var strokeLayer: Layer? = null
+
+    /**
+     * v1.9 A6 (P4, [StrokePreview]): a painting stroke on [layer] starts. True when it previews
+     * faster: [policy] LIVE (I8: never under Robolectric unless a test opts in) and
+     * [StrokePreview.faster] (read once, here). The stroke then hands what each event painted to
+     * [touchStroke] instead of invalidating it, and calls [end] after its lift or cancel: while
+     * the finger moves, the tiles it touches are drawn from proxies that composite the whole
+     * stack at the proxy scale; after the lift (or 150 ms still) they refine to exact pixels.
+     * Zooming faster than [StrokePreview.ZOOM_GUARD_PER_SECOND] ends the session: the rest of
+     * the stroke is shown exactly. False: the caller invalidates as v1.8 did.
+     */
+    fun beginStroke(layer: Layer): Boolean {
+        if (policy != Policy.LIVE || !StrokePreview.faster(c.settings) || c.doc.indexOf(layer) < 0) return false
+        strokeLayer = layer
+        if (refused === layer) refused = null
+        return true
+    }
+
+    /** v1.9 A6 (P4): what the stroke [beginStroke] allowed painted in [region] (document px). */
+    fun touchStroke(layer: Layer, region: Rect?) = touchSession(layer, region, resting = false, stroke = true)
+
+    /**
+     * True when a stroke session zooms faster than [StrokePreview.ZOOM_GUARD_PER_SECOND] at this
+     * frame ([zoom]); records the frame's zoom.
+     */
+    private fun zoomingFast(s: Session, zoom: Float): Boolean {
+        val now = clock()
+        val z0 = s.lastZoom
+        val t0 = s.lastZoomNanos
+        s.lastZoom = zoom
+        s.lastZoomNanos = now
+        if (z0 <= 0f || z0 == zoom) return false
+        val seconds = (now - t0) / 1e9
+        return seconds <= 0.0 || abs(ln(zoom.toDouble() / z0)) / seconds > ln(StrokePreview.ZOOM_GUARD_PER_SECOND)
+    }
+
+    private fun touchSession(layer: Layer, region: Rect?, resting: Boolean, stroke: Boolean) {
+        if (!canRun(layer, stroke) || refused === layer) {
             if (session?.layer === layer) abort(null)
             c.invalidateDoc(region)
             return
         }
         val tiles = c.tiles
         var s = session
-        if (s != null && s.tiles !== tiles) {
+        if (s != null && (s.tiles !== tiles || s.stroke != stroke)) {
+            // (A stroke and an adjustment drag split the stack differently: the other one ends.)
             abort(null)
             s = null
         }
         if (s == null) {
             refused = null
-            s = Session(tiles, layer)
+            s = Session(tiles, layer, stroke)
             session = s
             install(tiles)
             handler?.removeCallbacks(freeLater)
         } else if (s.layer !== layer) {
-            // Another adjustment layer: the proxies split the stack somewhere else now.
+            // Another adjustment layer: the proxies split the stack somewhere else now. (A stroke
+            // on another layer: still the whole stack, and what changed was invalidated.)
             s.layer = layer
-            proxies?.invalidateAll()
+            if (!stroke) proxies?.invalidateAll()
         }
         if (!resting) {
             s.lastTouch = clock()
@@ -243,6 +304,7 @@ class LiveAdjust(private val c: EditorController) {
     /** The live edit of [layer] ended (finger up, sheet flushed): refine to exact. */
     fun end(layer: Layer) {
         if (refused === layer) refused = null
+        if (strokeLayer === layer) strokeLayer = null
         val s = session ?: return
         if (s.layer !== layer) return
         s.ended = true
@@ -271,6 +333,12 @@ class LiveAdjust(private val c: EditorController) {
             abort(null)
             return false
         }
+        if (s.stroke && zoomingFast(s, zoomOf(docToScreen))) {
+            // P4's guard: the rest of the stroke is shown exactly (from this frame on).
+            refused = s.layer
+            abort(null)
+            return false
+        }
         val tiles = s.tiles
         s.visible = Rect(visibleDoc)
         s.needsFrame = false
@@ -290,7 +358,7 @@ class LiveAdjust(private val c: EditorController) {
         } catch (e: OutOfMemoryError) {
             // One toast: the rest of this drag runs the exact path (until [end]).
             refused = s.layer
-            abort(OUT_OF_MEMORY)
+            abort(if (s.stroke) null else OUT_OF_MEMORY)
             return false
         }
         if (p == null) {
@@ -327,19 +395,27 @@ class LiveAdjust(private val c: EditorController) {
     fun release() {
         session = null
         refused = null
+        strokeLayer = null
         freeBuffers()
         handler?.removeCallbacks(idleWake)
     }
 
     // ------------------------------------------------------------------ frames
 
-    private fun canRun(layer: Layer): Boolean =
-        policy == Policy.LIVE && fastPreview && layer.isAdjustmentLayer && c.doc.effectiveVisible(layer) && c.doc.indexOf(layer) >= 0 &&
+    /** v1.9 A6: a [stroke] session runs only for the layer [beginStroke] allowed (any layer kind, any folder: split 0). */
+    private fun canRun(layer: Layer, stroke: Boolean = false): Boolean =
+        if (stroke) policy == Policy.LIVE && strokeLayer === layer && c.doc.indexOf(layer) >= 0
+        else policy == Policy.LIVE && fastPreview && layer.isAdjustmentLayer && c.doc.effectiveVisible(layer) && c.doc.indexOf(layer) >= 0 &&
             splitsAsIs(layer)
 
     private fun valid(s: Session): Boolean =
-        policy == Policy.LIVE && fastPreview && s.tiles === c.tiles && s.layer.isAdjustmentLayer && c.doc.indexOf(s.layer) >= 0 && splitsAsIs(s.layer) &&
-            s.tiles.docWidth == c.doc.width && s.tiles.docHeight == c.doc.height
+        if (s.stroke) {
+            policy == Policy.LIVE && s.tiles === c.tiles && c.doc.indexOf(s.layer) >= 0 &&
+                s.tiles.docWidth == c.doc.width && s.tiles.docHeight == c.doc.height
+        } else {
+            policy == Policy.LIVE && fastPreview && s.tiles === c.tiles && s.layer.isAdjustmentLayer && c.doc.indexOf(s.layer) >= 0 && splitsAsIs(s.layer) &&
+                s.tiles.docWidth == c.doc.width && s.tiles.docHeight == c.doc.height
+        }
 
     /**
      * v1.7 (§3.8 c): the proxies split the flat stack at [layer] (below-cache `[0, k)`, then
@@ -377,7 +453,8 @@ class LiveAdjust(private val c: EditorController) {
     private fun proxiesFor(s: Session, pending: IntArray, zoom: Float): ProxyTiles? {
         val tiles = s.tiles
         var scale = min(proxyScaleFor(zoom), s.scaleCap)
-        val split = c.doc.indexOf(s.layer)
+        // v1.9 A6 (P4): a stroke's proxies composite the whole stack (no below-cache: step 9's P3).
+        val split = if (s.stroke) 0 else c.doc.indexOf(s.layer)
         val withBelow = split > 0
         var needed: IntArray
         while (true) {

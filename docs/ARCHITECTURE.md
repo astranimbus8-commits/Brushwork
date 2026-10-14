@@ -1944,9 +1944,32 @@ thread and return the bytes freed. The "Fast adjustment preview" switch reads R1
 (`FAST_ADJUST_PREVIEW_DESCRIPTION = StabilityLabels19.FAST_ADJUST_NOTE`) in Settings and in the
 Masks sheet.
 
+**Drawing preview (P4, LA2): CUT (proxy), kept hidden.** `engine/live/StrokePreview` and
+`ui/editor/DrawingPreviewSetting` ("Drawing preview": "Faster" or "Exact pixels", saved in
+`AppSettings.drawPreview`, default "Faster", with `StabilityLabels19.DRAWING_PREVIEW_NOTE` under
+the chips, in Settings' Display section after "Fast adjustment preview"). With "Faster" a stroke
+that paints pixels the user drags (not a path, a recorded stroke or the clone stamp) asks
+`LiveAdjust.beginStroke` when it starts; under the live policy it then hands each event's dirty
+rect to `LiveAdjust.touchStroke` instead of invalidating it: a stroke session whose proxies
+composite the whole stack (split 0, no below-cache: that is step 9's P3) at the proxy scale, and
+`end` after the lift or the cancel refines to exact pixels. Dabs are stamped at document
+resolution in both modes, so the layer, the undo step and the canvas after refinement are the
+same (I1, I7); the lift redraws the stroke's tiles (`previewIsCommit` is false while live).
+Zooming faster than x1.2 per second ends the session; the rest of that stroke is drawn exactly.
+LA2 ships it only when "Faster" is at least 20 % cheaper per frame on A4 or PRINT at fit;
+`v19/a6/DrawPreviewProxyBench` (JVM, local) measured Faster / Exact ms per drawing frame: A4 at fit
+(0.39) 8.50 / 8.40, at 0.47 8.83 / 8.99; PRINT at fit (0.32) 9.09 / 9.19, at 0.41 9.83 / 9.73. The
+frame is the tiles' blit and the canvas chrome; the stroke's own composite is about 2 % of it. So
+`StrokePreview.SHIPPED` is false: the setting is not shown, `StrokePreview.faster` is false and
+every stroke previews as in v1.8 ("Exact pixels"). Flipping `SHIPPED` ships it as built.
+
 **Guards.** `v19/a6/LiftInvalidationTest`, `PreviewEqualsCommitParityTest`,
 `DisplayTilesReuseTest`, `MaskInteractionScaleTest`, `BrushMaskIncrementalTest`,
-`MaskReleaseParityTest`, `GovernorRegistrationTest`; Timing (`A6Bench`, the P0 bench's way of
+`MaskReleaseParityTest`, `GovernorRegistrationTest`, `DrawingPreviewGuardTest` (P4 off as
+shipped and under EXACT; opted in, the stroke is drawn from proxies and lands bit for bit as
+"Exact pixels"; the zoom guard), `qa19/Qa19DrawPreviewUiTest` and `Qa19DrawPreviewNarrowUiTest`
+(hidden as shipped; available, the setting whole at 392 and 360 dp and font scales 1, 1.3, 2.0);
+Timing (`A6Bench`, the P0 bench's way of
 timing a laid-out `CanvasView`): `LiftPerfTest` (the brush lift and the raster Eraser's frame on a
 512 px canvas; locally the PRINT lift within Q5's 40 ms at the T606 factor 6 and the PHONE erase
 frame within 1.5x A6's checkpoint) and `MaskFramePerfTest` (the mask tool's work per frame, live

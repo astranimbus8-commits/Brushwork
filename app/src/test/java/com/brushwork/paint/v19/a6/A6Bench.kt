@@ -103,6 +103,9 @@ internal class A6Bench(
         return PerfTrace.lastMs(PerfTrace.FRAME) ?: throw AssertionError("no FRAME span")
     }
 
+    /** The last frame's pixels (the whole view). */
+    fun pixels(): IntArray = IntArray(screenW * screenH).also { screen.getPixels(it, 0, screenW, 0, 0, screenW, screenH) }
+
     /** The app's own fit; returns the zoom. */
     fun fit(): Float {
         view.fitToScreen()
@@ -136,8 +139,9 @@ internal class A6Bench(
      * One stroke through [pts] with the active painting tool, a frame after every second event.
      * Returns the median frame while drawing and the lift (LIFT); then draws the frame after the
      * lift, undoes the stroke and draws again (untimed), so every run paints the same layer.
+     * [onFrame] runs after each frame while drawing.
      */
-    fun strokeRun(pts: List<PointF>): Pair<Float, Float> {
+    fun strokeRun(pts: List<PointF>, onFrame: () -> Unit = {}): Pair<Float, Float> {
         val frames = ArrayList<Float>(pts.size / 2 + 1)
         c.pointerDown(point(pts[0]))
         var i = 1
@@ -145,6 +149,7 @@ internal class A6Bench(
             c.pointerMove(point(pts[i++]))
             if (i < pts.size - 1) c.pointerMove(point(pts[i++]))
             frames += frame()
+            onFrame()
         }
         PerfTrace.clear()
         c.pointerUp(point(pts.last()))
