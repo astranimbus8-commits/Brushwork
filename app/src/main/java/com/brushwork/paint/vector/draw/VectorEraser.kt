@@ -10,7 +10,6 @@ import android.graphics.PorterDuffXfermode
 import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Shader
-import com.brushwork.paint.DeferredStep
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.brush.BrushPreset
 import com.brushwork.paint.brush.StrokeRaster
@@ -19,17 +18,7 @@ import com.brushwork.paint.engine.LayerConvert
 import com.brushwork.paint.engine.LayerRenderOverride
 import com.brushwork.paint.engine.PerfTrace
 import com.brushwork.paint.model.Layer
-import com.brushwork.paint.vector.VObject
 import com.brushwork.paint.vector.VectorContent
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.Deferred
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlin.math.max
 
 /**
@@ -41,7 +30,8 @@ import kotlin.math.max
  *
  * v1.9 (R11 b, I20; A5): on a legacy shape layer ([convertFirst]) the eraser works on the object
  * the shape becomes ([LayerConvert.shapeToVector]); the layer becomes a vector layer in the same
- * step ([ERASE_LABEL]), and only when the gesture erases something.
+ * step ([ERASE_LABEL]), and only when the gesture erases something. The lift lands through
+ * [EraseLanding] (the partial eraser's region cut in the background), as a tool's erase does.
  */
 internal class VectorEraserRecorder(
     private val c: EditorController,
@@ -62,22 +52,32 @@ internal class VectorEraserRecorder(
     override val ignoresSelection: Boolean = true
 
     private val state = VectorDrawState.of(c)
-    private val session = EraseSession(contentNow() ?: VectorContent.EMPTY, mode, state.targets)
-    private val preview = DoomPreview(layer, session)
-    private var previous: LayerRenderOverride? = null
-    private var installed = false
-    private var ended = false
 
     /** The eraser's path (x, y, radius per point), to apply it again if the layer changes meanwhile. */
     private var path = FloatArray(96)
     private var pathSize = 0
 
-    /**
-     * What the eraser works on now: the layer's objects, or (on a shape layer to convert) the
-     * object its shape becomes; null when there is none (the layer changed kind meanwhile).
-     */
-    private fun contentNow(): VectorContent? =
-        layer.vector ?: if (convertFirst) LayerConvert.shapeToVector(layer) else null
+    /** Every region cut runs in the background (none on this thread by count). */
+    private val landing: EraseLanding = EraseLanding(c, layer, mode, convertFirst, ERASE_LABEL, Swept(), syncTargets = 0) { removePreview() }
+    private val session = EraseSession(landing.contentNow() ?: VectorContent.EMPTY, mode, state.targets)
+    private val preview = DoomPreview(layer, session)
+    private var ended = false
+
+    /** The gesture as the erase's footprint: its points again, and the region they swept. */
+    private inner class Swept : EraseFootprint {
+        override fun feed(s: EraseSession) {
+            var k = 0
+            while (k < pathSize) { s.add(path[k], path[k + 1], path[k + 2]); k += 3 }
+        }
+
+        override fun region(): Path {
+            val n = pathSize / 3
+            val xs = FloatArray(n) { path[3 * it] }
+            val ys = FloatArray(n) { path[3 * it + 1] }
+            val rs = FloatArray(n) { path[3 * it + 2] }
+            return EraseCut.sweptRegion(xs, ys, rs, n)
+        }
+    }
 
     /** The eraser's radius at raw pressure [raw] (size follows a stylus' pressure like the brush). */
     private fun radius(raw: Float): Float {
@@ -100,159 +100,19 @@ internal class VectorEraserRecorder(
             // (the region cut itself comes at the lift).
             if (!overRegion) parts else preview.punch(session.capsule).also { if (parts != null) it.union(parts) }
         } ?: return
-        if (!installed) {
-            installed = true
-            previous = c.renderOverride?.takeIf { it !== preview }
-            c.renderOverride = preview
-        }
+        preview.install(c)
         if (!dirty.isEmpty) c.invalidateDoc(dirty)
     }
 
     override fun commit(label: String, bounds: Rect, commitPixels: () -> Boolean): Boolean {
         if (ended) return false
-        if (contentNow() == null || c.doc.indexOf(layer) < 0) { end(); return false }
+        if (landing.contentNow() == null || c.doc.indexOf(layer) < 0) { end(); return false }
         // No more points. The preview stays until the new content is on the layer: the
-        // update of an earlier gesture may still be on its way, and this one may render in the
-        // background.
+        // update of an earlier gesture may still be on its way, and this one may render (or
+        // cut) in the background.
         ended = true
-        state.serial(layer) { finish -> apply(finish) }
+        landing.start(session)
         return true
-    }
-
-    /**
-     * Removes what the gesture erased from what the layer holds NOW (ONE undo step "Erase");
-     * [finish] is called once it was applied (or nothing was to be done).
-     *
-     * v1.9 (R11 c): the partial eraser's region cut of shapes and filled paths runs here, on
-     * `Dispatchers.Default` over the immutable objects ([cutInBackground]; the preview stays
-     * meanwhile, the busy overlay shows after [CUT_BUSY_AFTER_MS]); when the layer changed while
-     * it ran, the whole erase runs again on what it holds then ([reruns]). It runs on this thread
-     * inside another step, under another busy operation, while a pending step is flushed
-     * ([sync]) and after [MAX_RERUNS] reruns.
-     */
-    private fun apply(finish: () -> Unit, reruns: Int = 0, sync: Boolean = false) {
-        val current = contentNow()
-        if (current == null || c.doc.indexOf(layer) < 0) { removePreview(); finish(); return }
-        // v1.9: a shape layer still to convert (its shape decodes again into an equal object).
-        val converting = layer.vector == null
-        // The layer changed since the gesture began (an update landed meanwhile): the same
-        // eraser path is applied to what the layer holds now.
-        val same = current === session.content || (converting && current == session.content)
-        val final = if (same) session else EraseSession(current, mode, state.targets).also { s ->
-            var k = 0
-            while (k < pathSize) { s.add(path[k], path[k + 1], path[k + 2]); k += 3 }
-        }
-        val targets = final.cutTargets()
-        if (targets.isEmpty()) { land(final, EraseCut.Cuts.NONE, finish); return }
-        val region = sweptRegion()
-        if (sync || state.cutsNow > 0 || reruns >= MAX_RERUNS || c.editDepth != 0 || c.busyMessage != null || !c.scope.isActive) {
-            val cuts = try {
-                PerfTrace.span(PerfTrace.CUT) { EraseCut.cutAll(targets, region) }
-            } catch (e: Exception) {
-                EraseCut.Cuts.FAILED
-            }
-            land(final, cuts, finish)
-            return
-        }
-        cutInBackground(Cutting(final, current, finish, reruns), targets, region)
-    }
-
-    /** The region the gesture swept ([EraseCut.sweptRegion] of its points). */
-    private fun sweptRegion(): Path {
-        val n = pathSize / 3
-        val xs = FloatArray(n) { path[3 * it] }
-        val ys = FloatArray(n) { path[3 * it + 1] }
-        val rs = FloatArray(n) { path[3 * it + 2] }
-        return EraseCut.sweptRegion(xs, ys, rs, n)
-    }
-
-    /**
-     * A region cut on its way in the background, for [final] over [base] (what the layer held).
-     * As the editor's [DeferredStep] it lands at once when anything else records a step.
-     */
-    private inner class Cutting(val final: EraseSession, val base: VectorContent, val finish: () -> Unit, val reruns: Int) : DeferredStep {
-        var job: Deferred<EraseCut.Cuts>? = null
-        var done = false
-        val completion = CompletableDeferred<Unit>()
-
-        override fun flush() {
-            if (done) return
-            val cuts = try {
-                runBlocking { job?.await() }
-            } catch (e: CancellationException) {
-                null
-            } catch (e: Exception) {
-                EraseCut.Cuts.FAILED
-            }
-            // Whatever lands (or runs again) now does it on this thread, as one step.
-            state.cutsNow++
-            try {
-                c.editScope { landed(this, cuts) }
-            } finally {
-                state.cutsNow--
-            }
-        }
-    }
-
-    private fun cutInBackground(p: Cutting, targets: List<VObject>, region: Path) {
-        val job = c.scope.async(state.cutDispatcher ?: Dispatchers.Default) { PerfTrace.span(PerfTrace.CUT) { EraseCut.cutAll(targets, region) } }
-        p.job = job
-        c.addDeferredStep(p)
-        // (Dispatchers.Main, not immediate, as VectorLayers' renders: it never lands inside another operation.)
-        c.scope.launch(Dispatchers.Main) {
-            val cuts = try {
-                job.await()
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                EraseCut.Cuts.FAILED
-            }
-            landed(p, cuts)
-        }
-        c.scope.launch {
-            delay(CUT_BUSY_AFTER_MS)
-            if (!p.done && c.busyMessage == null) c.runBusy(ERASE_LABEL) { p.completion.await() }
-        }
-    }
-
-    /**
-     * The region cut [p] is back ([cuts]; null: it was dropped): applied when the layer still
-     * holds what it was cut from, else the erase runs again on what it holds now.
-     */
-    private fun landed(p: Cutting, cuts: EraseCut.Cuts?) {
-        if (p.done) return
-        p.done = true
-        c.removeDeferredStep(p)
-        p.completion.complete(Unit)
-        val now = contentNow()
-        val same = now != null && c.doc.indexOf(layer) >= 0 && (now === p.base || (layer.vector == null && now == p.base))
-        if (!same || cuts == null) { apply(p.finish, p.reruns + 1); return }
-        land(p.final, cuts, p.finish)
-    }
-
-    /** Applies [final]'s result with the region cut's pieces [cuts] (the layer holds [EraseSession.content]). */
-    private fun land(final: EraseSession, cuts: EraseCut.Cuts, finish: () -> Unit) {
-        val converting = layer.vector == null
-        val after = final.result(cuts.pieces)
-        if (after == null) { removePreview(); finish(); return }
-        try {
-            if (!converting) {
-                state.update(c, layer, after, ERASE_LABEL) { removePreview(); finish() }
-            } else if (c.doc.effectiveLocked(layer) || !c.doc.effectiveVisible(layer)) {
-                // (The update would refuse it: no conversion either.)
-                removePreview(); finish()
-            } else {
-                // ONE step: the conversion, then the erase on the vector layer it made (rendered
-                // synchronously inside the step).
-                c.groupUndo(ERASE_LABEL) {
-                    LayerConvert.toVectorAction(c, layer, label = ERASE_LABEL)?.let(c::pushUndo)
-                    state.update(c, layer, after, ERASE_LABEL) { removePreview(); finish() }
-                }
-            }
-        } catch (e: Throwable) {
-            removePreview()
-            throw e
-        }
     }
 
     override fun cancel() {
@@ -266,29 +126,15 @@ internal class VectorEraserRecorder(
     }
 
     private fun removePreview() {
-        preview.alive = false
-        preview.release()
-        if (installed) {
-            installed = false
-            // What was installed before this gesture comes back, unless it is the preview of an
-            // earlier gesture whose update landed meanwhile (with background updates a second
-            // gesture can start before the first one's preview goes): that one must not return.
-            if (c.renderOverride === preview) c.renderOverride = previous?.takeIf { it !is DoomPreview || it.alive }
-            previous = null
-            val r = preview.bounds()
-            if (!r.isEmpty) c.invalidateDoc(r)
-        }
+        preview.remove(c)
     }
 
     companion object {
         /** The undo step of one eraser gesture on a vector layer. */
         const val ERASE_LABEL = "Erase"
 
-        /** A region cut still running after this long (ms) shows the busy overlay (as `VectorLayers.BUSY_AFTER_MS`). */
-        const val CUT_BUSY_AFTER_MS = 400L
-
-        /** After this many reruns (the layer kept changing while the cut ran) it runs on the main thread. */
-        private const val MAX_RERUNS = 2
+        /** A region cut still running after this long (ms) shows the busy overlay ([EraseLanding.CUT_BUSY_AFTER_MS]). */
+        const val CUT_BUSY_AFTER_MS = EraseLanding.CUT_BUSY_AFTER_MS
     }
 }
 
@@ -305,12 +151,23 @@ internal class VectorEraserRecorder(
  *
  * Known difference with the result: an object that stays but lies under a removed part is
  * hidden there too until the finger lifts (the layer's pixels are one image).
+ *
+ * v1.9 (A5): a tool's erase ([ToolEraseSession]) shows its outline's erase with one preview,
+ * whose session it [replace]s whenever the outline changes.
  */
-internal class DoomPreview(override val layer: Layer, private val session: EraseSession) : LayerRenderOverride {
+internal class DoomPreview(override val layer: Layer, session: EraseSession) : LayerRenderOverride {
     private class Item(val path: Path, val width: Float, val fill: Boolean, val butt: Boolean, val bounds: RectF)
+
+    /** What the preview takes away (the objects of [update]'s indices). */
+    private var session: EraseSession = session
 
     /** False once its gesture ended (cancelled, or its update applied): it must never be installed again. */
     var alive = true
+
+    /** Installed as the editor's render override by [install] (until [remove]). */
+    private var installed = false
+    /** What was installed before (it comes back at [remove]). */
+    private var previous: LayerRenderOverride? = null
 
     private val items = HashMap<Int, List<Item>>()
     private val union = RectF()
@@ -384,6 +241,75 @@ internal class DoomPreview(override val layer: Layer, private val session: Erase
         it.bounds.roundOut(r)
         r.inset(-2, -2)
         return r
+    }
+
+    /**
+     * v1.9 (R11 c): takes a tool's footprint away (its [outline] stroked [width] wide, round, plus
+     * its fill when [filled]), as the partial eraser's region cut will at the commit; returns the
+     * area to redraw.
+     */
+    fun punchOutline(outline: Path, width: Float, filled: Boolean): Rect {
+        val list = ArrayList<Item>(2)
+        if (width > 0f) list += item(outline, width, fill = false, butt = false)
+        if (filled) list += item(outline, 0f, fill = true, butt = false)
+        val r = Rect()
+        if (list.isEmpty()) return r
+        items[-(++punches)] = list
+        val dirty = RectF()
+        for (it in list) dirty.union(it.bounds)
+        union.union(dirty)
+        stale.union(dirty)
+        dirty.roundOut(r)
+        r.inset(-2, -2)
+        return r
+    }
+
+    /**
+     * v1.9 (A5): a tool's outline changed: what it took away comes back and [s] is what it
+     * erases now (its changes are [update]d next); returns the area to redraw.
+     */
+    fun replace(s: EraseSession): Rect {
+        session = s
+        val r = Rect()
+        if (!union.isEmpty) {
+            union.roundOut(r)
+            r.inset(-2, -2)
+        }
+        stale.union(union)
+        items.clear()
+        union.setEmpty()
+        punches = 0
+        return r
+    }
+
+    /**
+     * Installs it as [c]'s render override (again, when something else took its place). What
+     * was installed before comes back at [remove]: any override with [restoreAny], else only
+     * the preview of an earlier erase still on its way.
+     */
+    fun install(c: EditorController, restoreAny: Boolean = true) {
+        val current = c.renderOverride
+        if (current === this) return
+        if (!installed) {
+            installed = true
+            previous = current?.takeIf { restoreAny || (it is DoomPreview && it.alive) }
+        }
+        c.renderOverride = this
+    }
+
+    /** Its erase ended (applied or cancelled): it goes for good, and what it covered is redrawn. */
+    fun remove(c: EditorController) {
+        alive = false
+        release()
+        if (!installed) return
+        installed = false
+        // What was installed before comes back, unless it is the preview of an earlier erase
+        // whose update landed meanwhile (with background updates a second gesture can start
+        // before the first one's preview goes): that one must not return.
+        if (c.renderOverride === this) c.renderOverride = previous?.takeIf { it !is DoomPreview || it.alive }
+        previous = null
+        val r = bounds()
+        if (!r.isEmpty) c.invalidateDoc(r)
     }
 
     /** The gesture ended: the mask goes (this preview is never drawn again). */

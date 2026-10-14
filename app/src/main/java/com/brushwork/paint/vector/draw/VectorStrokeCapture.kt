@@ -39,9 +39,10 @@ object VectorStrokeCapture {
 
     /**
      * v1.9: the Eraser on a legacy shape layer whose shape doesn't decode (it can't become an
-     * object). `EditorController.convertToVectorLayer`'s message for the same case.
+     * object). `EditorController.convertToVectorLayer`'s message for the same case. Also a
+     * tool's erase ([ToolErase.begin]).
      */
-    private const val SHAPE_UNREADABLE_MESSAGE = "This shape can't be converted"
+    internal const val SHAPE_UNREADABLE_MESSAGE = "This shape can't be converted"
 
     fun hookFor(c: EditorController, info: StrokeInfo): StrokeHook {
         val layer = info.layer

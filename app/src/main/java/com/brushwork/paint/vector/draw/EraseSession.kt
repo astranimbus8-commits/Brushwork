@@ -186,6 +186,15 @@ internal class EraseSession(
         return regionHit
     }
 
+    /**
+     * v1.9 (A5): the eraser lifts; the next [add] starts a new run of capsules (with a disc). A
+     * tool's outline ([ToolEraseSession]) is several runs: its contours and its fill's rows.
+     */
+    fun lift() {
+        lastX = Float.NaN
+        lastY = Float.NaN
+    }
+
     private fun apply(cx: Float, cy: Float, dx: Float, dy: Float, r: Float) {
         val l = min(cx, dx) - r; val t = min(cy, dy) - r
         val rt = max(cx, dx) + r; val b = max(cy, dy) + r
