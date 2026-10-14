@@ -11,6 +11,7 @@ import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlin.coroutines.CoroutineContext
 
 /**
@@ -23,11 +24,13 @@ import kotlin.coroutines.CoroutineContext
  *   [StabilityLabels19.ERROR_TOAST] is shown with the tool's name (outside the editor, the error's
  *   class), and the app goes on: the app, editor and font scopes are `SupervisorJob`s, so only
  *   the failed job ends.
- * - Release builds, a job whose error has already ended its scope ([tookItsScopeDown]): the scope
- *   is no supervisor. Every composable's `rememberCoroutineScope` is one: Compose makes it a plain
- *   child of the window's Recomposer, so the error has cancelled the Recomposer too, and the
- *   screen would never draw or take a touch again. Going on would leave a dead screen, so the
- *   error is handed on as in a debug build: the app stops with a report (v1.8's outcome, now kept).
+ * - Release builds, a job whose error ends its scope ([tookItsScopeDown]): the scope is no
+ *   supervisor. Every composable's `rememberCoroutineScope` is one: Compose makes it a plain
+ *   child of the window's Recomposer, so the error cancels the Recomposer too, and the screen
+ *   would never draw or take a touch again. Going on would leave a dead screen, so the error is
+ *   handed on as in a debug build: the app stops with a report (v1.8's outcome, now kept).
+ *   A supervisor scope closed by its owner (the editor scope as the editor closes) is not ended
+ *   by a job that throws as it unwinds: that error is recovered from.
  * - Debug builds, tests (Robolectric) and a JVM with no app: the error goes to the thread's
  *   uncaught-exception handler as in v1.8 (and so to [CrashLog]'s handler: the app stops with a
  *   report), so a bug is never hidden while the app is built.
@@ -69,20 +72,27 @@ object ErrorReporter {
     }
 
     /**
-     * True when the failed job's scope ([context]'s job's parent) is no longer active. A job's
-     * error reaches this handler only after it has cancelled its parent, unless the parent is a
-     * supervisor; so the scope is no supervisor (a composable's `rememberCoroutineScope`, whose
-     * Recomposer is now cancelled too), or it had ended before (a late error: handed on, as v1.8
-     * did). A supervisor scope that is running stays active: its job's error is recovered from.
+     * True when the failed job's error ends its scope: the scope ([context]'s job's parent) is no
+     * `SupervisorJob` and is no longer active. A job's error reaches this handler only after it has
+     * gone to its parent. A parent that is no supervisor is cancelled by it, or was ending already
+     * and passes the error on up as it ends; so is every plain job above it. A composable's
+     * `rememberCoroutineScope` is such a scope, also after the composable has left (its job
+     * throwing as it unwinds): the window's Recomposer above it is cancelled too.
+     * A supervisor scope never takes its jobs' errors: running, or closed by its owner (the editor
+     * scope as the editor closes, a job that throws as it unwinds), it is recovered from.
      * A root job (no parent) is recovered from.
      */
     @OptIn(ExperimentalCoroutinesApi::class)
     internal fun tookItsScopeDown(context: CoroutineContext): Boolean = try {
-        context[Job]?.parent?.isActive == false
+        val parent = context[Job]?.parent
+        parent != null && !parent.isActive && parent.javaClass !== supervisorJobClass
     } catch (_: Throwable) {
         // Not even the job's state can be read: never go on with a scope in doubt.
         true
     }
+
+    /** The class `SupervisorJob()` makes, told by identity (so a shrunk release build tells it too). */
+    private val supervisorJobClass: Class<*> by lazy { SupervisorJob().javaClass }
 
     /** The editor's tool reset and the toast (main thread). */
     private fun recover(e: Throwable) {

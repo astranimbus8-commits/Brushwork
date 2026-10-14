@@ -1019,12 +1019,14 @@ policy for errors no job caught, and the two tools' jobs guarded and moved off t
   `UnguardedLaunchGateTest` fails a scope without it, and `GlobalScope` always). Release builds
   (not debuggable): the error is kept as a quiet report, the open tool's touch is cancelled
   (`Tool.onCancel`), `StabilityLabels19.ERROR_TOAST` names the tool (outside the editor, the
-  error's class), and the app goes on (`SupervisorJob`: only the failed job ends). Not where the
-  error has already ended the job's scope (`ErrorReporter.tookItsScopeDown`: the parent job is
-  no longer active): a composable's `rememberCoroutineScope` is no supervisor (Compose makes it a
-  plain child of the window's Recomposer and refuses a job of ours), so its job's error has
-  cancelled the Recomposer too and going on would leave a screen that never draws or takes a
-  touch again; that error is handed on and the app stops with the report (v1.8's outcome).
+  error's class), and the app goes on (`SupervisorJob`: only the failed job ends; also when the
+  scope's owner had closed it, as the editor scope when the editor closes, and the job throws as
+  it unwinds). Not where the error ends the job's scope (`ErrorReporter.tookItsScopeDown`: the
+  parent job is no `SupervisorJob`, told by class identity, and is no longer active): a
+  composable's `rememberCoroutineScope` is no supervisor (Compose makes it a plain child of the
+  window's Recomposer and refuses a job of ours), so its job's error cancels the Recomposer too,
+  even after the composable has left, and going on would leave a screen that never draws or
+  takes a touch again; that error is handed on and the app stops with the report (v1.8's outcome).
   Debug builds, tests and a JVM with no app hand every error to the thread's uncaught handler,
   as v1.8 did, so a bug is never hidden. `EditorSession` keeps its open, save and close failures
   as reports too.
@@ -1073,7 +1075,8 @@ policy for errors no job caught, and the two tools' jobs guarded and moved off t
   their errors too are survived rather than handed on.
 - **Tests** (`app/src/test/java/com/brushwork/paint/v19/a7a/`): `CrashLogTest`,
   `ExitInfoReasonTest`, `FreezeWatchdogTest`, `ErrorReporterReleaseTest`,
-  `ErrorReporterScopeTest` (a real composition: its Recomposer is gone, the error handed on),
+  `ErrorReporterScopeTest` (a real composition: its Recomposer is gone, the error handed on, also
+  after the composable has left; a supervisor closed by its owner: the error survived),
   `UnguardedLaunchGateTest`, `CrashCardRobolectricTest`, `DiagnosticsSectionRobolectricTest` (the
   one UI class: the card at 360 and 392 dp and the list, font scales 1, 1.3 and 2.0),
   `MagneticLassoGuardTest`, `ColorSelectNoProxyInDrawTest`, `RenderScaledTest`,

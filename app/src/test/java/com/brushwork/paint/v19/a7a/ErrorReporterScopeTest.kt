@@ -16,6 +16,7 @@ import kotlinx.coroutines.ExecutorCoroutineDispatcher
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -46,9 +47,11 @@ import java.util.concurrent.atomic.AtomicReference
  *   is the scope above it). Every composable's `rememberCoroutineScope` is such a scope, a plain
  *   child of the window's Recomposer: going on there would leave a screen that never draws or
  *   takes a touch again, so even a release build hands the error on (the app stops with a report,
- *   v1.8's outcome). Shown with a real composition: its Recomposer shuts down.
+ *   v1.8's outcome). Shown with a real composition: its Recomposer shuts down, also when the job
+ *   throws as it unwinds after the composable has left.
  * - A supervisor scope (the app, editor and font scopes) stays: its job's error is kept, said and
- *   survived, a nested job's too.
+ *   survived, a nested job's too; and a supervisor scope closed by its owner (the editor closing)
+ *   is never ended by a job that throws as it unwinds: that error is kept and said too.
  *
  * The jobs run on a thread of their own whose uncaught-exception handler stands in for the app's.
  */
@@ -137,6 +140,65 @@ class ErrorReporterScopeTest {
             runCatching { runBlocking { withContext(thread) { composition.dispose() } } }
             recomposer.cancel()
         }
+    }
+
+    @Test
+    fun aComposablesJobThatThrowsAfterTheComposableLeftIsHandedOnItStillEndsTheRecomposer() {
+        val recomposer = Recomposer(thread + BroadcastFrameClock())
+        val composition = Composition(UnitApplier, recomposer)
+        val scope = AtomicReference<CoroutineScope?>()
+        val waiting = CountDownLatch(1)
+        try {
+            runBlocking {
+                withContext(thread) {
+                    composition.setContent {
+                        val s = rememberCoroutineScope { ErrorReporter.handler }
+                        scope.set(s)
+                    }
+                }
+            }
+            scope.get()!!.launch {
+                try {
+                    waiting.countDown()
+                    awaitCancellation()
+                } finally {
+                    throw IllegalStateException("as the composable left")
+                }
+            }
+            assertTrue("running", waiting.await(5, TimeUnit.SECONDS))
+            // The composable leaves: its scope is cancelled, the job throws as it unwinds.
+            runBlocking { withContext(thread) { composition.dispose() } }
+            assertTrue("handed on", handed.await(5, TimeUnit.SECONDS))
+            assertTrue("${handedOn.get()}", handedOn.get() is IllegalStateException)
+            // Why: the error still goes up from the cancelled scope to the Recomposer.
+            val deadline = System.currentTimeMillis() + 5_000
+            while (recomposer.currentState.value > Recomposer.State.ShuttingDown && System.currentTimeMillis() < deadline) Thread.sleep(10)
+            assertTrue("the Recomposer shuts down: ${recomposer.currentState.value}", recomposer.currentState.value <= Recomposer.State.ShuttingDown)
+        } finally {
+            recomposer.cancel()
+        }
+    }
+
+    @Test
+    fun aJobThatThrowsAfterItsSupervisorScopeWasClosedIsKeptSaidAndSurvived() {
+        val scope = CoroutineScope(SupervisorJob() + thread + ErrorReporter.handler)
+        val waiting = CountDownLatch(1)
+        val job = scope.launch {
+            try {
+                waiting.countDown()
+                awaitCancellation()
+            } finally {
+                throw IllegalStateException("as the editor closed")
+            }
+        }
+        assertTrue("running", waiting.await(5, TimeUnit.SECONDS))
+        scope.cancel() // the editor closes (EditorSession), the job throws as it unwinds
+        runBlocking { job.join() }
+        assertNull("nothing handed on: ${handedOn.get()}", handedOn.get())
+        Smoke.pump(100)
+        assertEquals(StabilityLabels19.ERROR_TOAST.format("IllegalStateException"), ShadowToast.getTextOfLatestToast())
+        CrashLog.drain()
+        assertEquals(listOf("Handled error: IllegalStateException in coroutine"), CrashLog.reports(app).map { it.summary })
     }
 
     @Test
