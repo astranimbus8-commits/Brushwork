@@ -169,6 +169,9 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
         // v1.9 A6 (P4): "Drawing preview: Faster" for a stroke that paints pixels the user drags
         // (not a path, a recorded stroke or the clone stamp, which keep v1.8's preview).
         s.live = !isPath && recorder == null && coverageSource == null && controller.liveAdjust.beginStroke(layer)
+        // v1.9 A6 (P3, R11a): the same strokes draw the layers below theirs from an exact cache.
+        s.below = !isPath && recorder == null && coverageSource == null &&
+            controller.liveAdjust.strokeBelow.begin(layer, erase = kind == StrokeKind.ERASE)
         stroke = s
         return s
     }
@@ -427,6 +430,7 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
             sampler.end()
             complete()
             endLive()
+            endBelow()
         }
 
         /** Very large brushes on fast strokes would stall a frame: space their dabs further apart. */
@@ -453,10 +457,24 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
          */
         var live = false
 
+        /**
+         * v1.9 A6 (P3, R11a): true while the stroke's frames draw the layers below its layer from
+         * `LiveAdjust.strokeBelow` (decided when it starts); [endBelow] drops the cache after the
+         * lift or the cancel.
+         */
+        var below = false
+
         protected fun flushDirty() {
             if (dirty.isEmpty) return
-            if (live) controller.liveAdjust.touchStroke(layer, dirty) else controller.invalidateDoc(dirty)
+            if (below) {
+                // The stroke's own change: the cache of the layers below stays valid.
+                controller.liveAdjust.strokeBelow.own { invalidatePainted() }
+            } else invalidatePainted()
             dirty.setEmpty()
+        }
+
+        private fun invalidatePainted() {
+            if (live) controller.liveAdjust.touchStroke(layer, dirty) else controller.invalidateDoc(dirty)
         }
 
         /** v1.9 A6 (P4): the live session refines to exact pixels (after the commit or the cancel redrew). */
@@ -464,6 +482,13 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
             if (!live) return
             live = false
             controller.liveAdjust.end(layer)
+        }
+
+        /** v1.9 A6 (P3, R11a): the below-cache goes with the stroke (its lift or cancel). */
+        protected fun endBelow() {
+            if (!below) return
+            below = false
+            controller.liveAdjust.strokeBelow.end()
         }
 
         /**
@@ -1355,6 +1380,7 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
             recorder?.cancel()
             release(redraw = true)
             endLive()
+            endBelow()
         }
 
         private var released = false
@@ -1549,6 +1575,7 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
             rec.abort()
             if (!touched.isEmpty) controller.invalidateDoc(touched)
             endLive()
+            endBelow()
         }
 
         private fun dropOverride() {

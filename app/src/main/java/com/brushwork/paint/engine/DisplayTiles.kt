@@ -72,6 +72,26 @@ class DisplayTiles(val docWidth: Int, val docHeight: Int, val tileSize: Int = 51
     internal var invalidationHook: ((Rect) -> Unit)? = null
 
     /**
+     * v1.9 A6 (P3, R11a): renders a tile's dirty part from a cache of the layers below a stroke's
+     * layer (`engine/live/StrokeBelowCache`), installed while such a stroke runs. Main thread.
+     */
+    internal interface BelowRenderer {
+        /**
+         * Draws document area [d] of tile [index] (document rect [tr]) onto [canvas] (translated
+         * to document px and clipped to [d]; [target] is the tile) exactly as a CLEAR and a full
+         * `Compositor.drawDocument` would, and returns true; false: it drew nothing (the caller
+         * composites as usual).
+         */
+        fun render(tiles: DisplayTiles, index: Int, tr: Rect, d: Rect, canvas: Canvas, target: CompositeTarget, compositor: Compositor): Boolean
+
+        /** [r] (document px, within the document; a scratch rect valid during the call) was invalidated. */
+        fun invalidated(tiles: DisplayTiles, r: Rect)
+    }
+
+    /** v1.9 A6 (P3): the [BelowRenderer] [render] asks first (null: none). */
+    internal var belowRenderer: BelowRenderer? = null
+
+    /**
      * Marks [rect] (document coords; null = everything) for re-rendering. The [invalidationHook]
      * gets a scratch rect valid during the call only (its users copy what they keep).
      */
@@ -81,6 +101,7 @@ class DisplayTiles(val docWidth: Int, val docHeight: Int, val tileSize: Int = 51
         if (!r.intersect(0, 0, docWidth, docHeight)) return
         val left = r.left; val top = r.top; val right = r.right; val bottom = r.bottom
         invalidationHook?.invoke(r)
+        belowRenderer?.let { r.set(left, top, right, bottom); it.invalidated(this, r) }
         val c0 = left / tileSize; val c1 = (right - 1) / tileSize
         val r0 = top / tileSize; val r1 = (bottom - 1) / tileSize
         for (row in r0..r1) for (col in c0..c1) {
@@ -141,8 +162,12 @@ class DisplayTiles(val docWidth: Int, val docHeight: Int, val tileSize: Int = 51
         val save = c.save()
         c.translate(-tr.left.toFloat(), -tr.top.toFloat())
         c.clipRect(d)
-        c.drawColor(0, PorterDuff.Mode.CLEAR)
-        compositor.drawDocument(c, d, target = target)
+        // v1.9 A6 (P3, R11a): a stroke's below-cache, when it can draw this part exactly.
+        val below = belowRenderer
+        if (below == null || !below.render(this, idx, tr, d, c, target, compositor)) {
+            c.drawColor(0, PorterDuff.Mode.CLEAR)
+            compositor.drawDocument(c, d, target = target)
+        }
         c.restoreToCount(save)
     }
 

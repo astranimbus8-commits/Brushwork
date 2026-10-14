@@ -46,6 +46,7 @@ import org.robolectric.RuntimeEnvironment
  * hold, a pressure above NORMAL frees them (the canvas then draws the same pixels again), and the
  * proxies' entry lives only while they do. The default policy trims nothing (v1.8, I8). The
  * entries hold their owners weakly. The "Fast adjustment preview" switch reads R13's note.
+ * Step 9 (P3): a stroke's below-cache (priority 20) while it holds tiles.
  */
 @RunWith(RobolectricTestRunner::class)
 class GovernorRegistrationTest {
@@ -222,6 +223,59 @@ class GovernorRegistrationTest {
             Thread.sleep(10)
         }
         assertTrue("the stale entry went", gone)
+    }
+
+    /**
+     * v1.9 A6 step 9 (P3, turned on here: it ships off): a stroke's below-cache is a priority 20
+     * entry while it holds tiles; a pressure above NORMAL frees it, the rest of the stroke
+     * composites as before, with the same pixels, and nothing is left after the lift.
+     */
+    @Test
+    fun theStrokeBelowCacheIsAPriority20EntryWhileAStrokeHoldsIt() {
+        val wasOn = com.brushwork.paint.engine.live.StrokeBelowCache.strokesOn
+        com.brushwork.paint.engine.live.StrokeBelowCache.strokesOn = true
+        try {
+            strokeBelowEntry()
+        } finally {
+            com.brushwork.paint.engine.live.StrokeBelowCache.strokesOn = wasOn
+        }
+    }
+
+    private fun strokeBelowEntry() {
+        val (c, _) = controller()
+        val cache = c.liveAdjust.strokeBelow
+        c.tools
+        c.selectLayer(c.doc.layers.indexOfFirst { it.name == "Photo" })
+        c.selectTool(com.brushwork.paint.tools.ToolId.BRUSH)
+        assertTrue("no stroke, no entry", mine().none { it.name == "below-caches" })
+        fun pt(k: Int) = com.brushwork.paint.tools.ToolPoint(60f + 12f * k, 120f + 4f * k, 1f, k * 8L)
+        c.pointerDown(pt(0))
+        for (k in 1..8) c.pointerMove(pt(k))
+        c.tiles.update(c.compositor, null)
+        assertTrue("the frame came from the cache", cache.hits > 0)
+        val held = cache.bytes
+        assertTrue(held > 0L)
+        val entry = mine().single { it.name == "below-caches" }
+        assertEquals(com.brushwork.paint.engine.live.StrokeBelowCache.BELOW_PRIORITY, entry.priority)
+        assertEquals(20, entry.priority)
+        assertEquals(held, entry.bytes())
+        assertEquals("NORMAL frees nothing", 0L, entry.trimmable.trim(MemoryPressure.NORMAL))
+        assertEquals("MODERATE frees it", held, entry.trimmable.trim(MemoryPressure.MODERATE))
+        assertEquals(0L, cache.bytes)
+        assertTrue("the entry went with it", mine().none { it.name == "below-caches" })
+        val hits = cache.hits
+        for (k in 9..16) c.pointerMove(pt(k))
+        c.tiles.update(c.compositor, null)
+        assertEquals("the rest of the stroke composites as before", hits, cache.hits)
+        assertEquals(0L, cache.bytes)
+        c.pointerUp(pt(17))
+        c.tiles.update(c.compositor, null)
+        val fresh = com.brushwork.paint.engine.DisplayTiles(w, h).also { it.update(c.compositor, null) }
+        val out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        fresh.draw(Canvas(out), null, smooth = false)
+        assertArrayEquals("the same pixels", IntArray(w * h).also { out.getPixels(it, 0, w, 0, 0, w, h) }, shown(c))
+        assertFalse(cache.isActive)
+        assertTrue(mine().none { it.name == "below-caches" })
     }
 
     @Test

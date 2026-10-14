@@ -192,6 +192,42 @@ class Compositor(private val doc: Document, private val overrideProvider: () -> 
         return k == 0 || k == n || (k in 1 until n && doc.layers[k].isAdjustmentLayer)
     }
 
+    /**
+     * v1.9 A6 (P3, design 3.2 A6 step 9): [drawDocument] of layers [from, until) with the overrides,
+     * where the range may also start or end at any clipping group's first layer
+     * ([isSplitBoundary]), not only at an adjustment layer: a stroke's below-cache
+     * (`engine/live/StrokeBelowCache`) is `[0, k)` with k the stroke layer's group, and the
+     * frame draws `[k, n)` over it. At scale 1 onto the same target, `[0, k)` then `[k, n)` is
+     * the full draw bit for bit: [drawFlat] draws one group after another onto one canvas, so the
+     * canvas after `[0, k)` is exactly the cache. With folders, [FolderComposite] still refuses a
+     * cut through a folder that is not drawn as is ([IllegalArgumentException]); callers split
+     * only where `FolderComposite.drawnAsIs` holds. [drawDocument]'s own contract is unchanged.
+     */
+    internal fun drawSplit(canvas: Canvas, clip: Rect, target: CompositeTarget?, from: Int, until: Int) {
+        require(isSplitBoundary(from) && isSplitBoundary(until) && from <= until) {
+            "Layer range [$from, $until) splits a clipping group or is out of 0..${doc.layers.size}"
+        }
+        if (from == until) return
+        val bounds = RectF(clip)
+        val override = overrideProvider()
+        if (doc.hasFolders) {
+            FolderComposite.draw(this, doc, canvas, bounds, override, target, from until until)
+            return
+        }
+        drawFlat(canvas, doc.layers, from, until, bounds, override, target)
+    }
+
+    /**
+     * v1.9 A6 (P3): true when a [drawSplit] range may start or end at index [k]: the ends, an
+     * adjustment layer, or a layer that starts a clipping group (it is not clipped to the unit
+     * below it, `LayerTree.isClipped`: as [drawFlat] and [FolderComposite] group a level).
+     */
+    internal fun isSplitBoundary(k: Int): Boolean {
+        val layers = doc.layers
+        val n = layers.size
+        return k == 0 || k == n || (k in 1 until n && (layers[k].isAdjustmentLayer || !FolderComposite.isClipped(layers, k)))
+    }
+
     /** Reused view of a [MultiLayerRenderOverride] as the override of one of its layers (main thread). */
     private val multiView = MultiLayerView()
 

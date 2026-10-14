@@ -398,7 +398,14 @@ class LiveAdjust(private val c: EditorController) {
         strokeLayer = null
         freeBuffers()
         handler?.removeCallbacks(idleWake)
+        strokeBelow.release()
     }
+
+    /**
+     * v1.9 A6 (P3, R11a): the exact below-cache a painting stroke's frames draw the layers under
+     * its layer from ([StrokeBelowCache]; one per editor, holding nothing between strokes).
+     */
+    internal val strokeBelow: StrokeBelowCache = StrokeBelowCache(c)
 
     // ------------------------------------------------------------------ frames
 
