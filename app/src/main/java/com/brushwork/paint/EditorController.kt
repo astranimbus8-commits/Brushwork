@@ -2327,12 +2327,18 @@ class EditorController(
     /**
      * Compresses [sel] for [p] on `Dispatchers.Default` (in [pendingSavedSelections] meanwhile)
      * and lands it when done, after the saves asked for before it.
+     *
+     * v1.9 (A7a step 6, R9): the work never throws at `await`. Anything thrown while compressing
+     * (out of memory aside: it says its own message when the save lands) drops this save (its row
+     * goes), is kept as a report and is said ([StabilityLabels19.ERROR_TOAST] with the step's
+     * name) once the work is done: never left pending, never thrown on.
      */
     private fun startSavedSelectionWork(p: PendingSavedSelection, sel: Selection) {
         val hook = beforeSavedSelectionPack
+        val failure = java.util.concurrent.atomic.AtomicReference<Throwable?>(null)
         p.work = scope.async(Dispatchers.Default) {
-            hook?.invoke()
             try {
+                hook?.invoke()
                 SavedSelection.of(p.id, p.name, sel, p.revision)
             } catch (e: OutOfMemoryError) {
                 p.outOfMemory = true
@@ -2342,14 +2348,25 @@ class EditorController(
             } catch (e: Throwable) {
                 // Anything else drops this save (its row goes) instead of leaving it pending for
                 // good and throwing again from every later undo, mark or canvas operation.
-                android.util.Log.w("EditorController", "Saving a selection failed", e)
+                failure.set(e)
                 null
             }
         }
         synchronized(pendingSavedLock) { pendingSavedSelections = pendingSavedSelections + p }
         scope.launch {
-            p.result = p.work.await()
+            p.result = try {
+                p.work.await()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                failure.compareAndSet(null, e)
+                null
+            }
             p.ready = true
+            failure.get()?.let { e ->
+                com.brushwork.paint.diagnostics.CrashLog.record(e, "saved selection", fatal = false)
+                toast(StabilityLabels19.ERROR_TOAST.format(if (p.update) UPDATE_SAVED_SELECTION_LABEL else SavedSelectionLabels.SAVE))
+            }
             // In order: one asked for earlier and still compressing lands this one with it.
             for (q in pendingSavedSelections) {
                 if (!q.ready) break

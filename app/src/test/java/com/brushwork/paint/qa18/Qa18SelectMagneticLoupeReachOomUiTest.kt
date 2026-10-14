@@ -115,9 +115,9 @@ class Qa18SelectMagneticLoupeReachOomUiTest {
         fun idle() = assertTrue("the tool settles", Smoke.pumpUntil(WAIT_MS) { settle(1); tool.idle })
 
         // ---- No memory for the edge map: said once, straight segments, the outline still selects.
-        val real = tool.takeSnapshot
+        val real = tool.renderSource
         var tries = 0
-        tool.takeSnapshot = { _, _ -> tries++; throw OutOfMemoryError("test") }
+        tool.renderSource = { _ -> tries++; throw OutOfMemoryError("test") }
         ui.tool(ToolId.MAGNETIC_LASSO.label)
         idle()
         assertEquals("the edges were tried once", 1, tries)
@@ -145,7 +145,7 @@ class Qa18SelectMagneticLoupeReachOomUiTest {
         assertTrue("the straight outline is selected: IoU $diamond", diamond >= 0.97)
 
         // ---- Picked again from the tool menu, with memory: the edges are found, nothing said.
-        tool.takeSnapshot = real
+        tool.renderSource = real
         ui.tool(ToolId.LASSO.label)
         ui.tool(ToolId.MAGNETIC_LASSO.label)
         assertTrue("the edges are found", Smoke.pumpUntil(WAIT_MS) { settle(1); tool.edgeMapReady && tool.idle })
