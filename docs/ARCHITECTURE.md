@@ -916,6 +916,44 @@ after F3, and only A6 changes `CanvasView.kt`.
   `ui/editor/HistoryTapFingers.kt` and `ui/editor/chrome/UniqueLabelsV17.kt`. One UI `@Test` per Robolectric UI class (a second one gets no recomposition), and each
   area keeps within its UI-class cap (design 5.5, `.wt/_tools/test-times-v19.ps1`).
 
+### P0 proxy baselines (gate 1, LA1)
+
+The lead has no T606 (LA1), so the P0 numbers of design 2.7 are JVM proxies: `qa19/P0ProxyBench.kt`
+(test sources, category `Timing`) measures them with Robolectric NATIVE graphics on the lead's PC,
+and the lead records them in `.wt/v19-p0.txt`.
+- It runs only with `-Pbench`: `.wt/_tools/gbuild.ps1 testDebugUnitTest -Pbench` runs this class
+  alone, in one JVM, with `bw.testSet` = "bench" (add `--tests
+  "com.brushwork.paint.qa19.P0ProxyBench.<method>"` for one canvas). Without `-Pbench` every test
+  is skipped by an assumption; with `CI` set the class is excluded from every test task, so it is
+  in no shard and no Timing run and is not counted in `test-count.txt`.
+- It drives the app's own code: `Smoke.controller` with a laid-out `CanvasView` of 1080 x 2408 px
+  (xxhdpi; the editor's fit area is 1846 px high), touches through `EditorController.pointerDown`,
+  `pointerMove`, `pointerUp` and `pointerCancel`, and the `PerfTrace` spans those paths record:
+  FRAME (`CanvasView.onDraw`, drawn into a bitmap after every second event, a 120 Hz digitizer at
+  60 Hz), LIFT, ERASE_REBUILD and MASK_FRAME. A value is the median of 15 runs after 3 warm-ups; a
+  run is one stroke or drag, and its value is the median of its samples (a lift: its one sample).
+- Canvases: PHONE 1080 x 2408 with 20 layers, A4 2480 x 3508 with 5, PRINT 3000 x 4000 with 3,
+  every layer covered with translucent shapes; strokes go on a middle layer. The app's fit is 0.69
+  on PHONE, 0.39 on A4 and 0.32 on PRINT (width-limited; 2.7 assumed 0.47 and 0.41, which are
+  measured too); the `zoom` column is the zoom measured.
+- Rows: `brush.lift` and `frame` (Hard round, 40 px, a 30 cm stroke: 4134 px at 350 dpi as a
+  serpentine over the visible canvas, events 12 px apart; each run is undone, untimed, so every
+  run paints the same layer) at fit and at 2.0; `frame.erase` and `erase.lift` (the raster
+  Eraser, Soft eraser 90 px) on PHONE and PRINT at fit; `erase.rebuild.<n>` (the vector Eraser in
+  Object mode, 40 px, over n = 500 and 2000 strokes on a vector layer of PHONE: every move, and as
+  `.hit` the moves that dim new objects) with `frame.erase.vector.<n>` (not a 2.7 row: the frame
+  with the dimmed preview, for A5); `mask.frame.<kind>` (30 moves of a Linear, Radial and Brush
+  mask drag on an adjustment layer, A4 and PRINT at fit; no frame is drawn, and the first move of
+  a drag is left out). Every erase and mask drag is cancelled, so the content stays the same.
+- `.wt/v19-p0.txt`: a header (date, commit, the PC's CPU, the T606 factor 6x, the definitions),
+  then one line per measurement, `name value unit canvas zoom jvm`. The thresholds of 2.7 are
+  compared with `value x 6`. A row with no JVM proxy (PSS after opening and after 50 strokes,
+  cold start, the CI Timing job's time) has the value `n/a` and the reason.
+- A6's checkpoint (2.9): after P1 and P2, A6 runs `phoneBrushAndRasterEraser` and
+  `printBrushAndRasterEraser` on its branch and appends their `brush.lift` and `frame.erase` lines
+  under a line `# a6-after-p2`; the lead signs off before A6's steps 8-10. The bench prints each
+  line as `[p0] ...` and every run as `[p0-runs] ...` (the JUnit XML's `system-out`).
+
 ## v1.9 areas
 
 One block per area, in merge order. Each area writes its section only inside its own block

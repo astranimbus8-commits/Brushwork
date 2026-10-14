@@ -93,15 +93,26 @@ android {
                 // v1.9 (design 2.2, 5.5): -PsoakOnly runs SoakHarnessTest alone, serially (the
                 // nightly soak job), whatever its category.
                 val soakOnly = project.hasProperty("soakOnly")
-                it.maxParallelForks = if (ci && !timingOnly && !soakOnly) 2 else 1
+                // v1.9 gate 1 (LA1, design 2.7): -Pbench runs the P0 proxy bench (qa19/P0ProxyBench)
+                // alone, serially. Every CI run leaves it out, so the CI counts never include it;
+                // locally it runs with the rest and skips itself (bw.testSet is not "bench").
+                val bench = project.hasProperty("bench")
+                it.maxParallelForks = if (ci && !timingOnly && !soakOnly && !bench) 2 else 1
                 it.useJUnit {
                     if (timingOnly) includeCategories("com.brushwork.paint.testing.Timing")
-                    else if (ci && !soakOnly) excludeCategories("com.brushwork.paint.testing.Timing")
+                    else if (ci && !soakOnly && !bench) excludeCategories("com.brushwork.paint.testing.Timing")
                 }
                 if (soakOnly) {
                     it.filter.includeTestsMatching("*.SoakHarnessTest")
                     it.filter.isFailOnNoMatchingTests = false
                 }
+                if (bench) {
+                    it.filter.includeTestsMatching("*.P0ProxyBench")
+                    it.filter.isFailOnNoMatchingTests = false
+                } else if (ci) {
+                    it.exclude("**/qa19/P0ProxyBench*")
+                }
+                it.inputs.property("bench", bench.toString())
                 // v1.9 (LA3, design 2.2): -PtestShard=<i> -PtestShards=<n> runs only the classes of
                 // shard i of n (ciShardOf), so CI runs the non-timing tests as parallel jobs.
                 val testShard = project.findProperty("testShard")?.toString()?.toIntOrNull()
@@ -120,7 +131,7 @@ android {
                 it.inputs.property("testShard", testShard?.toString() ?: "all")
                 it.inputs.property("testShards", testShards?.toString() ?: "all")
                 it.systemProperty("bw.testForks", it.maxParallelForks.toString())
-                it.systemProperty("bw.testSet", if (soakOnly) "soak" else if (timingOnly) "timing" else if (ci) "main" else "all")
+                it.systemProperty("bw.testSet", if (bench) "bench" else if (soakOnly) "soak" else if (timingOnly) "timing" else if (ci) "main" else "all")
                 // A failure prints its whole message (a timing guard's every measurement), so a CI
                 // log says why without the reports.
                 it.testLogging.exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
