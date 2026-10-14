@@ -15,7 +15,7 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 
 /**
- * v1.9 (R5) "Optical" pair kerning (Illustrator's "Optical"): the space between two letters is
+ * v1.9 (R5) “Optical” pair kerning (Illustrator's “Optical”): the space between two letters is
  * set from their shapes, not from the font's kerning pairs, so a font without good pairs (or with
  * none) still sets "AV", "To" or "r." evenly.
  *

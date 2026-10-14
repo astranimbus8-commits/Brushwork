@@ -3,7 +3,7 @@ package com.brushwork.paint.tools.text
 import android.graphics.Paint
 
 /**
- * v1.9 (R5) the "Pair kerning" modes as extra advances after characters, on top of the font's
+ * v1.9 (R5) the “Pair kerning” modes as extra advances after characters, on top of the font's
  * own kerning the text is measured and drawn with: the same mechanism as the v1.7 manual kerns
  * ([TextKerns.advancesPx]), so every route that draws kerned text (lines in pieces, wrapped text,
  * frames, scaled letters, text on a path) draws the modes too, and text whose mode moves nothing
@@ -97,7 +97,7 @@ internal object KerningModes {
         return out
     }
 
-    /** Whether `source[ps, pe)` has a pair whose kerning "Metrics" takes back. */
+    /** Whether `source[ps, pe)` has a pair whose kerning “Metrics” takes back. */
     private fun hasForeignPair(scripts: IntArray, source: String, ps: Int, pe: Int): Boolean {
         for (i in ps until pe - 1) if (!ScriptRuns.keepsKerning(scripts, i) && !source[i].isWhitespace() && !source[i + 1].isWhitespace()) return true
         return false

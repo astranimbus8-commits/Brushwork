@@ -57,12 +57,12 @@ internal const val KERNING_SCRIPT_REFUSAL = KerningLabels.SCRIPT_REFUSAL
 const val KERNING_ROW_TAG = "textKerningRow"
 
 /**
- * v1.9 (R5): the least width of a "Pair kerning" chip, so "Off" and "Auto" are as easy to hit
- * as "Optical" and "Metrics".
+ * v1.9 (R5): the least width of a “Pair kerning” chip, so "Off" and "Auto" are as easy to hit
+ * as “Optical” and “Metrics”.
  */
 private val PairKerningChipWidth = 76.dp
 
-/** v1.9 (R5): the "Pair kerning" chips, in order: Off, then Auto (null) and the modes. */
+/** v1.9 (R5): the “Pair kerning” chips, in order: Off, then Auto (null) and the modes. */
 private val PairKerningModes: List<TextKerningMode?> = listOf(null, TextKerningMode.OPTICAL, TextKerningMode.METRICS_LATIN)
 
 /**
@@ -78,7 +78,7 @@ private val PairKerningModes: List<TextKerningMode?> = listOf(null, TextKerningM
  *   floating label names it), so the label and the number fit at 360 dp and large font sizes.
  * - "Font kerning": the font's own pair kerning (on by default; off sets the letters by their
  *   plain advances, and the text exports as outlines).
- * - v1.9 (R5) "Pair kerning": "Off", "Auto", "Optical" and "Metrics" ([pairKerningIndex]), with
+ * - v1.9 (R5) “Pair kerning”: "Off", "Auto", “Optical” and “Metrics” ([pairKerningIndex]), with
  *   the chosen one's note under them. "Off" and the switch are one setting: Off turns the switch
  *   off and keeps the mode, another chip turns it on with that mode, and the switch turned on
  *   brings the last mode back ([TextSpec.kerningMode]: Auto at first). Manual kerns add to every
@@ -149,15 +149,15 @@ internal fun TextKerningSection(host: TextEditorHost, selection: TextRange) {
     }
 }
 
-/** v1.9 (R5): the test tags of the "Pair kerning" chips, in their order ([V19Tags.KERN_PREFIX] + the mode's name). */
+/** v1.9 (R5): the test tags of the “Pair kerning” chips, in their order ([V19Tags.KERN_PREFIX] + the mode's name). */
 internal val PAIR_KERNING_TAGS: List<String> = listOf("OFF", "AUTO", "OPTICAL", "METRICS_LATIN").map { V19Tags.KERN_PREFIX + it }
 
-/** v1.9 (R5): the "Pair kerning" chip [spec] shows: 0 Off ("Font kerning" off), 1 Auto, 2 Optical, 3 Metrics. */
+/** v1.9 (R5): the “Pair kerning” chip [spec] shows: 0 Off ("Font kerning" off), 1 Auto, 2 Optical, 3 Metrics. */
 internal fun pairKerningIndex(spec: TextSpec): Int =
     if (!spec.fontKerning) 0 else 1 + PairKerningModes.indexOf(spec.kerningMode).coerceAtLeast(0)
 
 /**
- * v1.9 (R5): [spec] with "Pair kerning" chip [index] chosen: Off turns "Font kerning" off and
+ * v1.9 (R5): [spec] with “Pair kerning” chip [index] chosen: Off turns "Font kerning" off and
  * keeps the mode (the switch brings it back), another chip turns it on with its mode.
  */
 internal fun pairKerningChosen(spec: TextSpec, index: Int): TextSpec =
@@ -165,7 +165,7 @@ internal fun pairKerningChosen(spec: TextSpec, index: Int): TextSpec =
     else spec.copy(fontKerning = true, kerningMode = PairKerningModes[(index - 1).coerceAtMost(PairKerningModes.size - 1)])
 
 /**
- * v1.9 (R5): the note under the "Pair kerning" chips for chip [index]: none for Off (the
+ * v1.9 (R5): the note under the “Pair kerning” chips for chip [index]: none for Off (the
  * switch's own note says what it does); on straight [vertical] text, Optical and Metrics say
  * they need horizontal text (the column keeps the font's pairs).
  */

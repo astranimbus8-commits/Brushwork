@@ -244,7 +244,7 @@ internal object TextOnPathEngine {
      * The layout of [text] with [paint] (cached), null when there is nothing to draw. [letters]
      * (v1.6): the letters are scaled (the caller has checked the script can be; null = plain).
      * [kerns] (v1.7, item 17): [text]'s manual kerns ([TextItem.kerns]; see [buildLayout]).
-     * [mode] (v1.9, R5): its "Pair kerning" mode ([KerningModes]; null for Auto and Off).
+     * [mode] (v1.9, R5): its “Pair kerning” mode ([KerningModes]; null for Auto and Off).
      */
     @Synchronized
     fun layout(text: String, paint: Paint, letters: LetterScaleSpec? = null, kerns: List<TextKern> = emptyList(), mode: TextKerningMode? = null): PathTextLayout? {

@@ -375,7 +375,7 @@ object TextRenderer {
 
     /**
      * v1.9 (R4): whether straight text with [spec] may have a justified line ([Justify]):
-     * horizontal text with "Justify the last line too", or with "Justify lines" in a fixed-width
+     * horizontal text with “Justify the last line too”, or with “Justify lines” in a fixed-width
      * box (without one, every line is the last of its paragraph and keeps `align`). Vertical text
      * keeps `align` (v1.9 justifies horizontal text only); text on a path never gets here.
      */
@@ -392,8 +392,8 @@ object TextRenderer {
      * [TextKerns.advancesPx]: vertical text, a paragraph in a script drawn as a whole, no usable
      * kern). [ramp] (scaled letters) scales each kern with the letter before its gap.
      *
-     * v1.9 (R5): plus what the "Pair kerning" mode adds to the font's own kerning
-     * ([KerningModes]: "Metrics" takes the font's pairs back outside Latin, Greek and Cyrillic
+     * v1.9 (R5): plus what the “Pair kerning” mode adds to the font's own kerning
+     * ([KerningModes]: “Metrics” takes the font's pairs back outside Latin, Greek and Cyrillic
      * runs), measured as the text is measured. Auto and Off add nothing: such text keeps its v1.8
      * route and pixels.
      */
@@ -409,7 +409,7 @@ object TextRenderer {
     }
 
     /**
-     * v1.9 (R5): whether [item]'s "Pair kerning" mode moves one of its own letters ([kernPx] of
+     * v1.9 (R5): whether [item]'s “Pair kerning” mode moves one of its own letters ([kernPx] of
      * its text, or of its slice of a linked story): a run of text in an export can't carry that
      * (an SVG viewer or PDF reader sets every pair with the font's kerning), so it exports as
      * outlines. Text on a path is outlined anyway.

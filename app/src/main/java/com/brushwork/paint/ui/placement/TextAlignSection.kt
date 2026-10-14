@@ -35,11 +35,11 @@ import com.brushwork.paint.ui.theme.BrushworkColors
 /**
  * The text sheet's Alignment section (v1.9, R4): the three alignment buttons ("Left", "Center",
  * "Right"; vertical text "Top", "Center", "Bottom") and, for horizontal text, the switch rows
- * "Justify lines" and "Justify the last line too" (enabled only while the first is on).
+ * “Justify lines” and “Justify the last line too” (enabled only while the first is on).
  *
- * With "Justify lines" on, the buttons set the LAST line's alignment, which gives Illustrator's
- * seven modes: the caption "Last line:" stands before them and each button's stateDescription
- * reads "Last line: <its label>". With "Justify the last line too" on, every line is justified
+ * With “Justify lines” on, the buttons set the LAST line's alignment, which gives Illustrator's
+ * seven modes: the caption “Last line:” stands before them and each button's stateDescription
+ * reads "Last line: <its label>". With “Justify the last line too” on, every line is justified
  * and the buttons are disabled (they would change nothing). Vertical text keeps the three buttons
  * only (v1.9 justifies horizontal text); text on a path has no Alignment section (C23). [style]
  * applies a change to the text's look, as the sheet's other rows do.

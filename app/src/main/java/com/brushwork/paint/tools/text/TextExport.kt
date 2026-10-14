@@ -52,7 +52,7 @@ object TextExport {
         if (item.spec.letterScale.isOn) return null
         if (!item.spec.fontKerning || kerned(item)) return null
         if (item.spec.vertical || item.path.isActive) return null
-        // v1.9 (R5): a "Pair kerning" mode that moves a letter (Metrics outside Latin runs, Optical).
+        // v1.9 (R5): a “Pair kerning” mode that moves a letter (Metrics outside Latin runs, Optical).
         if (TextRenderer.modeMovesLetters(item)) return null
         val prep = TextRenderer.prepare(item)
         val block = prep.block ?: return null

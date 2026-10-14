@@ -3,7 +3,7 @@ package com.brushwork.paint.tools.text
 import java.lang.Character.UnicodeScript
 
 /**
- * v1.9 (R5) "Metrics" pair kerning (Illustrator's "Metrics - Roman Only"): the text split into
+ * v1.9 (R5) “Metrics” pair kerning (Illustrator's "Metrics - Roman Only"): the text split into
  * script runs, the font's own kerning pairs kept only inside runs of Latin, Greek and Cyrillic
  * letters. Pure Kotlin (no android imports).
  *
@@ -14,7 +14,7 @@ import java.lang.Character.UnicodeScript
  * only) is set as Latin, so "1.1" keeps the font's pairs.
  */
 internal object ScriptRuns {
-    /** Scripts whose runs keep the font's kerning pairs under "Metrics". */
+    /** Scripts whose runs keep the font's kerning pairs under “Metrics”. */
     private val ROMAN = intArrayOf(UnicodeScript.LATIN.ordinal, UnicodeScript.GREEK.ordinal, UnicodeScript.CYRILLIC.ordinal)
 
     /** Marks a character whose run is not known yet (shared or inherited, before any letter). */
@@ -59,18 +59,18 @@ internal object ScriptRuns {
         }
     }
 
-    /** Whether a run of [script] (a [UnicodeScript] ordinal) keeps the font's kerning pairs under "Metrics". */
+    /** Whether a run of [script] (a [UnicodeScript] ordinal) keeps the font's kerning pairs under “Metrics”. */
     fun isRoman(script: Int): Boolean = script == ROMAN[0] || script == ROMAN[1] || script == ROMAN[2]
 
     /**
-     * Whether the font's kerning of the pair after character [i] stays under "Metrics" ([scripts]
+     * Whether the font's kerning of the pair after character [i] stays under “Metrics” ([scripts]
      * of the text): both characters in one run of Latin, Greek or Cyrillic.
      */
     fun keepsKerning(scripts: IntArray, i: Int): Boolean =
         i + 1 < scripts.size && scripts[i] == scripts[i + 1] && isRoman(scripts[i])
 
     /**
-     * Whether every pair of letters of [text] keeps the font's kerning under "Metrics" (Latin,
+     * Whether every pair of letters of [text] keeps the font's kerning under “Metrics” (Latin,
      * Greek or Cyrillic runs only: nothing to change). Pairs with a space or a line break don't
      * count: the font's pairs are between letters, and a shaper never kerns across two scripts.
      */

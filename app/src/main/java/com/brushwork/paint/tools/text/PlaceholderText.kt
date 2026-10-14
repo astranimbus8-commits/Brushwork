@@ -81,7 +81,7 @@ object PlaceholderText {
     private const val KANA_SHORT = "あいうえおかきくけこ"
 
     /**
-     * R6's three-word texts. Japanese has no word spaces, so its "3 words" is a three-unit
+     * R6's three-word texts. Japanese has no word spaces, so its “3 words” is a three-unit
      * phrase (テキスト / を / 入力), and kana is three syllables.
      */
     private const val LOREM_WORDS = "Lorem ipsum dolor"

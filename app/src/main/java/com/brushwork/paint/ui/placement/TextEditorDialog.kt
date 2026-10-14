@@ -88,6 +88,7 @@ fun TextEditorDialog(host: TextEditorHost) {
     val onPath = item.path.isActive
     var colorTarget by remember { mutableStateOf<ColorTarget?>(null) }
     var fontPickerOpen by remember { mutableStateOf(false) }
+    var markerFontPickerOpen by remember { mutableStateOf(false) }
     val focus = remember { FocusRequester() }
     fun style(transform: (TextSpec) -> TextSpec) = tool.updateSpec(transform)
     // Recomputed when fonts are imported or deleted (the picker reports it).
@@ -212,7 +213,7 @@ fun TextEditorDialog(host: TextEditorHost) {
             ChoiceChips(listOf("Columns right to left", "Left to right"), if (spec.columnsLeftToRight) 1 else 0, { i -> style { it.copy(columnsLeftToRight = i == 1) } })
         }
 
-        // v1.9 (R4): the three buttons plus "Justify lines" / "Justify the last line too".
+        // v1.9 (R4): the three buttons plus “Justify lines” / “Justify the last line too”.
         if (!onPath) TextAlignSection(spec) { style(it) }
 
         SectionHeader("Spacing")
@@ -236,6 +237,9 @@ fun TextEditorDialog(host: TextEditorHost) {
                 typing = SliderTyping(decimals = 2, suffix = "×"),
             )
         }
+
+        // v1.9 (R7): bullets and numbering (horizontal text only; the section says so otherwise).
+        TextListSection(tool, onPickMarkerFont = { markerFontPickerOpen = true })
 
         // v1.6 §3.5: letters scaled one by one (also on the options strip's "Letters" chip).
         SectionHeader("Letter scaling")
@@ -278,6 +282,7 @@ fun TextEditorDialog(host: TextEditorHost) {
             onDismiss = { fontPickerOpen = false },
         )
     }
+    if (markerFontPickerOpen) MarkerFontPicker(tool, fontSample(item.text)) { markerFontPickerOpen = false }
 
     when (colorTarget) {
         ColorTarget.FILL -> ColorPickerDialog(

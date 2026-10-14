@@ -40,7 +40,7 @@ object TextOnPath {
      * on a left-to-right line drawn one cluster at a time (as scaled letters are, so without
      * ligatures); a text holding right-to-left or shaped script ignores them.
      *
-     * v1.9 (R5): [mode] ("Pair kerning" Metrics or Optical, [KerningModes]; null for Auto and Off)
+     * v1.9 (R5): [mode] (“Pair kerning” Metrics or Optical, [KerningModes]; null for Auto and Off)
      * moves the letters after their gaps along the path as kerns do, on the same lines.
      */
     fun draw(
