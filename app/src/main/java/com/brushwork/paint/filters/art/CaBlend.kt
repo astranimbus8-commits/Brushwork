@@ -119,11 +119,12 @@ object CaBlend {
                 OWN_COLOR -> { cr = sr; cg = sg; cb = sb; lum = lum(dr, dg, db) } // SetLum(Cs, Lum(Cb))
                 else -> { cr = dr; cg = dg; cb = db; lum = lum(sr, sg, sb) } // Luminosity: SetLum(Cb, Lum(Cs))
             }
-            // SetLum(C, lum) with ClipColor. A grey just outside 0..1 (float rounding: l equals the
-            // channel it is clipped by) keeps l, so no 0 / 0 reaches the channels.
+            // SetLum(C, lum) with ClipColor. Lum(C + d) is lum (Lum is linear and its weights sum
+            // to 1), so it is not computed again. A grey just outside 0..1 (float rounding: l equals
+            // the channel it is clipped by) keeps l, so no 0 / 0 reaches the channels.
             val d = lum - lum(cr, cg, cb)
             cr += d; cg += d; cb += d
-            val l = lum(cr, cg, cb)
+            val l = lum
             val n = min3(cr, cg, cb); val x = max3(cr, cg, cb)
             if (n < 0f) {
                 val span = l - n
@@ -207,18 +208,13 @@ object CaBlend {
         return if (mx > mn) s / (mx - mn) else 0f
     }
 
-    // Plain comparisons: the colors here are never NaN, and kotlin.math's min and max pay for it.
+    // Math.min and Math.max: one instruction each on the phone's ARM64 (and branch-free on the
+    // JVM), where comparisons of a picture's unordered channels mispredict.
     @Suppress("NOTHING_TO_INLINE")
-    private inline fun min3(a: Float, b: Float, c: Float): Float {
-        val m = if (a < b) a else b
-        return if (m < c) m else c
-    }
+    private inline fun min3(a: Float, b: Float, c: Float): Float = Math.min(a, Math.min(b, c))
 
     @Suppress("NOTHING_TO_INLINE")
-    private inline fun max3(a: Float, b: Float, c: Float): Float {
-        val m = if (a > b) a else b
-        return if (m > c) m else c
-    }
+    private inline fun max3(a: Float, b: Float, c: Float): Float = Math.max(a, Math.max(b, c))
 
     private const val INV255 = 1f / 255f
     private const val CLIP_EPS = 1e-6f
