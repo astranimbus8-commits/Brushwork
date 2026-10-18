@@ -2,9 +2,15 @@ package com.brushwork.paint.qa19
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Matrix
 import android.net.Uri
+import android.os.Looper
 import com.brushwork.paint.AppSettings
+import com.brushwork.paint.EditorController
 import com.brushwork.paint.UiPrefs
+import com.brushwork.paint.array.ArraySources
+import com.brushwork.paint.brush.BrushLibrary
+import com.brushwork.paint.compat18.CopyMapsV18
 import com.brushwork.paint.compat18.CurveSettingsV18
 import com.brushwork.paint.compat18.PayloadV18
 import com.brushwork.paint.compat18.ProjectFileDtoV18
@@ -14,25 +20,55 @@ import com.brushwork.paint.compat18.ShapeSettingsV18
 import com.brushwork.paint.compat18.TextCodecV18
 import com.brushwork.paint.compat18.TextTransformsV18
 import com.brushwork.paint.compat18.ToolSettingsV18
+import com.brushwork.paint.compat18.VPathV18
+import com.brushwork.paint.compat18.VShapeV18
+import com.brushwork.paint.compat18.VStrokeV18
 import com.brushwork.paint.compat18.VectorCodecV18
+import com.brushwork.paint.compat18.VectorContentV18
+import com.brushwork.paint.core.PackedPoints
 import com.brushwork.paint.diagnostics.CrashLog
 import com.brushwork.paint.diagnostics.CrashReport
 import com.brushwork.paint.diagnostics.ReportText
+import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.exchange.VectorFormat
 import com.brushwork.paint.exchange.export.ExportOptions
 import com.brushwork.paint.exchange.export.ExportSceneBuilder
 import com.brushwork.paint.exchange.export.Payload
 import com.brushwork.paint.exchange.export.TextSource
+import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.Document
+import com.brushwork.paint.model.Layer
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.storage.CanvasStart
 import com.brushwork.paint.storage.NewCanvasSpec
 import com.brushwork.paint.storage.ProjectRepository
+import com.brushwork.paint.tools.ToolId
+import com.brushwork.paint.tools.ToolPoint
 import com.brushwork.paint.tools.vector.CurveSettings
+import com.brushwork.paint.tools.vector.ShapeCodec
+import com.brushwork.paint.tools.vector.ShapeObject
 import com.brushwork.paint.tools.vector.ShapeSettings
+import com.brushwork.paint.tools.vector.ShapeStyle
+import com.brushwork.paint.tools.vector.ShapeType
 import com.brushwork.paint.v19.a8.BackupKit
+import com.brushwork.paint.vector.CopyMaps
+import com.brushwork.paint.vector.VAnchor
+import com.brushwork.paint.vector.VPaint
+import com.brushwork.paint.vector.VPath
+import com.brushwork.paint.vector.VShape
+import com.brushwork.paint.vector.VStroke
+import com.brushwork.paint.vector.VStrokeStyle
+import com.brushwork.paint.vector.VSubpath
+import com.brushwork.paint.vector.VectorContent
+import com.brushwork.paint.vector.draw.VectorDrawState
+import com.brushwork.paint.vector.draw.VectorEraseMode
+import com.brushwork.paint.vector.draw.VectorEraserModes
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.Json
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -44,6 +80,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows.shadowOf
 import java.io.File
 
 /**
@@ -230,11 +267,36 @@ class Qa19CompatBackFromV18RobolectricTest {
         // A4: fully read and fully editable in v1.8.
     }
 
-    @Ignore("5.2 row 10 (cut pieces), existing kinds only: owner A5")
+    /** 5.2 row 10 (cut pieces), existing kinds only: owner A5, fixture by [writeCutPieces]. */
     @Test
     fun row10CutPieces() {
-        v18Reads("cut-pieces")
-        // A5: fully read and fully editable in v1.8.
+        val dto = v18Reads("cut-pieces")
+        // A5: fully read and fully editable in v1.8. Both layers are vector layers (the shape
+        // layer was converted by its cut); their data holds only kinds and fields v1.8 knows (a
+        // strict reader takes it), v1.8's sanitizing changes nothing, and what v1.8 saves after
+        // an edit (its encode) reads back the same.
+        val layers = dto.layers.filter { it.vectorFile != null }
+        assertEquals("two vector layers", listOf(CUT_VECTOR_LAYER, CUT_SHAPE_LAYER), layers.map { it.name })
+        assertTrue("the shape layer is a vector layer now", layers.all { it.shapeData == null })
+        val read = layers.associate { l ->
+            val bytes = resource("cut-pieces/${l.vectorFile}")
+            val strict = STRICT_V18.decodeFromString(VectorContentV18.serializer(), String(PayloadV18.inflate(bytes), Charsets.UTF_8))
+            val v18 = VectorCodecV18.decode(bytes)
+            assertEquals("${l.name}: v1.8's sanitizing changes nothing", strict, v18)
+            assertEquals("${l.name}: v1.8 saves what it read", v18, VectorCodecV18.decode(VectorCodecV18.encode(v18)))
+            l.name to v18.objects
+        }
+        val pieces = read.getValue(CUT_VECTOR_LAYER)
+        assertTrue(pieces.all { it is VPathV18 || it is VStrokeV18 })
+        assertFalse("no shape is left whole", pieces.any { it is VShapeV18 })
+        val filled = pieces.filterIsInstance<VPathV18>()
+        // The box (2), the ellipse (2), the box with a copy (2, and its copy baked into one).
+        assertEquals("the filled pieces", 7, filled.size)
+        assertTrue("filled, stroked, no live copies", filled.all { it.fill != null && it.stroke != null && it.copies == CopyMapsV18.NONE })
+        assertEquals("the stroke's two ends", 2, pieces.count { it is VStrokeV18 })
+        val shapePieces = read.getValue(CUT_SHAPE_LAYER)
+        assertEquals("the shape layer's rectangle in two pieces", 2, shapePieces.size)
+        assertTrue(shapePieces.all { it is VPathV18 && it.fill != null })
     }
 
     @Ignore("5.2 row 10 (bevelled points of Curve, Polyline and Path), existing kinds only: owner A1")
@@ -381,6 +443,7 @@ class Qa19CompatBackFromV18RobolectricTest {
         "new-canvas" to ::writeNewCanvases,
         "backup-state" to ::writeBackupState,
         "backup-folder" to ::writeBackupFolder,
+        "cut-pieces" to ::writeCutPieces,
     )
 
     /** `project.json` of the gallery's project [id], copied into [dir]. */
@@ -516,12 +579,74 @@ class Qa19CompatBackFromV18RobolectricTest {
         }
     }
 
+    /**
+     * Row 10 (cut pieces, A5): v1.9's partial eraser, with gestures on a real editor, cuts a
+     * filled and stroked box, a filled and stroked ellipse of the Shape tool, a stroke across it,
+     * a box with a live copy (the copy becomes a piece of its own) and, on a legacy shape layer, a
+     * rectangle (the layer becomes a vector layer). Saved by [saveProject].
+     */
+    private fun writeCutPieces(dir: File) {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+        try {
+            val settings = AppSettings(app)
+            settings.prefs.edit().clear().commit()
+            val w = 320
+            val h = 240
+            val doc = Document("cut-pieces", "Cut pieces", w, h)
+            doc.layers += Layer(doc.newLayerId(), CUT_VECTOR_LAYER, BitmapUtils.createLayerBitmap(w, h)).also { it.vector = VectorContent.EMPTY }
+            doc.activeLayerIndex = 0
+            val c = EditorController(app, doc, scope, settings).also {
+                it.viewTransform.set(Matrix())
+                it.tools
+            }
+            VectorDrawState.of(c).cutDispatcher = Dispatchers.Unconfined
+            val vec = doc.layers[0]
+            val blue = 0xFF3070C0.toInt()
+            fun box(l: Float, t: Float, r: Float, b: Float) = VPath(
+                0, subpaths = listOf(VSubpath(listOf(VAnchor(l, t, true), VAnchor(r, t, true), VAnchor(r, b, true), VAnchor(l, b, true)), closed = true)),
+                fill = VPaint.Solid(blue), stroke = VStrokeStyle(color = 0xFF802000.toInt(), width = 3f),
+            )
+            val n = 31
+            val line = VStroke(
+                0, preset = BrushLibrary.defaultBrush.copy(size = 8f), color = 0xFF203040.toInt(), seed = 5L, stylus = false,
+                points = PackedPoints(FloatArray(n) { 180f + 120f * it / (n - 1) }, FloatArray(n) { 150f }, FloatArray(n) { 1f }),
+            )
+            val ellipse = VShape(0, shape = ShapeObject(ShapeType.ELLIPSE, cx = 230f, cy = 65f, w = 120f, h = 70f, style = ShapeStyle.STROKE_FILL, strokeWidth = 3f, fillColor = blue))
+            val copied = box(20f, 130f, 60f, 180f).copy(copies = CopyMaps.of(listOf(floatArrayOf(1f, 0f, 100f, 0f, 1f, 0f, 0f, 0f, 1f))))
+            c.vectors.addObjects(vec, listOf(box(20f, 30f, 140f, 100f), ellipse, line, copied), "Add")
+            c.selectLayer(vec)
+            c.selectTool(ToolId.ERASER)
+            c.eraser = BrushLibrary.defaultEraser.copy(size = 12f)
+            VectorEraserModes.setMode(c, VectorEraseMode.PARTIAL)
+            fun swipe(x: Float, y0: Float, y1: Float) {
+                c.pointerDown(ToolPoint(x, y0))
+                c.pointerMove(ToolPoint(x, (y0 + y1) / 2))
+                c.pointerMove(ToolPoint(x, y1))
+                c.pointerUp(ToolPoint(x, y1))
+                shadowOf(Looper.getMainLooper()).idle()
+            }
+            swipe(80f, 10f, 115f)
+            swipe(230f, 10f, 200f)
+            swipe(40f, 120f, 200f)
+            assertEquals("the pieces: ${vec.vector!!.objects}", 9, vec.vector!!.objects.size)
+
+            val rect = ShapeObject(ShapeType.RECTANGLE, cx = 160f, cy = 205f, w = 120f, h = 40f, style = ShapeStyle.STROKE_FILL, strokeWidth = 3f, fillColor = blue)
+            val shape = requireNotNull(c.addLayerWithContent(CUT_SHAPE_LAYER, "Add shape", shapeData = ShapeCodec.encode(rect), draw = ArraySources.shapeDraw(rect, ColorMode.RGB, w, h)))
+            c.selectLayer(shape)
+            swipe(160f, 170f, 235f)
+            assertTrue("the shape layer is a vector layer now", shape.isVectorLayer && !shape.isShapeLayer)
+            assertEquals(2, shape.vector!!.objects.size)
+            saveProject(doc, dir)
+        } finally {
+            scope.cancel()
+        }
+    }
+
     /** Every file under [root] by its path relative to it ('/'-separated), with its bytes. */
     private fun snapshot(root: File): Map<String, ByteArray> =
         root.walkTopDown().filter { it.isFile }.associate { it.relativeTo(root).invariantSeparatorsPath to it.readBytes() }
 
     /** [doc] saved by v1.9's repository and copied, every file, into [dir]. */
-    @Suppress("unused")
     private fun saveProject(doc: Document, dir: File) {
         runBlocking { ProjectRepository(app).save(doc, null) }
         val saved = File(app.filesDir, "projects/${doc.id}")
@@ -553,6 +678,13 @@ class Qa19CompatBackFromV18RobolectricTest {
     private companion object {
         /** AppSettings' preference file (v1.0 on). */
         const val SETTINGS_FILE = "brushwork_settings"
+
+        /** Row 10 (cut pieces): the layers [writeCutPieces] cuts. */
+        const val CUT_VECTOR_LAYER = "Vector 1"
+        const val CUT_SHAPE_LAYER = "Shape"
+
+        /** v1.8's vector JSON read strictly: a key or a value v1.8 does not know fails. */
+        val STRICT_V18 = Json { allowSpecialFloatingPointValues = true }
 
         /** The keys v1.9 adds to [SETTINGS_FILE] (F1a, design 2.3.4). */
         val V19_SETTINGS_KEYS = listOf(

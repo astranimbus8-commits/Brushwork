@@ -209,8 +209,8 @@ object PathfinderOps {
 
     private fun overlaps(a: Path, b: Path): Boolean = kept(op(a, b, Path.Op.INTERSECT))
 
-    /** Not empty and not a sliver ([p] is an op result: already simple). */
-    private fun kept(p: Path): Boolean {
+    /** Not empty and not a sliver ([p] is an op result: already simple). v1.9: also the eraser's cut's (`EraseCut`). */
+    internal fun kept(p: Path): Boolean {
         if (p.isEmpty) return false
         val r = RectF()
         @Suppress("DEPRECATION") p.computeBounds(r, true)

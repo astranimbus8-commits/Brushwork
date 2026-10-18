@@ -241,21 +241,29 @@ class EraseMathTest {
     }
 
     @Test
-    fun partialModeErasesClosedAndFilledObjectsWhole() {
+    fun partialModeErasesClosedLinesWholeAndCutsShapesByRegion() {
         val square = VPath(
             0, subpaths = listOf(VSubpath(listOf(VAnchor(10f, 10f, true), VAnchor(60f, 10f, true), VAnchor(60f, 60f, true), VAnchor(10f, 60f, true)), closed = true)),
             stroke = VStrokeStyle(color = 0xFF000000.toInt(), width = 4f),
         )
         val ellipse = VShape(0, shape = ShapeObject(ShapeType.ELLIPSE, cx = 150f, cy = 40f, w = 60f, h = 40f, style = ShapeStyle.STROKE_FILL, strokeWidth = 3f))
         val content = VectorContent.EMPTY.plus(listOf(square, ellipse)).first
+        // A closed line without a fill still goes whole.
         val s = EraseSession(content, VectorEraseMode.PARTIAL)
-        s.add(60f, 30f, 3f)
-        assertTrue(s.removedWholeInPartial)
+        assertFalse(s.add(60f, 30f, 3f))
+        assertTrue(s.cutTargets().isEmpty())
         assertEquals(listOf(2L), s.result()!!.objects.map { it.id })
-        // Inside a filled shape, far from its outline: it goes too.
+        // v1.9 (R11 b): inside a shape, far from its outline: it is a target of the region cut,
+        // which leaves it until its pieces are handed in.
         val t = EraseSession(content, VectorEraseMode.PARTIAL)
-        t.add(150f, 40f, 3f)
-        assertEquals(listOf(1L), t.result()!!.objects.map { it.id })
+        assertTrue(t.add(150f, 40f, 3f))
+        assertEquals(listOf(2L), t.cutTargets().map { it.id })
+        assertNull(t.result())
+        // (The pieces themselves are EraseCut's, on Robolectric: v19/a5/PartialCutsFillsTest.)
+        val piece = square.copy(fill = VPaint.Solid(0xFF0000FF.toInt()))
+        assertEquals(listOf(1L, 2L), t.result(mapOf(2L to listOf(piece)))!!.objects.map { it.id })
+        assertTrue(t.result(mapOf(2L to listOf(piece)))!!.objects[1] is VPath)
+        assertEquals(listOf(1L), t.result(mapOf(2L to emptyList()))!!.objects.map { it.id })
         // Inside an unfilled outline: nothing is touched.
         assertNull(EraseSession(content, VectorEraseMode.PARTIAL).also { it.add(35f, 35f, 3f) }.result())
     }
@@ -348,7 +356,7 @@ class EraseMathTest {
             val s = EraseSession(content, mode)
             s.add(45f, 30f, 6f)
             s.add(55f, 50f, 6f)
-            assertFalse("$mode: a dot is no closed shape", s.removedWholeInPartial)
+            assertTrue("$mode: a dot is no target of the region cut", s.cutTargets().isEmpty())
             assertEquals("$mode removes the dot", listOf(2L), s.result()!!.objects.map { it.id })
         }
         // A path whose anchors are all at one place is a dot too.

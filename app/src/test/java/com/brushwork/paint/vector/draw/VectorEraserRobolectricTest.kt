@@ -4,16 +4,20 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Matrix
 import android.graphics.Rect
+import android.os.Looper
 import com.brushwork.paint.AppSettings
 import com.brushwork.paint.EditorController
+import com.brushwork.paint.array.ArraySources
 import com.brushwork.paint.brush.BrushLibrary
 import com.brushwork.paint.brush.TipCache
 import com.brushwork.paint.core.PackedPoints
 import com.brushwork.paint.engine.BitmapUtils
+import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
+import com.brushwork.paint.tools.vector.ShapeCodec
 import com.brushwork.paint.tools.vector.ShapeObject
 import com.brushwork.paint.tools.vector.ShapeStyle
 import com.brushwork.paint.tools.vector.ShapeType
@@ -41,6 +45,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows.shadowOf
 
 /**
  * v1.5 A3: the eraser on vector layers through the real Eraser tool: Object / Partial / To
@@ -159,20 +164,42 @@ class VectorEraserRobolectricTest {
     }
 
     @Test
-    fun partialModeErasesClosedShapesWholeWithAHintOnce() {
+    fun partialModeCutsShapesByRegionAndErasesClosedLinesWhole() {
         val c = setup()
+        // v1.9 (R11 b): the region cut runs at once (test seam); it lands from the main looper.
+        VectorDrawState.of(c).cutDispatcher = Dispatchers.Unconfined
         val ring = VShape(0, shape = ShapeObject(ShapeType.ELLIPSE, cx = 150f, cy = 100f, w = 120f, h = 80f, style = ShapeStyle.STROKE, strokeWidth = 4f))
         val open = VPath(0, subpaths = listOf(VSubpath(listOf(VAnchor(20f, 20f), VAnchor(150f, 60f), VAnchor(280f, 20f)))), stroke = VStrokeStyle(color = 0xFF802000.toInt(), width = 5f))
-        c.vectors.addObjects(c.vec, listOf(ring, open), "Add")
+        val square = VPath(
+            0, subpaths = listOf(VSubpath(listOf(VAnchor(20f, 130f, true), VAnchor(60f, 130f, true), VAnchor(60f, 180f, true), VAnchor(20f, 180f, true)), closed = true)),
+            stroke = VStrokeStyle(color = 0xFF000000.toInt(), width = 4f),
+        )
+        c.vectors.addObjects(c.vec, listOf(ring, open, square), "Add")
         eraser(c, VectorEraseMode.PARTIAL)
-        // Through the ring's left side only.
-        c.swipe(90f to 80f, 90f to 120f)
-        assertEquals(listOf(2L), c.vec.vector!!.objects.map { it.id })
-        assertEquals("Closed shapes and fills are erased whole (\"Partial\" cuts strokes and lines)", c.message)
+        val steps = c.undoManager.undoCount
+        // A closed line without a fill still goes whole (v1.8's hint is gone).
+        c.swipe(60f to 140f, 60f to 170f)
+        assertEquals(listOf(1L, 2L), c.vec.vector!!.objects.map { it.id })
+        // (Only the eraser's own first hint.)
+        assertEquals(VectorStrokeCapture.eraserHint(VectorEraseMode.PARTIAL), c.message)
         c.message = null
+        // Through the ring's left side only: the ring loses a bite there and stays, as a path.
+        c.swipe(90f to 80f, 90f to 120f)
+        shadowOf(Looper.getMainLooper()).idle()
+        val cut = c.vec.vector!!
+        assertEquals(listOf(1L, 2L), cut.objects.map { it.id })
+        val piece = cut.byId(1) as VPath
+        assertNull(piece.fill)
+        assertEquals(steps + 2, c.undoManager.undoCount)
+        assertEquals(VectorEraserRecorder.ERASE_LABEL, c.undoManager.undoLabel)
+        assertEquals(0, c.vec.bitmap.getPixel(90, 100))
+        assertTrue(c.vec.bitmap.getPixel(210, 100) != 0)
+        assertArrayEquals(render(cut), pixels(c.vec.bitmap))
+        assertNull(c.renderOverride)
+        assertNull(c.message)
         // The open curve is split, not removed.
-        c.swipe(150f to 30f, 150f to 90f)
-        val pieces = c.vec.vector!!.objects
+        c.swipe(60f to 0f, 60f to 60f)
+        val pieces = c.vec.vector!!.objects.filter { it.id != 1L }
         assertEquals(2, pieces.size)
         assertTrue(pieces.all { it is VPath && it.subpaths.single().anchors.size >= 2 })
         assertNull(c.message)
@@ -211,7 +238,7 @@ class VectorEraserRobolectricTest {
     }
 
     @Test
-    fun whatWillGoIsShownDimmedAndACancelLeavesNoTrace() {
+    fun whatWillGoIsTakenAwayAndACancelLeavesNoTrace() {
         val c = setup()
         lines(c)
         val before = c.vec.vector!!
@@ -226,9 +253,10 @@ class VectorEraserRobolectricTest {
         assertSame(c.vec, ov!!.layer)
         val shown = BitmapUtils.createLayerBitmap(w, h)
         assertTrue(ov.drawContent(Canvas(shown)))
-        // The doomed line is faded, the others are as they were; the layer is untouched.
-        val doomed = shown.getPixel(40, 100) ushr 24
-        assertTrue("faded alpha $doomed", doomed in 1..140)
+        // v1.9 (design 2.4.4): the doomed line is gone (v1.8 faded it), the others are as they
+        // were; the layer is untouched.
+        assertTrue(c.vec.bitmap.getPixel(40, 100) ushr 24 > 0)
+        assertEquals(0, shown.getPixel(40, 100) ushr 24)
         assertEquals(c.vec.bitmap.getPixel(100, 40), shown.getPixel(100, 40))
         assertArrayEquals(cache, pixels(c.vec.bitmap))
         c.pointerCancel()
@@ -255,6 +283,48 @@ class VectorEraserRobolectricTest {
         assertEquals(steps + 1, c.undoManager.undoCount)
         assertArrayEquals(render(after), pixels(c.vec.bitmap))
         assertNull(c.renderOverride)
+    }
+
+    /**
+     * v1.9 (R11 b, I20; A5): the Eraser on a legacy shape layer erases the shape as an object; the
+     * layer becomes a vector layer in that same step, and only when something is erased.
+     */
+    @Test
+    fun aLegacyShapeLayerIsErasedAsAnObjectInOneStep() {
+        val c = setup()
+        val o = ShapeObject(ShapeType.RECTANGLE, cx = 150f, cy = 100f, w = 80f, h = 60f, style = ShapeStyle.STROKE, strokeWidth = 4f)
+        val shape = c.addLayerWithContent("Shape", "Add shape", shapeData = ShapeCodec.encode(o), draw = ArraySources.shapeDraw(o, ColorMode.RGB, w, h))!!
+        c.selectLayer(shape)
+        val data = shape.dataSnapshot()
+        val cache = pixels(shape.bitmap)
+        val steps = c.undoManager.undoCount
+        eraser(c, VectorEraseMode.OBJECT)
+        // A gesture that misses the outline, and a cancelled one: no step, no conversion.
+        c.swipe(20f to 20f, 40f to 30f)
+        c.pointerDown(ToolPoint(150f, 60f))
+        c.pointerMove(ToolPoint(150f, 140f))
+        assertSame(shape, c.renderOverride?.layer)
+        c.pointerCancel()
+        assertNull(c.renderOverride)
+        assertEquals(steps, c.undoManager.undoCount)
+        assertEquals(data, shape.dataSnapshot())
+        assertArrayEquals(cache, pixels(shape.bitmap))
+        // Across the outline: the shape goes, the layer is a vector layer, ONE step.
+        c.swipe(150f to 60f, 150f to 140f)
+        assertEquals(steps + 1, c.undoManager.undoCount)
+        assertEquals(VectorEraserRecorder.ERASE_LABEL, c.undoManager.undoLabel)
+        assertNull(shape.shapeData)
+        assertTrue(shape.isVectorLayer)
+        assertTrue(shape.vector!!.objects.isEmpty())
+        assertArrayEquals(render(shape.vector!!), pixels(shape.bitmap))
+        assertNull(c.renderOverride)
+        c.undo()
+        assertEquals(data, shape.dataSnapshot())
+        assertTrue(shape.isShapeLayer)
+        assertArrayEquals(cache, pixels(shape.bitmap))
+        c.redo()
+        assertTrue(shape.isVectorLayer)
+        assertArrayEquals(render(shape.vector!!), pixels(shape.bitmap))
     }
 
     @Test

@@ -21,7 +21,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -29,7 +31,9 @@ import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.SemanticsPropertyKey
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -41,11 +45,13 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.brushwork.paint.EditorController
+import com.brushwork.paint.tools.ErasableTool
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.ui.editor.EditorIcons
 import com.brushwork.paint.ui.editor.SliderMath
 import com.brushwork.paint.ui.editor.blockCanvasTouches
 import com.brushwork.paint.ui.editor.endCanvasGesture
+import com.brushwork.paint.ui.common.V19Tags
 import com.brushwork.paint.ui.common.checkerboard
 import com.brushwork.paint.ui.theme.IbisColors
 import com.brushwork.paint.ui.theme.IbisDims
@@ -55,7 +61,8 @@ import com.brushwork.paint.ui.theme.IbisDims
  * 56 × 50 dp (shared evenly on narrower screens), left to right: brush / eraser switch, the tool
  * menu (current tool), the brush size disc (brush panel), the colour square (colour panel), hide /
  * show interface, the layer window, back to the gallery. The tool and layer slots show their open
- * state as a darker box with a light edge.
+ * state as a darker box with a light edge. v1.9 (R11 a): while the current tool erases with its
+ * own outline ([ErasableTool]), slot 1 is that tool's erase mode ([EraseModeSlot]), open while on.
  */
 @Composable
 internal fun BottomBar(
@@ -91,15 +98,18 @@ internal fun BottomBar(
     ) {
         val slot = ChromeLayout.bottomSlotWidth(maxWidth.value).dp
         Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
-            // 1: switch between the painting tool and the eraser (shows what a tap switches to).
-            Slot(
-                slot,
-                if (erasing) "Eraser on: switch to ${paintTool.label.lowercase()}" else "Switch to eraser",
-                onClick = { controller.endCanvasGesture(); controller.toggleEraser() },
-            ) {
-                Box(Modifier.size(IbisDims.BottomGlyph)) {
-                    Icon(ChromeGlyphs.SwapArrows, null, tint = Color.White, modifier = Modifier.size(15.dp).align(Alignment.BottomStart))
-                    Icon(if (erasing) EditorIcons.tool(paintTool) else EditorIcons.Eraser, null, tint = Color.White, modifier = Modifier.size(18.dp).align(Alignment.TopEnd))
+            // 1: switch between the painting tool and the eraser (shows what a tap switches to);
+            // v1.9 (R11 a): for a tool that erases with its own outline, its erase mode.
+            val erasable = controller.currentTool as? ErasableTool
+            if (erasable != null) {
+                EraseModeSlot(slot, controller, erasable, active)
+            } else {
+                Slot(
+                    slot,
+                    if (erasing) "Eraser on: switch to ${paintTool.label.lowercase()}" else "Switch to eraser",
+                    onClick = { controller.endCanvasGesture(); controller.toggleEraser() },
+                ) {
+                    SwapGlyph(if (erasing) EditorIcons.tool(paintTool) else EditorIcons.Eraser)
                 }
             }
             // 2: the tool menu, showing the current tool.
@@ -156,19 +166,69 @@ internal fun BottomBar(
     }
 }
 
+/** Set (true) on a bottom-bar slot drawn in its open state (the darker box): tests read it, there is no pixel to compare. */
+internal val BottomSlotOpen = SemanticsPropertyKey<Boolean>("bottomBar.slotOpen")
+
 /**
- * One 56 × 50 slot: the whole slot is the target; [open] draws ibisPaint's open-state box behind
- * the glyph; [state] is read after the label by a screen reader.
+ * v1.9 (R11 a; owner A5): slot 1 while the current tool erases with its own outline ([tool]:
+ * Curve, Polyline, Path, Shape). Off it reads [ErasableTool.eraseLabel] and shows the eraser
+ * glyph; a tap turns erase mode on: it then reads [ErasableTool.erasingLabel], draws the open
+ * state and shows the tool's glyph (what a tap switches back to), as v1.8's eraser state does.
+ * Tagged [V19Tags.ERASE_SLOT]. It still is one slot: the raster Eraser is in the tool menu.
  */
 @Composable
-private fun Slot(width: Dp, label: String, open: Boolean = false, state: String? = null, onClick: () -> Unit, glyph: @Composable () -> Unit) {
+private fun EraseModeSlot(width: Dp, controller: EditorController, tool: ErasableTool, active: ToolId) {
+    // A tap's own change shows at once (read here) even if the tool keeps its mode outside snapshot state.
+    var taps by remember(tool) { mutableIntStateOf(0) }
+    val on = taps >= 0 && tool.eraseOn
+    Slot(
+        width,
+        if (on) tool.erasingLabel else tool.eraseLabel,
+        open = on,
+        tag = V19Tags.ERASE_SLOT,
+        onClick = {
+            controller.endCanvasGesture()
+            tool.setErase(!tool.eraseOn)
+            taps++
+        },
+    ) {
+        SwapGlyph(if (on) EditorIcons.tool(active) else EditorIcons.Eraser)
+    }
+}
+
+/** Slot 1's glyph: the swap arrows and, at the top right, what a tap switches to. */
+@Composable
+private fun SwapGlyph(to: ImageVector) {
+    Box(Modifier.size(IbisDims.BottomGlyph)) {
+        Icon(ChromeGlyphs.SwapArrows, null, tint = Color.White, modifier = Modifier.size(15.dp).align(Alignment.BottomStart))
+        Icon(to, null, tint = Color.White, modifier = Modifier.size(18.dp).align(Alignment.TopEnd))
+    }
+}
+
+/**
+ * One 56 × 50 slot: the whole slot is the target; [open] draws ibisPaint's open-state box behind
+ * the glyph ([BottomSlotOpen] set); [state] is read after the label by a screen reader; [tag] is
+ * its test tag.
+ */
+@Composable
+private fun Slot(
+    width: Dp,
+    label: String,
+    open: Boolean = false,
+    state: String? = null,
+    tag: String? = null,
+    onClick: () -> Unit,
+    glyph: @Composable () -> Unit,
+) {
     Box(
         Modifier
             .width(width)
             .height(IbisDims.BottomBarHeight)
+            .then(if (tag != null) Modifier.testTag(tag) else Modifier)
             .semantics {
                 contentDescription = label
                 if (state != null) stateDescription = state
+                if (open) this[BottomSlotOpen] = true
             }
             .clickable(onClickLabel = label, role = Role.Button, onClick = onClick),
         contentAlignment = Alignment.Center,

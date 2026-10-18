@@ -182,6 +182,8 @@ class VectorRenderer {
     private val selectionPaint = Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN) }
     // v1.9 (R11): an erasing spec takes paint away.
     private val eraseMode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT)
+    // v1.9 (R11): composites an erasing spec's selected coverage (drawClipped).
+    private val eraseLayerPaint = Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT) }
     private var selectionShaderFor: Bitmap? = null
     private val layerRect = RectF()
 
@@ -194,9 +196,13 @@ class VectorRenderer {
 
     /** Draws [spec] straight into [canvas] (no selection / alpha-lock handling). */
     fun draw(canvas: Canvas, spec: VectorPaintSpec, maskMode: Boolean, colorMode: ColorMode) {
-        val aa = maskMode || colorMode != ColorMode.MONOCHROME
         // v1.9 (R11): DST_OUT for an erasing spec; none otherwise (v1.8).
-        val mode = if (spec.erase) eraseMode else null
+        paint(canvas, spec, maskMode, colorMode, if (spec.erase) eraseMode else null)
+    }
+
+    /** Draws [spec]'s paths with [mode] (null: plain coverage). */
+    private fun paint(canvas: Canvas, spec: VectorPaintSpec, maskMode: Boolean, colorMode: ColorMode, mode: PorterDuffXfermode?) {
+        val aa = maskMode || colorMode != ColorMode.MONOCHROME
         if (fillPaint.xfermode !== mode) fillPaint.xfermode = mode
         if (strokePaint.xfermode !== mode) strokePaint.xfermode = mode
         spec.fill?.let {
@@ -228,16 +234,27 @@ class VectorRenderer {
     /**
      * Draws [spec] limited to [selection] and, with [alphaLocked], only over existing pixels.
      * [clip] is the region being drawn (bounds the offscreen layer).
+     *
+     * v1.9 (R11): an erasing spec takes away only inside the selection (its coverage, masked by
+     * the selection in an offscreen layer, is composited with DST_OUT: drawn with DST_OUT into
+     * an empty offscreen layer it would take away nothing); under the alpha lock it takes away
+     * nothing (the lock keeps every pixel's alpha, as the Eraser refuses it).
      */
     fun drawClipped(canvas: Canvas, spec: VectorPaintSpec, selection: Selection?, alphaLocked: Boolean, clip: Rect, maskMode: Boolean, colorMode: ColorMode) {
         if (selection == null && !alphaLocked) {
             draw(canvas, spec, maskMode, colorMode)
             return
         }
+        if (spec.erase && alphaLocked) return
         layerRect.set(clip)
         if (!layerRect.intersect(spec.bounds)) return
-        val save = canvas.saveLayer(layerRect, if (alphaLocked) atopPaint else null)
-        draw(canvas, spec, maskMode, colorMode)
+        val layerPaint = when {
+            spec.erase -> eraseLayerPaint
+            alphaLocked -> atopPaint
+            else -> null
+        }
+        val save = canvas.saveLayer(layerRect, layerPaint)
+        paint(canvas, spec, maskMode, colorMode, null)
         if (selection != null) {
             if (selectionShaderFor !== selection.mask) {
                 selectionPaint.shader = BitmapShader(selection.mask, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
