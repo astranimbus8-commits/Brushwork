@@ -665,7 +665,7 @@ class CurveV15RobolectricTest {
     }
 
     @Test
-    fun thePolylineToolReopensPolylinesOnly() {
+    fun aPolylineReopensInThePolylineTool() {
         val c = controller(vector = true)
         val layer = c.activeLayer
         val poly = curveTool(c, polyline = true)
@@ -675,13 +675,16 @@ class CurveV15RobolectricTest {
         val made = layer.vector!!.objects.single() as VPath
         assertTrue(made.polyline)
         assertEquals(1f, made.tension, 0f)
-        // The curve tool doesn't reopen it (it adds a point there).
+        // v1.9 (R14): the curve tool reopens it in the polyline tool (up to v1.8 it added a point there).
         val curve = curveTool(c)
         c.tap(180f, 60f)
         assertFalse(curve.isReopened)
-        assertEquals(1, curve.anchors.size)
-        curve.discard()
-        // The polyline tool does.
+        assertEquals(0, curve.anchors.size)
+        assertEquals(ToolId.POLYLINE, c.activeToolId)
+        assertTrue(poly.isReopened)
+        assertEquals(2, poly.anchors.size)
+        poly.discard()
+        // The polyline tool does too.
         val p2 = curveTool(c, polyline = true)
         c.tap(180f, 60f)
         assertTrue(p2.isReopened)

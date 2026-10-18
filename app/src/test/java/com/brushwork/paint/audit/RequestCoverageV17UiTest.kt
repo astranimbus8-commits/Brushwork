@@ -60,6 +60,7 @@ import com.brushwork.paint.ui.editor.chrome.ChromeScreen
 import com.brushwork.paint.ui.editor.chrome.ChromeTags
 import com.brushwork.paint.ui.layers.LayerLabels
 import com.brushwork.paint.ui.placement.MeshStepperLabels
+import com.brushwork.paint.ui.points.ThicknessRowLabels
 import com.brushwork.paint.ui.tools.INCREMENTS_LABEL
 import com.brushwork.paint.ui.vector.POINT_THICKNESS_LABEL
 import com.brushwork.paint.vector.VPath
@@ -244,9 +245,9 @@ internal class RequestCoverageV17 private constructor(private val h: ChromeHarne
         tap(tool.pointAt(3))
         assertEquals("two points picked by two taps", listOf(1, 3), tool.pointSelection.indices)
 
-        // One typed thickness edits both, as ONE in-tool step.
+        // One typed thickness edits both, as ONE in-tool step (v1.9 R1: the one-point row's value box).
         val n = steps(tool)
-        press("Type $POINT_THICKNESS_LABEL")
+        press(ThicknessRowLabels.TYPE)
         SmokeUi.typeAndDone(POINT_THICKNESS_LABEL, "50")
         assertEquals(listOf(1f, 0.5f, 1f, 0.5f, 1f), tool.anchors.map { it.width })
         assertEquals("one in-tool step", n + 1, steps(tool))
@@ -256,7 +257,7 @@ internal class RequestCoverageV17 private constructor(private val h: ChromeHarne
         assertEquals(5, tool.pointSelection.count)
         assertTrue(has(PointLabels.DESELECT_ALL, exact = true))
         assertTrue("the thickness reads Mixed: ${SmokeUi.shown().take(60)}", has(PointLabels.MIXED, exact = true))
-        press("Type $POINT_THICKNESS_LABEL")
+        press(ThicknessRowLabels.TYPE)
         SmokeUi.typeAndDone(POINT_THICKNESS_LABEL, "*2")
         assertEquals(listOf(2f, 1f, 2f, 1f, 2f), tool.anchors.map { it.width })
         assertEquals(n + 2, steps(tool))

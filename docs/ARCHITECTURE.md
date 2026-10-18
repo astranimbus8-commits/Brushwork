@@ -1336,6 +1336,110 @@ compat row 10 (cut pieces) of `Qa19CompatBackFromV18RobolectricTest`.
 
 <!-- v19-A1 -->
 
+R1, R2, R18 (Polyline), R14 (curves) and R11 for the Curve, Polyline and Path tools (one class,
+`CurveTool`, by `kind`). Code: `tools/vector/CurveTool.kt`, `CurveGroupMath.kt`, `CurveGeometry.kt`,
+`tools/points/Mixed.kt`, `ui/points/ThicknessRow.kt`, `ui/points/MixedNumberField.kt`,
+`ui/vector/Curve*.kt`.
+
+**Point thickness, one point and several (R1, R2).** `ThicknessRow` (‹, the value box, ›, the blue
+slider; 260 dp, `ThicknessRowLabels`) is v1.6's one-point control moved out of
+`CurveToolOptions.kt` unchanged (`ThicknessRowGoldenTest`). With two or more points selected the
+More row shows the same row as `GroupThicknessControl`, and Path's group weight popup shows
+`GroupWeightControl` (the orange log slider, 0.1 to 10); `CurveGroupEdit` runs both. The value box
+reads the shared value or "Mixed", the thumb sits at the points' mean, and while the thumb is
+dragged the box shows the factor (`PointLabels19.FACTOR`). Rules (`MixedEdit`):
+- `dragged`: only a drag that starts on the thumb moves values, relatively: each point scales by
+  thumb / start mean, so a taper keeps its ratios; a point at 0 % rises by the thumb's gain; from a
+  mean of 0 every point takes the thumb. A track tap or a double tap does nothing in group form.
+- `stepped`: ‹ › move each point to its next step on the percent grid (0 % goes up one step).
+- `offset` / `typed`: "*2", "/2", "+10", "-10" apply to each point; a plain number sets all.
+- R2 (the one-point report, "doesn't move up from 0 %"): at 0 % the thumb sits flush against ›'s
+  40 dp box; a touch up to `GroupSliderGeometry.EDGE_REACH` (8 dp) beside the slider's start edge
+  goes to the thumb while the thumb is near (`thumbBesideSlider`), so › no longer ticks +5 % and
+  swallows the drag. Elsewhere › ticks as before.
+- One drag, one ‹ › hold or one typed value is one in-tool step. `setWidth` and `setWidths` clamp
+  with one constant, `CurveWidths.MAX_FACTOR` (= `VSpline.MAX_WIDTH`, 3).
+
+**Bevel points, Polyline (R18).** While points are selected the More row shows "Bevel points"
+(`StripKeysV19.BEVEL`, `V19Tags.BEVEL`). `CurveTool.bevelPoints` bevels the selected sharp corners
+with the remembered Amount and Segments (`AppSettings.curveBevelAmount`, `curveBevelSegments`) through
+`PointBevel`, as ONE in-tool step, selects the new points and opens the frozen `BevelPopup` in its
+own window (`CurveBevelPopup.kt`), above the bottom bar. Its changes re-apply the same step from the
+pre-bevel copy; a re-tap while the new points stay selected reopens it; any other edit, undo, redo
+or Back ends the session; the canvas tap that closes it adds no point. Only sharp corners bevel
+(`PointLabels19.BEVEL_SHARP_ONLY`); past 2000 points nothing changes (`BEVEL_TOO_MANY`).
+
+**Curves of several kinds on one layer (R14).** A tap on a path object of the active vector layer
+reopens it in the tool that made it (`reopenablePathAt`): Curve and Polyline now reopen each
+other's lines, as both did with Path's since v1.6. A switch hands the open path over
+(`Handoff`), shows `CurveLabels19.SWITCHED_TO` and raises `CurveTool.slotFlashes(tools)`, the one
+counter the bottom bar keys its tool-slot flash on: `BottomBar.kt` (A5's file, written by the lead
+at A1's merge, `toolSlotFlashing`) draws slot 2's open-state box for `SLOT_FLASH_MS` (200 ms),
+timed on the frame clock, each time the counter rises after the bar was shown
+(`EraseSlotRobolectricTest`). The reopened edit commits as one controller step. Old projects open as
+they were (compat rows `row10MixedCurves`, `row10BevelledCurvePoints`).
+
+**Editable (own layer) (R14, D22).** The last row of each curve tool's settings sheet is
+`CurveLabels19.OWN_LAYER` with `OWN_LAYER_DESC` (`CurveSettings.ownLayer`, per tool, off by default
+and never written while off; hidden while a path is reopened). On, ✓ of a NEW path on a pixel
+layer (`ownLayerTarget`: the active layer, content not mask, not a vector, text, shape or
+adjustment layer or a folder, and not a brush that needs pixels, which paints into the layer as
+Shape does) runs `commitOwnLayer`: inside one `groupUndo` named after the tool it adds
+`addVectorLayer(baseName = CurveLabels19.LAYER_BASE)` ("Curves N", N = vector layers + 1, above the
+pixel layer, active) and the path as its object (`vectors.addObjects`, synchronous inside the step;
+perspective copies baked as on a vector layer). The pixel layer stays byte-identical (the live
+brush stroke is cancelled first). The next paths of any kind join that layer as v1.8 objects.
+`checkEditable` on the pixel layer runs first, so a locked or hidden layer refuses as before.
+Deviation from addLayerWith's rule that pending work commits before the pause: `addingOwnLayer`
+makes the nested `onDeactivate` a no-op, so the path survives the insert and simply stays pending
+at the layer limit (out of memory for the object, the empty layer is deleted in the same step).
+The preview treats such a path as an object (`objectTarget`: no selection or alpha-lock clip,
+copies drawn one by one); it is still drawn inside the pixel layer, so that layer's opacity, blend
+mode or mask show on the preview but not on the result (a device check). Ignored while erasing,
+on a vector layer (paths join it) and for a reopened path. `update`, `showLook` and `adopt` keep
+`ownLayer` the user's, like the unit and nudge step.
+
+**Erase mode (R11 a).** `CurveTool` is an `ErasableTool`: slot 1 reads `EraseLabels19.WITH_CURVE`
+(`WITH_POLYLINE`, `WITH_PATH`) or the `ERASING_*` twin, and the last row of the "Stroke kind" menu,
+`EraseLabels19.INSTEAD_OF_PAINT`, is the same switch (the menu's face shows the eraser glyph while
+on). Erase mode is transient: `onSelected` turns it off when the user picks the tool; it stays on
+for the next path. While on, the pending outline is drawn dashed and erases live through A5's
+`ToolErase` session (see the A5 block for routing, modes and landing):
+- The footprint is what the tool would paint: the line at its width (the brush's size for
+  "Current brush", the plain line's width; none when every point is at 0 %), plus the fill when it
+  is on and possible (an open path fills as if closed). Varying thickness erases the line's
+  outline; mirror copies erase too (a fill or a varying line is one region, united with PathOps,
+  as mirrored copies wind the other way). Taper and pressure are ignored: full width to the ends.
+  Cost: a plain line of uniform width erases with the path itself (about 1 ms a frame at 500
+  points on the desktop JVM); a fill or a varying line with copies is united with PathOps every
+  frame (10 to 22 ms at 500 points, about 3 ms at 50), which the paint preview never builds. The
+  Timing guard `CurveEraseFrameBudgetTest` holds 50 points within 4 ms; many points with copies
+  on the phone is a device check.
+- ✓ commits ONE step labelled `EraseLabels19.STEP_PATH` (the Path tool), `STEP_FILL` (a fill
+  alone) or `STEP_LINE`; a refused commit keeps the path. A refused layer (locked, hidden, an
+  alpha-locked layer's pixels, a folder) shows the outline only and says why once per layer state
+  (`eraseRefused`, keyed on the layer and `layersVersion`, cleared at ✓).
+- No reopening while erasing (a tap starts an outline); an explicit reopen turns erase off;
+  turning erase on applies a reopened path first. "To Bézier" and its hand-back keep erase mode.
+- On a vector or legacy shape layer (content, not mask) row 1 shows A5's mode cell
+  (`VectorEraseChooser.modeCell`, `StripKeysV19.ERASE_MODE_CELL`, `EraseLabels19.MODE_CELL`)
+  right after "Stroke kind" (`CurveStripFacts.eraseCell`); its "Turn into pixels" opens
+  `ErasePixelsDialog`. Room for it at 360 dp with the VECTOR cell: "Stroke kind" becomes AUTO
+  (rank 1) on an open Curve and Polyline and on Path; Curve's generator chip and an open Path's
+  "Order N" (after the weight) become More items; the "Use brush size" / "Taper ends" shortcut
+  leaves the strip (both stay in the settings sheet). Without the cell the strips are v1.8's.
+
+Tests: `v19/a1/` (`GroupThicknessControlTest`, `GroupWeightControlTest`, `ThicknessRowGoldenTest`,
+`ThicknessFromZeroTest`, `CurveWidthConstantsTest`, `PolylineBevelRobolectricTest`,
+`CurvePolylineReopenTest`, `CurveEraseRobolectricTest` on raster, text, vector and legacy shape
+layers, `CurveStripInventoryTest` every strip state at 392 and 360 dp with the label scan,
+`CurveOwnLayerTest`, `CurveEraseRoundTripTest` (every erase step's undo and redo, save and reopen,
+"Turn into pixels" mid-outline, "To Bézier" with erase on, in-tool undo while erasing); Timing
+`GroupThicknessBudgetTest`, `CurveEraseFrameBudgetTest`), `qa19/Qa19ThicknessUiTest` (also the own
+layer row of each settings sheet at 360 dp and font scale 1.3 and 2.0, and erasing a vector layer
+through the stroke kind menu, the mode cell and the pixels dialog at 392 and 360 dp and every font
+scale), `qa19/Qa19PolylineBevelUiTest`.
+
 <!-- /v19-A1 -->
 
 ### Shape tools (A9)

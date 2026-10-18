@@ -12,10 +12,12 @@ import com.brushwork.paint.tools.points.PointSelection
 import com.brushwork.paint.ui.common.PointLabels
 import com.brushwork.paint.ui.editor.chrome.ChromeHarness
 import com.brushwork.paint.ui.editor.chrome.ChromeScreen
+import com.brushwork.paint.ui.points.ThicknessRowLabels
 import com.brushwork.paint.ui.vector.PATH_WIDTH_CAPTION
 import com.brushwork.paint.ui.vector.POINT_THICKNESS_LABEL
 import com.brushwork.paint.ui.vector.POINT_WEIGHT_LABEL
 import com.brushwork.paint.ui.vector.SHARP_MIXED
+import com.brushwork.paint.ui.vector.TYPE_POINT_WEIGHT
 import com.brushwork.paint.ui.vector.pathCaptionApplies
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -78,8 +80,9 @@ class CurvePointsStripUiRobolectricTest {
             click(PointLabels.SELECT_ALL, exact = true)
             assertEquals(5, tool.pointSelection.count)
             assertTrue(has(PointLabels.DESELECT_ALL, exact = true))
-            assertFalse("no single-point slider", has("Point thickness slider"))
-            assertTrue(has(POINT_THICKNESS_LABEL, exact = true))
+            // v1.9 (R1): several points use the one-point row: its slider and value box.
+            assertTrue("the one-point row's slider", has(ThicknessRowLabels.SLIDER, exact = true))
+            assertTrue(has(ThicknessRowLabels.TYPE, exact = true))
             click(PointLabels.DESELECT_ALL, exact = true)
             assertTrue(tool.pointSelection.isEmpty)
 
@@ -87,7 +90,7 @@ class CurvePointsStripUiRobolectricTest {
             tool.selectPoints(PointSelection.of(5, 1, 2, 3))
             settle()
             val n = steps(tool)
-            click("Type $POINT_THICKNESS_LABEL", exact = true)
+            click(ThicknessRowLabels.TYPE, exact = true)
             SmokeUi.typeAndDone(POINT_THICKNESS_LABEL, "50")
             assertEquals(listOf(1f, 0.5f, 0.5f, 0.5f, 1f), tool.anchors.map { it.width })
             assertEquals("one step", n + 1, steps(tool))
@@ -141,13 +144,13 @@ class CurvePointsStripUiRobolectricTest {
             tool.selectPoints(PointSelection.of(5, 0, 1, 2))
             settle()
             assertTrue(has(POINT_WEIGHT_LABEL, exact = true))
-            assertTrue(has(POINT_THICKNESS_LABEL, exact = true))
+            assertTrue(has(ThicknessRowLabels.TYPE, exact = true))
             assertTrue("1 smooth, 2 sharp: ${SmokeUi.shown()}", has(SHARP_MIXED, exact = true))
             click(SHARP_MIXED, exact = true)
             assertEquals(listOf(false, true, true, false, false), tool.spline!!.points.map { it.sharp })
             // v1.8: the weight is a popup of the More row's "Point weight" item.
             click(POINT_WEIGHT_LABEL, exact = true)
-            click("Type $POINT_WEIGHT_LABEL", exact = true)
+            click(TYPE_POINT_WEIGHT, exact = true)
             SmokeUi.typeAndDone(POINT_WEIGHT_LABEL, "*2")
             assertEquals(listOf(2f, 2f, 2f, 1f, 1f), tool.spline!!.points.map { it.weight })
         }

@@ -33,6 +33,7 @@ import androidx.compose.material.icons.filled.LineWeight
 import androidx.compose.material.icons.filled.Loop
 import androidx.compose.material.icons.filled.Pin
 import androidx.compose.material.icons.filled.Restore
+import androidx.compose.material.icons.filled.RoundedCorner
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.Timeline
 import androidx.compose.material.icons.filled.Tune
@@ -60,6 +61,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.disabled
@@ -72,6 +74,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.core.Units
+import com.brushwork.paint.engine.EditTarget
+import com.brushwork.paint.model.Layer
 import com.brushwork.paint.tools.points.Mixed
 import com.brushwork.paint.tools.vector.CurveKind
 import com.brushwork.paint.tools.vector.CurvePaint
@@ -79,17 +83,25 @@ import com.brushwork.paint.tools.vector.CurveStroke
 import com.brushwork.paint.tools.vector.CurveTool
 import com.brushwork.paint.ui.common.CurveGenLabels18
 import com.brushwork.paint.ui.common.CurveLabels17
+import com.brushwork.paint.ui.common.EraseLabels19
 import com.brushwork.paint.ui.common.MirrorLabels18
 import com.brushwork.paint.ui.common.PointLabels
+import com.brushwork.paint.ui.common.PointLabels19
+import com.brushwork.paint.ui.common.V19Tags
 import com.brushwork.paint.ui.common.closeOnSecondFinger
 import com.brushwork.paint.ui.common.longPressLabel
+import com.brushwork.paint.ui.editor.EditorIcons
 import com.brushwork.paint.ui.theme.BrushworkColors
 import com.brushwork.paint.ui.theme.IbisColors
 import com.brushwork.paint.ui.tools.strip.LocalStripContext
+import com.brushwork.paint.ui.tools.strip.StripContext
 import com.brushwork.paint.ui.tools.strip.StripItem
+import com.brushwork.paint.ui.tools.strip.StripKeysV19
 import com.brushwork.paint.ui.tools.strip.StripRow
 import com.brushwork.paint.ui.tools.strip.StripSpec
 import com.brushwork.paint.vector.CurveGenKind
+import com.brushwork.paint.vector.draw.VectorEraseMode
+import com.brushwork.paint.vector.draw.VectorEraserModes
 
 /*
  * The Curve, Polyline and Path strips (v1.8, design §3.9 and §3.7, area E): [curveStrip] builds
@@ -117,6 +129,8 @@ internal sealed interface CurveTyping {
 internal class CurveStripUi(sheetState: MutableState<CurveSheet> = mutableStateOf(CurveSheet.NONE)) {
     var sheet by sheetState
     var typing by mutableStateOf<CurveTyping?>(null)
+    /** v1.9 (R11 a): the layer the mode cell's [EraseLabels19.TURN_INTO_PIXELS] asks about ([ErasePixelsDialog]), else null. */
+    var pixels by mutableStateOf<Layer?>(null)
 }
 
 /** The selected points' corner state, as the sharp item offers it. */
@@ -168,7 +182,25 @@ internal data class CurveStripFacts(
     val order: Int = 4,
     /** Path: one smooth middle point selected ([PATH_WIDTH_CAPTION] applies). */
     val caption: Boolean = false,
+    /**
+     * v1.9 (R11 a): the Eraser's mode while the tool erases a vector or legacy shape layer's
+     * content: row 1 shows the mode cell ([eraseCellMode]); null otherwise.
+     */
+    val eraseCell: VectorEraseMode? = null,
 )
+
+/**
+ * v1.9 (R11 a): the mode [tool]'s row-1 mode cell shows ([VectorEraseChooser.modeCell]): the
+ * Eraser's, while the tool erases ([CurveTool.eraseOn]) the objects of a vector or legacy shape
+ * layer (its content, not its mask); else null (Compose state).
+ */
+internal fun eraseCellMode(tool: CurveTool): VectorEraseMode? {
+    if (!tool.eraseOn) return null
+    val c = tool.controller
+    val layer = tool.eraseTarget
+    if (!VectorEraseChooser.holdsObjects(layer) || c.editTargetOf(layer) != EditTarget.CONTENT) return null
+    return VectorEraserModes.mode(c)
+}
 
 /** The strip facts of [tool] now (read in a `derivedStateOf`). */
 internal fun curveFacts(tool: CurveTool): CurveStripFacts {
@@ -206,6 +238,7 @@ internal fun curveFacts(tool: CurveTool): CurveStripFacts {
         reopened = tool.isReopened,
         order = tool.pathOrder,
         caption = pathCaptionApplies(tool),
+        eraseCell = eraseCellMode(tool),
     )
 }
 
@@ -241,7 +274,6 @@ internal const val CURVE_LINE_WIDTH_DP = 64
 internal const val CURVE_ORDER_DP = 64
 internal const val CURVE_GENERATOR_DP = 92
 internal const val CURVE_THICKNESS_DP = 260
-internal const val CURVE_GROUP_THICKNESS_DP = 224
 internal const val CURVE_WEIGHT_DP = 64
 
 /** The keys of the curve strips' items. */
@@ -277,20 +309,31 @@ internal fun curveSpec(tool: CurveTool, f: CurveStripFacts, ui: CurveStripUi): S
     val items = ArrayList<StripItem>()
     val open = f.points > 0
     val kind = f.kind
+    // v1.9 (R11 a): erasing a vector or shape layer, the mode cell follows the stroke kind in row 1
+    // (it never leaves it), and room is made for it (rules 1, 2 and 5 at 360 dp with the VECTOR
+    // cell): the stroke kind may go to the More row first (Curve and Polyline with a path open,
+    // Path); a generated curve's item and an open Path's "Order N" are More items; the "Use brush
+    // size" / "Taper ends" shortcut leaves the strip (both stay in the settings sheet; a taper
+    // does not change what an erase takes).
+    val cell = eraseCellItem(tool, f, ui)
+    val kindRank = if (cell != null) 1 else 0
+    val shortcut = if (cell == null) brushOrTaper(tool, f) else emptyList()
     when (kind) {
         CurveKind.CURVE -> if (!open) {
             items += curvesItem(tool)
             items += strokeKindItem(tool, f, StripRow.ROW1, 0)
+            if (cell != null) items += cell
             if (f.stroke == CurveStroke.PLAIN) items += lineWidthItem(tool, ui, StripRow.ROW1, 1)
             items += closedItem(tool, StripRow.MORE)
-            items += brushOrTaper(tool, f)
+            items += shortcut
             items += sheetItems(tool, ui)
         } else {
             items += addItem(tool)
             items += deleteItem(tool, f)
             items += closedItem(tool, StripRow.ROW1)
-            items += strokeKindItem(tool, f, StripRow.ROW1, 0)
-            if (f.generated != null) items += generatorItem(tool, f.generated, ui, StripRow.ROW1, 1)
+            items += strokeKindItem(tool, f, StripRow.ROW1, kindRank)
+            if (cell != null) items += cell
+            if (f.generated != null) items += generatorItem(tool, f.generated, ui, if (cell != null) StripRow.MORE else StripRow.ROW1, if (cell != null) 0 else 1)
             if (f.sharp != SharpState.NONE) items += sharpItem(tool, f)
             // The host composes items by position: an item that a control's use brings in comes
             // after that control, so the control (an open Handles popup, a slider being dragged)
@@ -306,33 +349,38 @@ internal fun curveSpec(tool: CurveTool, f: CurveStripFacts, ui: CurveStripUi): S
                 items += previousItem(tool)
                 items += nextItem(tool)
             }
-            items += brushOrTaper(tool, f)
+            items += shortcut
             items += sheetItems(tool, ui)
             if (f.copies) items += removeCopiesItem(tool)
         }
         CurveKind.POLYLINE -> if (!open) {
             items += strokeKindItem(tool, f, StripRow.ROW1, 0)
+            if (cell != null) items += cell
             if (f.stroke == CurveStroke.PLAIN) items += lineWidthItem(tool, ui, StripRow.ROW1, 0)
             items += closedItem(tool, StripRow.MORE)
-            items += brushOrTaper(tool, f)
+            items += shortcut
             items += sheetItems(tool, ui)
         } else {
             items += addItem(tool)
             items += deleteItem(tool, f)
             items += closedItem(tool, StripRow.ROW1)
-            items += strokeKindItem(tool, f, StripRow.ROW1, 0)
+            items += strokeKindItem(tool, f, StripRow.ROW1, kindRank)
+            if (cell != null) items += cell
             thicknessItem(tool, f, ui)?.let { items += it }
             if (f.anyThickness) items += all100Item(tool)
             items += selectAllItem(tool, f)
             if (f.selected > 0) items += deselectItem(tool)
-            items += brushOrTaper(tool, f)
+            items += shortcut
             items += sheetItems(tool, ui)
             if (f.copies) items += removeCopiesItem(tool)
+            // v1.9 (R18): after v1.8's More items (StripKeysV19.BEVEL's rank).
+            if (f.selected > 0) items += bevelItem(tool)
         }
         CurveKind.PATH -> if (!open) {
             items += curvesItem(tool)
             items += shapesItem(tool)
-            items += strokeKindItem(tool, f, StripRow.ROW1, 0)
+            items += strokeKindItem(tool, f, StripRow.ROW1, kindRank)
+            if (cell != null) items += cell
             items += orderItem(tool, f, StripRow.MORE)
             items += endpointItem(tool)
             items += closedItem(tool, StripRow.MORE)
@@ -342,8 +390,10 @@ internal fun curveSpec(tool: CurveTool, f: CurveStripFacts, ui: CurveStripUi): S
             items += addItem(tool)
             items += deleteItem(tool, f)
             items += closedItem(tool, StripRow.ROW1)
-            items += orderItem(tool, f, StripRow.ROW1)
+            // (Erasing: the order is a More item, after the weight.)
+            if (cell == null) items += orderItem(tool, f, StripRow.ROW1)
             items += strokeKindItem(tool, f, StripRow.ROW1, 1)
+            if (cell != null) items += cell
             items += endpointItem(tool)
             if (f.sharp != SharpState.NONE) items += sharpItem(tool, f)
             if (f.anyThickness) items += all100Item(tool)
@@ -351,6 +401,7 @@ internal fun curveSpec(tool: CurveTool, f: CurveStripFacts, ui: CurveStripUi): S
             if (f.generated != null) items += generatorItem(tool, f.generated, ui, StripRow.MORE, 0)
             thicknessItem(tool, f, ui)?.let { items += it }
             if (f.selected > 0) items += weightItem(tool, f, ui)
+            if (cell != null) items += orderItem(tool, f, StripRow.MORE)
             if (f.selected > 0) items += deselectItem(tool)
             if (f.points >= 2) items += toBezierItem(tool)
             items += sheetItems(tool, ui)
@@ -396,6 +447,10 @@ private fun CurveOverlays(tool: CurveTool, ui: CurveStripUi) {
         CurveTyping.GroupThickness -> GroupThicknessDialog(tool, close)
         CurveTyping.GroupWeight -> GroupWeightDialog(tool, close)
     }
+    // v1.9 (R18): Polyline's bevel popup, More row open or closed.
+    if (tool.polyline) CurveBevelPopupHost(tool)
+    // v1.9 (R11 a): the mode cell's [EraseLabels19.TURN_INTO_PIXELS] (the erase then takes the layer's pixels).
+    ui.pixels?.let { layer -> ErasePixelsDialog(tool.controller, layer) { ui.pixels = null } }
 }
 
 // ====================================================================== items
@@ -447,10 +502,13 @@ private const val PATH_SHAPES = "Path shapes"
 private fun strokeKindItem(tool: CurveTool, f: CurveStripFacts, row: StripRow, rank: Int) =
     item(CurveKeys.STROKE_KIND, CurveLabels17.STROKE_KIND, CURVE_STROKE_KIND_DP, row, rank) {
         val mode = tool.paintMode
-        val icon = when (mode) {
-            CurvePaint.FILL -> Icons.Filled.FormatColorFill
-            CurvePaint.BOTH -> Icons.Filled.FormatShapes
-            CurvePaint.STROKE, null -> Icons.Filled.LineWeight
+        val erasing = tool.eraseOn
+        val icon = when {
+            // v1.9 (R11 a): the eraser's glyph while the tool erases.
+            erasing -> EditorIcons.Eraser
+            mode == CurvePaint.FILL -> Icons.Filled.FormatColorFill
+            mode == CurvePaint.BOTH -> Icons.Filled.FormatShapes
+            else -> Icons.Filled.LineWeight
         }
         DropCell(CurveLabels17.STROKE_KIND, CURVE_STROKE_KIND_DP, face = { Icon(icon, contentDescription = null, tint = BrushworkColors.OnChrome, modifier = Modifier.size(22.dp)) }) { close ->
             val fillOk = tool.fillPossible
@@ -474,8 +532,35 @@ private fun strokeKindItem(tool: CurveTool, f: CurveStripFacts, row: StripRow, r
                     leadingIcon = { CheckMark(stroke == k) },
                 )
             }
+            // v1.9 (R11 a): the last row, the same switch as the bottom bar's slot 1.
+            HorizontalDivider(color = BrushworkColors.ChromeBorder)
+            DropdownMenuItem(
+                text = { Text(EraseLabels19.INSTEAD_OF_PAINT) },
+                onClick = {
+                    close()
+                    // (Read now, as slot 1 does: the menu may be older than the last switch.)
+                    tool.setErase(!tool.eraseOn)
+                },
+                leadingIcon = { CheckMark(erasing) },
+                modifier = Modifier.semantics { selected = erasing },
+            )
         }
     }
+
+/**
+ * v1.9 (R11 a): the row-1 mode cell while the tool erases a vector or shape layer
+ * ([CurveStripFacts.eraseCell]; StripKeysV19.ERASE_MODE_CELL, A5's [VectorEraseChooser.modeCell]):
+ * a mode changes the Eraser's (the pending erase follows it); [EraseLabels19.TURN_INTO_PIXELS] asks first.
+ */
+private fun eraseCellItem(tool: CurveTool, f: CurveStripFacts, ui: CurveStripUi): StripItem? {
+    val mode = f.eraseCell ?: return null
+    val c = tool.controller
+    val layer = tool.eraseTarget
+    // (The cell uses no strip context.)
+    return VectorEraseChooser.modeCell(StripContext(selectionBarShown = false, vectorMode = true), layer, mode, onMode = { VectorEraserModes.setMode(c, it) }) {
+        ui.pixels = layer
+    }
+}
 
 /** One paint mode of the Stroke kind dropdown: [text] shown, known by [description] alone (I10). */
 @Composable
@@ -559,10 +644,13 @@ private fun closedItem(tool: CurveTool, row: StripRow): StripItem {
     }
 }
 
+/** Path: the "Order" item's label and face ("Order 4"). */
+internal fun orderLabel(order: Int): String = "Order $order"
+
 /** Path: "Order 4" (its value); its popup holds v1.7's stepper ("Lower order", "Higher order"). */
-private fun orderItem(tool: CurveTool, f: CurveStripFacts, row: StripRow) = item(CurveKeys.ORDER, "Order ${f.order}", CURVE_ORDER_DP, row) {
+private fun orderItem(tool: CurveTool, f: CurveStripFacts, row: StripRow) = item(CurveKeys.ORDER, orderLabel(f.order), CURVE_ORDER_DP, row) {
     val order = tool.pathOrder
-    DropCell("Order $order", CURVE_ORDER_DP, longPress = false, arrow = false, face = { CellText("Order $order") }) { _ ->
+    DropCell(orderLabel(order), CURVE_ORDER_DP, longPress = false, arrow = false, face = { CellText(orderLabel(order)) }) { _ ->
         OrderStepper(tool, tool.pathOrder)
     }
 }
@@ -653,7 +741,8 @@ private fun selectAllItem(tool: CurveTool, f: CurveStripFacts): StripItem {
 
 /**
  * "Point thickness": one point's [ThicknessControl] (‹ value › and its slider, whole on a 360 dp
- * screen), or several points' [GroupThicknessField]; nothing without a selection.
+ * screen), or v1.9 (R1) several points' [GroupThicknessControl], the same row at the same width;
+ * nothing without a selection.
  */
 private fun thicknessItem(tool: CurveTool, f: CurveStripFacts, ui: CurveStripUi): StripItem? = when {
     f.single >= 0 -> item(CurveKeys.THICKNESS, POINT_THICKNESS_LABEL, CURVE_THICKNESS_DP, StripRow.MORE) {
@@ -663,21 +752,17 @@ private fun thicknessItem(tool: CurveTool, f: CurveStripFacts, ui: CurveStripUi)
             ui.typing = CurveTyping.Thickness(f.single)
         })
     }
-    f.selected >= 2 -> item(CurveKeys.THICKNESS, POINT_THICKNESS_LABEL, CURVE_GROUP_THICKNESS_DP, StripRow.MORE) {
+    f.selected >= 2 -> item(CurveKeys.THICKNESS, POINT_THICKNESS_LABEL, CURVE_THICKNESS_DP, StripRow.MORE) {
         val ctx = LocalStripContext.current
-        GroupThicknessField(
-            tool,
-            onOpenDialog = {
-                ctx.closeMore()
-                ui.typing = CurveTyping.GroupThickness
-            },
-            modifier = Modifier.width(CURVE_GROUP_THICKNESS_DP.dp),
-        )
+        GroupThicknessControl(tool, onType = {
+            ctx.closeMore()
+            ui.typing = CurveTyping.GroupThickness
+        })
     }
     else -> null
 }
 
-/** Path: "Point weight" (its value under "Weight"); its popup is v1.6's Weight control or the group's field. */
+/** Path: "Point weight" (its value under "Weight"); its popup is v1.6's Weight control or (v1.9) the group's [GroupWeightControl]. */
 private fun weightItem(tool: CurveTool, f: CurveStripFacts, ui: CurveStripUi) = item(CurveKeys.WEIGHT, POINT_WEIGHT_LABEL, CURVE_WEIGHT_DP, StripRow.MORE) {
     val ctx = LocalStripContext.current
     val shown = if (f.single >= 0) {
@@ -702,13 +787,22 @@ private fun weightItem(tool: CurveTool, f: CurveStripFacts, ui: CurveStripUi) = 
                 ui.typing = CurveTyping.Weight(f.single)
             })
         } else {
-            GroupWeightField(tool, onOpenDialog = {
+            GroupWeightControl(tool, onType = {
                 close()
                 ctx.closeMore()
                 ui.typing = CurveTyping.GroupWeight
             })
         }
     }
+}
+
+/**
+ * v1.9 (R18): [PointLabels19.BEVEL], Polyline with points selected ([StripKeysV19.BEVEL], tag
+ * [V19Tags.BEVEL]): bevels the selected corners at once and opens the popup that adjusts that
+ * step ([CurveBevelPopupHost]); while the new points stay selected a second tap reopens it.
+ */
+private fun bevelItem(tool: CurveTool) = item(StripKeysV19.BEVEL.key, PointLabels19.BEVEL, StripKeysV19.BEVEL.widthDp, StripRow.MORE) {
+    IconCell(Icons.Filled.RoundedCorner, PointLabels19.BEVEL, onClick = { tool.bevelPoints() }, tag = V19Tags.BEVEL)
 }
 
 private fun deselectItem(tool: CurveTool) = item(CurveKeys.DESELECT, DESELECT_POINT_LABEL, CURVE_ICON_DP, StripRow.MORE) {
@@ -805,9 +899,11 @@ private fun IconCell(
     selected: Boolean? = null,
     tint: Color = BrushworkColors.OnChrome,
     state: String? = null,
+    tag: String? = null,
 ) {
     val on = selected == true
     val base = Modifier
+        .then(if (tag != null) Modifier.testTag(tag) else Modifier)
         .size(CURVE_ICON_DP.dp)
         .clip(RoundedCornerShape(8.dp))
         .background(if (on) BrushworkColors.AccentDim else Color.Transparent)

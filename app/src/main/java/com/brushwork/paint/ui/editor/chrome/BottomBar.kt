@@ -19,11 +19,14 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -47,6 +50,7 @@ import androidx.compose.ui.unit.sp
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.tools.ErasableTool
 import com.brushwork.paint.tools.ToolId
+import com.brushwork.paint.tools.vector.CurveTool
 import com.brushwork.paint.ui.editor.EditorIcons
 import com.brushwork.paint.ui.editor.SliderMath
 import com.brushwork.paint.ui.editor.blockCanvasTouches
@@ -63,6 +67,8 @@ import com.brushwork.paint.ui.theme.IbisDims
  * show interface, the layer window, back to the gallery. The tool and layer slots show their open
  * state as a darker box with a light edge. v1.9 (R11 a): while the current tool erases with its
  * own outline ([ErasableTool]), slot 1 is that tool's erase mode ([EraseModeSlot]), open while on.
+ * v1.9 (R14): the tool slot flashes its open state once when a curve tool reopens a line in
+ * another curve tool ([toolSlotFlashing]).
  */
 @Composable
 internal fun BottomBar(
@@ -112,8 +118,10 @@ internal fun BottomBar(
                     SwapGlyph(if (erasing) EditorIcons.tool(paintTool) else EditorIcons.Eraser)
                 }
             }
-            // 2: the tool menu, showing the current tool.
-            Slot(slot, "Tools (current: ${active.label})", open = toolMenuOpen, onClick = onToolMenu) {
+            // 2: the tool menu, showing the current tool. v1.9 (R14): it flashes its open-state
+            // box once, for CurveTool.SLOT_FLASH_MS, when a curve tool reopens a line in another.
+            val flashing = toolSlotFlashing(controller)
+            Slot(slot, "Tools (current: ${active.label})", open = toolMenuOpen || flashing, onClick = onToolMenu) {
                 Icon(EditorIcons.tool(active), null, tint = Color.White, modifier = Modifier.size(IbisDims.BottomGlyph))
             }
             // 3: the brush size disc (its number is drawn, not a label: the slot is "Open brush
@@ -168,6 +176,35 @@ internal fun BottomBar(
 
 /** Set (true) on a bottom-bar slot drawn in its open state (the darker box): tests read it, there is no pixel to compare. */
 internal val BottomSlotOpen = SemanticsPropertyKey<Boolean>("bottomBar.slotOpen")
+
+/**
+ * v1.9 (R14, design 3.2 A1 step 5): true for [CurveTool.SLOT_FLASH_MS] each time
+ * [CurveTool.slotFlashes] rises, that is when a tap with one curve tool reopened a line in another
+ * (the tool switches, with its toast [com.brushwork.paint.ui.common.CurveLabels19.SWITCHED_TO]).
+ * The count seen when the bar was composed is the baseline, so the bar never flashes for switches
+ * made before it was shown. The flash is timed on the frame clock (it is drawn frames), not with a
+ * coroutine delay on the wall clock.
+ */
+@Composable
+private fun toolSlotFlashing(controller: EditorController): Boolean {
+    val flashes = CurveTool.slotFlashes(controller.tools)
+    var seen by remember(controller) { mutableIntStateOf(flashes) }
+    var flashing by remember(controller) { mutableStateOf(false) }
+    LaunchedEffect(controller, flashes) {
+        if (flashes > seen) {
+            seen = flashes
+            flashing = true
+            val start = withFrameMillis { it }
+            while (withFrameMillis { it } - start < CurveTool.SLOT_FLASH_MS) {
+                // Wait for the next frame.
+            }
+            flashing = false
+        } else {
+            seen = flashes
+        }
+    }
+    return flashing
+}
 
 /**
  * v1.9 (R11 a; owner A5): slot 1 while the current tool erases with its own outline ([tool]:

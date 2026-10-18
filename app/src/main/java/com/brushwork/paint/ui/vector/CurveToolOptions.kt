@@ -30,7 +30,7 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
@@ -48,6 +48,9 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import com.brushwork.paint.AppSettings
 import com.brushwork.paint.core.IncrementMath
@@ -59,9 +62,12 @@ import com.brushwork.paint.tools.vector.spline.SplineEditing
 import com.brushwork.paint.ui.common.stepOnLongPress
 import com.brushwork.paint.ui.common.PointLabels
 import com.brushwork.paint.tools.points.Mixed
-import com.brushwork.paint.tools.points.MixedEdit
-import com.brushwork.paint.ui.points.MixedNumberField
 import com.brushwork.paint.ui.points.MixedValueDialog
+import com.brushwork.paint.ui.points.ThicknessRow
+import com.brushwork.paint.ui.points.ThicknessRowDefaults
+import com.brushwork.paint.ui.points.groupSliderTouches
+import com.brushwork.paint.ui.common.V19Tags
+import com.brushwork.paint.ui.common.CurveLabels19
 import com.brushwork.paint.ui.theme.IbisColors
 import com.brushwork.paint.ui.theme.IbisDims
 import com.brushwork.paint.vector.VSpline
@@ -122,49 +128,43 @@ internal fun pathCaptionApplies(tool: CurveTool): Boolean {
 internal const val POINT_THICKNESS_KEY = "curve.pointThickness"
 
 /** Thickness factors (0..3) as percentages. */
-private fun percents(factors: FloatArray) = FloatArray(factors.size) { factors[it] * 100f }
+internal fun percents(factors: FloatArray) = FloatArray(factors.size) { factors[it] * 100f }
 
 /** Percentages as thickness factors. */
-private fun factors(percents: FloatArray) = FloatArray(percents.size) { percents[it] / 100f }
+internal fun factors(percents: FloatArray) = FloatArray(percents.size) { percents[it] / 100f }
 
 /**
- * "Point thickness" of the selected points: the shared value or "Mixed"; a scrub multiplies each
- * point's thickness (0 stays 0), a typed value sets all of them (`*2` / `/2`: each). One in-tool
- * step per scrub or typed value. v1.8 (§3.9): a tap calls [onOpenDialog] (the field sits on the
- * More row); the strip's overlays show [GroupThicknessDialog].
+ * v1.9 (R1, R2): "Point thickness" of the selected points, as the one point's control: the same
+ * [ThicknessRow] (‹, the value box, ›, the blue slider), 260 dp. The value box reads the shared
+ * value or "Mixed", and the factor while the thumb is dragged; the thumb sits at the points'
+ * mean. Only a drag that starts on the thumb moves values, relatively (a taper keeps its
+ * ratios; points at 0 % rise); ‹ › step each point on the Percent grid; a tap on the value calls
+ * [onType] (the strip's overlays show [GroupThicknessDialog]). See [CurveGroupEdit]. Replaces
+ * v1.7's `GroupThicknessField` (a scrub field that left 0 % at 0).
  */
 @Composable
-internal fun GroupThicknessField(tool: CurveTool, onOpenDialog: () -> Unit, modifier: Modifier = Modifier) {
-    val value by remember(tool) { derivedStateOf { Mixed.of(percents(tool.selectedWidths())) } }
-    // The selected points and their thickness when the scrub began (every event scales those).
-    val base = remember(tool) { arrayOfNulls<FloatArray>(1) }
-    val indices = remember(tool) { arrayOf(emptyList<Int>()) }
-    MixedNumberField(
-        label = POINT_THICKNESS_LABEL,
-        value = value,
-        unit = "%",
+internal fun GroupThicknessControl(tool: CurveTool, onType: () -> Unit, modifier: Modifier = Modifier) {
+    val edit = remember(tool) { CurveGroupEdit(tool, CurveGroupEdit.Kind.THICKNESS) }
+    // A drag cut short by the control leaving (the selection changed under the finger) still ends its step.
+    DisposableEffect(edit) { onDispose { edit.end() } }
+    val text = edit.text()
+    ThicknessRow(
+        value = edit.thumbValue(),
+        text = text,
+        textDescription = "$POINT_THICKNESS_LABEL $text",
+        onThinner = { edit.step(up = false) },
+        onThicker = { edit.step(up = true) },
+        onArrowRelease = { tool.endNumericEdit() },
+        onType = onType,
+        onSlide = { v -> edit.slideTo(v) },
+        onSlideEnd = { edit.end() },
+        modifier = modifier.testTag(V19Tags.GROUP_THICKNESS),
         range = 0f..MAX_THICKNESS_PERCENT,
-        incrementKey = POINT_THICKNESS_KEY,
-        onBegin = {
-            indices[0] = tool.pointSelection.indices
-            base[0] = percents(tool.selectedWidths())
-            tool.beginNumericEdit()
-        },
-        onDrag = drag@{ start, now ->
-            val b = base[0] ?: return@drag
-            tool.setWidths(indices[0], factors(MixedEdit.scaled(b, start, now, 0f, MAX_THICKNESS_PERCENT)))
-        },
-        onEnd = {
-            base[0] = null
-            tool.endNumericEdit()
-        },
-        onTyped = { text -> typeGroupThickness(tool, text) },
-        modifier = modifier,
-        onOpenDialog = onOpenDialog,
+        group = edit,
     )
 }
 
-/** The dialog of [GroupThicknessField] (in the strip's overlays): its typed text sets the selected points' thickness, one in-tool step. */
+/** The dialog of [GroupThicknessControl] (in the strip's overlays): its typed text sets the selected points' thickness, one in-tool step. */
 @Composable
 internal fun GroupThicknessDialog(tool: CurveTool, onDismiss: () -> Unit) {
     MixedValueDialog(
@@ -173,49 +173,44 @@ internal fun GroupThicknessDialog(tool: CurveTool, onDismiss: () -> Unit) {
         unit = "%",
         range = 0f..MAX_THICKNESS_PERCENT,
         incrementKey = POINT_THICKNESS_KEY,
-        onTyped = { text -> typeGroupThickness(tool, text) },
+        onTyped = { text -> CurveGroupEdit(tool, CurveGroupEdit.Kind.THICKNESS).type(text) },
         onDismiss = onDismiss,
     )
 }
 
-private fun typeGroupThickness(tool: CurveTool, text: String) {
-    val v = MixedEdit.typed(percents(tool.selectedWidths()), text, 0f, MAX_THICKNESS_PERCENT) ?: return
-    tool.setWidths(tool.pointSelection.indices, factors(v))
-    tool.endNumericEdit()
-}
-
-/** PATH: "Point weight" of the selected control points (0.1–10), as [GroupThicknessField]. */
+/**
+ * v1.9 (R1): PATH, "Point weight" of the selected control points, as the one point's
+ * [WeightControl] (the value, tap to type it, and the orange log slider 0.1–10) with the group
+ * rules of [GroupThicknessControl]: "Mixed", the thumb at the mean, a relative drag that starts on
+ * the thumb, the factor while dragging. Replaces v1.7's `GroupWeightField`.
+ */
 @Composable
-internal fun GroupWeightField(tool: CurveTool, onOpenDialog: () -> Unit, modifier: Modifier = Modifier) {
-    val value by remember(tool) { derivedStateOf { Mixed.of(tool.selectedWeights()) } }
-    val base = remember(tool) { arrayOfNulls<FloatArray>(1) }
-    val indices = remember(tool) { arrayOf(emptyList<Int>()) }
-    MixedNumberField(
-        label = POINT_WEIGHT_LABEL,
-        value = value,
-        unit = "",
-        range = VSpline.MIN_WEIGHT..VSpline.MAX_WEIGHT,
-        incrementKey = PATH_WEIGHT_KEY,
-        onBegin = {
-            indices[0] = tool.pointSelection.indices
-            base[0] = tool.selectedWeights()
-            tool.beginNumericEdit()
-        },
-        onDrag = drag@{ start, now ->
-            val b = base[0] ?: return@drag
-            tool.setWeights(indices[0], MixedEdit.scaled(b, start, now, VSpline.MIN_WEIGHT, VSpline.MAX_WEIGHT))
-        },
-        onEnd = {
-            base[0] = null
-            tool.endNumericEdit()
-        },
-        onTyped = { text -> typeGroupWeight(tool, text) },
-        modifier = modifier,
-        onOpenDialog = onOpenDialog,
-    )
+internal fun GroupWeightControl(tool: CurveTool, onType: () -> Unit, modifier: Modifier = Modifier) {
+    val edit = remember(tool) { CurveGroupEdit(tool, CurveGroupEdit.Kind.WEIGHT) }
+    DisposableEffect(edit) { onDispose { edit.end() } }
+    val text = edit.text()
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = modifier.testTag(V19Tags.GROUP_WEIGHT).padding(horizontal = 2.dp),
+    ) {
+        Text(WEIGHT_CAPTION, style = MaterialTheme.typography.labelMedium, color = BrushworkColors.OnChromeDim, maxLines = 1)
+        WeightValueBox(text, "$POINT_WEIGHT_LABEL $text", onType)
+        Box(Modifier.width(WEIGHT_SLIDER)) {
+            Slider(
+                value = edit.fraction(),
+                onValueChange = { f -> edit.slideTo(f) },
+                onValueChangeFinished = { edit.end() },
+                colors = SliderDefaults.colors(thumbColor = IbisColors.SplineSelected, activeTrackColor = IbisColors.SplineSelected),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .semantics { contentDescription = POINT_WEIGHT_SLIDER },
+            )
+            Box(Modifier.matchParentSize().groupSliderTouches(LocalLayoutDirection.current == LayoutDirection.Rtl) { edit })
+        }
+    }
 }
 
-/** The dialog of [GroupWeightField] (in the strip's overlays), as [GroupThicknessDialog]. */
+/** The dialog of [GroupWeightControl] (in the strip's overlays), as [GroupThicknessDialog]. */
 @Composable
 internal fun GroupWeightDialog(tool: CurveTool, onDismiss: () -> Unit) {
     MixedValueDialog(
@@ -224,15 +219,9 @@ internal fun GroupWeightDialog(tool: CurveTool, onDismiss: () -> Unit) {
         unit = "",
         range = VSpline.MIN_WEIGHT..VSpline.MAX_WEIGHT,
         incrementKey = PATH_WEIGHT_KEY,
-        onTyped = { text -> typeGroupWeight(tool, text) },
+        onTyped = { text -> CurveGroupEdit(tool, CurveGroupEdit.Kind.WEIGHT).type(text) },
         onDismiss = onDismiss,
     )
-}
-
-private fun typeGroupWeight(tool: CurveTool, text: String) {
-    val v = MixedEdit.typed(tool.selectedWeights(), text, VSpline.MIN_WEIGHT, VSpline.MAX_WEIGHT) ?: return
-    tool.setWeights(tool.pointSelection.indices, v)
-    tool.endNumericEdit()
 }
 
 /** The labels of the group fields (the v1.6 single-point controls say the same). */
@@ -295,28 +284,8 @@ internal fun WeightControl(tool: CurveTool, index: Int, weight: Float, onType: (
     val sliding = remember(index) { booleanArrayOf(false) }
     val step = tool.controller.increments.customStep(PATH_WEIGHT_KEY)
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 2.dp)) {
-        Text("Weight", style = MaterialTheme.typography.labelMedium, color = BrushworkColors.OnChromeDim, maxLines = 1)
-        Box(
-            Modifier
-                .heightIn(min = 40.dp)
-                .widthIn(min = 48.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .stepOnLongPress(null, PATH_WEIGHT_KEY)
-                .clickable(onClickLabel = "Type the point weight", role = Role.Button) { onType() },
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                formatWeight(weight),
-                style = MaterialTheme.typography.bodyMedium,
-                color = BrushworkColors.OnChrome,
-                maxLines = 1,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(BrushworkColors.ChromeHigh)
-                    .padding(horizontal = 6.dp, vertical = 3.dp)
-                    .semantics { contentDescription = "Point weight ${formatWeight(weight)}" },
-            )
-        }
+        Text(WEIGHT_CAPTION, style = MaterialTheme.typography.labelMedium, color = BrushworkColors.OnChromeDim, maxLines = 1)
+        WeightValueBox(formatWeight(weight), "$POINT_WEIGHT_LABEL ${formatWeight(weight)}", onType)
         Slider(
             value = SplineEditing.weightToFraction(weight),
             onValueChange = { f ->
@@ -331,11 +300,45 @@ internal fun WeightControl(tool: CurveTool, index: Int, weight: Float, onType: (
             },
             colors = SliderDefaults.colors(thumbColor = IbisColors.SplineSelected, activeTrackColor = IbisColors.SplineSelected),
             modifier = Modifier
-                .width(112.dp)
-                .semantics { contentDescription = "Point weight slider" },
+                .width(WEIGHT_SLIDER)
+                .semantics { contentDescription = POINT_WEIGHT_SLIDER },
         )
     }
 }
+
+/** The weight's value box (tap to type it, long-press for its step): one point's and the group's (v1.9). */
+@Composable
+private fun WeightValueBox(text: String, description: String, onType: () -> Unit) {
+    Box(
+        Modifier
+            .heightIn(min = 40.dp)
+            .widthIn(min = 48.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .stepOnLongPress(null, PATH_WEIGHT_KEY)
+            .clickable(onClickLabel = TYPE_POINT_WEIGHT, role = Role.Button) { onType() },
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text,
+            style = MaterialTheme.typography.bodyMedium,
+            color = BrushworkColors.OnChrome,
+            maxLines = 1,
+            modifier = Modifier
+                .clip(RoundedCornerShape(6.dp))
+                .background(BrushworkColors.ChromeHigh)
+                .padding(horizontal = 6.dp, vertical = 3.dp)
+                .semantics { contentDescription = description },
+        )
+    }
+}
+
+/** The Weight control's texts (v1.6's; constants since v1.9, which the group control shares: rule L). */
+internal const val WEIGHT_CAPTION = "Weight"
+internal const val TYPE_POINT_WEIGHT = "Type the point weight"
+internal const val POINT_WEIGHT_SLIDER = "Point weight slider"
+
+/** The Weight control's slider width (v1.6). */
+private val WEIGHT_SLIDER = 112.dp
 
 /** The typing dialog of [WeightControl] for point [index] (in the strip's overlays). One in-tool step. */
 @Composable
@@ -495,8 +498,8 @@ private fun HandlesChip(label: String, selected: Boolean, onClick: () -> Unit) {
 }
 
 /** Thickness range of a point in percent (§4.5) and the step of its slider and arrows. */
-private const val MAX_THICKNESS_PERCENT = 300f
-private const val THICKNESS_STEP = 5f
+internal const val MAX_THICKNESS_PERCENT = ThicknessRowDefaults.MAX_PERCENT
+internal const val THICKNESS_STEP = 5f
 
 /** [percent] moved by one step up or down, on the step grid, within 0..300 %. */
 internal fun stepThickness(percent: Float, up: Boolean): Float = stepThickness(percent, up, THICKNESS_STEP)
@@ -521,6 +524,7 @@ private fun thicknessSliderSteps(step: Float): Int {
  * the canvas shows a ring of the real line diameter at the point. One undo step per drag, held
  * arrow or typed value. v1.8 (§3.9): an item of the More row, which never scrolls (the v1.7
  * bring-into-view is gone); the typing dialog is [ThicknessDialog], in the strip's overlays.
+ * v1.9 (R1): the row itself is [ThicknessRow], which the several points' control shares.
  */
 @Composable
 internal fun ThicknessControl(tool: CurveTool, index: Int, width: Float, onType: () -> Unit) {
@@ -542,62 +546,32 @@ internal fun ThicknessControl(tool: CurveTool, index: Int, width: Float, onType:
         setPercent(100f)
         tool.endNumericEdit()
     }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        RepeatIconButton(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Thinner point", onRelease = { tool.endNumericEdit() }) {
-            setPercent(stepThickness(current(), up = false, step))
-        }
-        Box(
-            Modifier
-                .heightIn(min = 40.dp)
-                .widthIn(min = 52.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .stepOnLongPress(IncrementKind.PERCENT)
-                .clickable(onClickLabel = "Type the point thickness", role = Role.Button) { onType() },
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                "${percent.roundToInt()} %",
-                style = MaterialTheme.typography.bodyMedium,
-                color = BrushworkColors.OnChrome,
-                maxLines = 1,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(BrushworkColors.ChromeHigh)
-                    .padding(horizontal = 6.dp, vertical = 3.dp)
-                    .semantics { contentDescription = "Point thickness ${percent.roundToInt()} %" },
-            )
-        }
-        RepeatIconButton(Icons.AutoMirrored.Filled.KeyboardArrowRight, "Thicker point", onRelease = { tool.endNumericEdit() }) {
-            setPercent(stepThickness(current(), up = true, step))
-        }
-        Slider(
-            value = percent.coerceIn(0f, MAX_THICKNESS_PERCENT),
-            onValueChange = { v ->
-                tool.thicknessRing = true
-                // The whole drag is one step, however long the finger rests on the way.
-                if (!sliding[0]) { sliding[0] = true; tool.beginNumericEdit() }
-                setPercent(((v / step).roundToInt() * step).coerceIn(0f, MAX_THICKNESS_PERCENT))
-            },
-            onValueChangeFinished = {
-                sliding[0] = false
-                tool.thicknessRing = false
-                tool.endNumericEdit()
-            },
-            valueRange = 0f..MAX_THICKNESS_PERCENT,
-            steps = thicknessSliderSteps(step),
-            colors = SliderDefaults.colors(thumbColor = BrushworkColors.Accent, activeTrackColor = BrushworkColors.Accent),
-            modifier = Modifier
-                .width(THICKNESS_SLIDER)
-                // (The gesture handler outlives recompositions: it calls the newest callbacks,
-                // which act on the point selected now.)
-                .onDoubleTap(onFirstDown = { latestFirstDown() }) { latestReset() }
-                .semantics { contentDescription = "Point thickness slider" },
-        )
-    }
+    ThicknessRow(
+        value = percent,
+        text = "${percent.roundToInt()} %",
+        textDescription = "$POINT_THICKNESS_LABEL ${percent.roundToInt()} %",
+        onThinner = { setPercent(stepThickness(current(), up = false, step)) },
+        onThicker = { setPercent(stepThickness(current(), up = true, step)) },
+        onArrowRelease = { tool.endNumericEdit() },
+        onType = onType,
+        onSlide = { v ->
+            tool.thicknessRing = true
+            // The whole drag is one step, however long the finger rests on the way.
+            if (!sliding[0]) { sliding[0] = true; tool.beginNumericEdit() }
+            setPercent(((v / step).roundToInt() * step).coerceIn(0f, MAX_THICKNESS_PERCENT))
+        },
+        onSlideEnd = {
+            sliding[0] = false
+            tool.thicknessRing = false
+            tool.endNumericEdit()
+        },
+        range = 0f..MAX_THICKNESS_PERCENT,
+        steps = thicknessSliderSteps(step),
+        // (The gesture handler outlives recompositions: it calls the newest callbacks, which
+        // act on the point selected now.)
+        sliderModifier = Modifier.onDoubleTap(onFirstDown = { latestFirstDown() }) { latestReset() },
+    )
 }
-
-/** The thickness slider's width (v1.7: 128 dp). */
-private val THICKNESS_SLIDER = 128.dp
 
 /** The typing dialog of [ThicknessControl] for point [index] (in the strip's overlays). One in-tool step. */
 @Composable
@@ -759,6 +733,14 @@ internal fun CurveSettingsSheet(tool: CurveTool, onDismiss: () -> Unit) {
                     " Undo takes back the last point edit." +
                     (if (controller.isVectorMode) " On this vector layer, tap the line of a ${if (tool.polyline) "polyline" else "curve"} to edit its points again." else ""),
                 Modifier.padding(top = 8.dp),
+            )
+        }
+
+        // v1.9 (R14, D22): where new paths on a pixel layer go (off: painted into it, as in v1.8).
+        if (!tool.isReopened) {
+            ToggleRow(
+                CurveLabels19.OWN_LAYER, s.ownLayer, { v -> set { it.copy(ownLayer = v) } },
+                Modifier.padding(top = 8.dp), description = CurveLabels19.OWN_LAYER_DESC,
             )
         }
     }

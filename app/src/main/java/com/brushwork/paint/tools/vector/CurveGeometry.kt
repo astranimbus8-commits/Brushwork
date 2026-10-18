@@ -232,7 +232,7 @@ class WidthLine(val xs: FloatArray, val ys: FloatArray, val ws: FloatArray, val 
  * thread). With every factor at 1 nothing changes (the callers keep their v1.4 drawing).
  */
 object CurveWidths {
-    /** Largest thickness factor (300 %). */
+    /** Largest thickness factor (300 %): the one clamp of `CurveTool.setWidth` and `setWidths`, the same value as [com.brushwork.paint.vector.VSpline.MAX_WIDTH] (v1.9, pinned by `CurveWidthConstantsTest`). */
     const val MAX_FACTOR = 3f
 
     /** Flattening tolerance of [line] (document px). */
