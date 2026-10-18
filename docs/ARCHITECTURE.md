@@ -1336,6 +1336,78 @@ compat row 10 (cut pieces) of `Qa19CompatBackFromV18RobolectricTest`.
 
 <!-- v19-A1 -->
 
+R1, R2, R18 (Polyline), R14 (curves) and R11 for the Curve, Polyline and Path tools (one class,
+`CurveTool`, by `kind`). Code: `tools/vector/CurveTool.kt`, `CurveGroupMath.kt`, `CurveGeometry.kt`,
+`tools/points/Mixed.kt`, `ui/points/ThicknessRow.kt`, `ui/points/MixedNumberField.kt`,
+`ui/vector/Curve*.kt`.
+
+**Point thickness, one point and several (R1, R2).** `ThicknessRow` (‹, the value box, ›, the blue
+slider; 260 dp, `ThicknessRowLabels`) is v1.6's one-point control moved out of
+`CurveToolOptions.kt` unchanged (`ThicknessRowGoldenTest`). With two or more points selected the
+More row shows the same row as `GroupThicknessControl`, and Path's group weight popup shows
+`GroupWeightControl` (the orange log slider, 0.1 to 10); `CurveGroupEdit` runs both. The value box
+reads the shared value or "Mixed", the thumb sits at the points' mean, and while the thumb is
+dragged the box shows the factor (`PointLabels19.FACTOR`). Rules (`MixedEdit`):
+- `dragged`: only a drag that starts on the thumb moves values, relatively: each point scales by
+  thumb / start mean, so a taper keeps its ratios; a point at 0 % rises by the thumb's gain; from a
+  mean of 0 every point takes the thumb. A track tap or a double tap does nothing in group form.
+- `stepped`: ‹ › move each point to its next step on the percent grid (0 % goes up one step).
+- `offset` / `typed`: "*2", "/2", "+10", "-10" apply to each point; a plain number sets all.
+- R2 (the one-point report, "doesn't move up from 0 %"): at 0 % the thumb sits flush against ›'s
+  40 dp box; a touch up to `GroupSliderGeometry.EDGE_REACH` (8 dp) beside the slider's start edge
+  goes to the thumb while the thumb is near (`thumbBesideSlider`), so › no longer ticks +5 % and
+  swallows the drag. Elsewhere › ticks as before.
+- One drag, one ‹ › hold or one typed value is one in-tool step. `setWidth` and `setWidths` clamp
+  with one constant, `CurveWidths.MAX_FACTOR` (= `VSpline.MAX_WIDTH`, 3).
+
+**Bevel points, Polyline (R18).** While points are selected the More row shows "Bevel points"
+(`StripKeysV19.BEVEL`, `V19Tags.BEVEL`). `CurveTool.bevelPoints` bevels the selected sharp corners
+with the remembered Amount and Segments (`AppSettings.curveBevelAmount`, `curveBevelSegments`) through
+`PointBevel`, as ONE in-tool step, selects the new points and opens the frozen `BevelPopup` in its
+own window (`CurveBevelPopup.kt`), above the bottom bar. Its changes re-apply the same step from the
+pre-bevel copy; a re-tap while the new points stay selected reopens it; any other edit, undo, redo
+or Back ends the session; the canvas tap that closes it adds no point. Only sharp corners bevel
+(`PointLabels19.BEVEL_SHARP_ONLY`); past 2000 points nothing changes (`BEVEL_TOO_MANY`).
+
+**Curves of several kinds on one layer (R14).** A tap on a path object of the active vector layer
+reopens it in the tool that made it (`reopenablePathAt`): Curve and Polyline now reopen each
+other's lines, as both did with Path's since v1.6. A switch hands the open path over
+(`Handoff`), shows `CurveLabels19.SWITCHED_TO` and raises `CurveTool.slotFlashes(tools)`, the one
+counter the bottom bar may key a `SLOT_FLASH_MS` (200 ms) tool-slot flash on (lead request:
+`BottomBar.kt` is A5's). The reopened edit commits as one controller step. Old projects open as
+they were (compat rows `row10MixedCurves`, `row10BevelledCurvePoints`).
+
+**Erase mode (R11 a).** `CurveTool` is an `ErasableTool`: slot 1 reads `EraseLabels19.WITH_CURVE`
+(`WITH_POLYLINE`, `WITH_PATH`) or the `ERASING_*` twin, and the last row of the "Stroke kind" menu,
+`EraseLabels19.INSTEAD_OF_PAINT`, is the same switch (the menu's face shows the eraser glyph while
+on). Erase mode is transient: `onSelected` turns it off when the user picks the tool; it stays on
+for the next path. While on, the pending outline is drawn dashed and erases live through A5's
+`ToolErase` session (see the A5 block for routing, modes and landing):
+- The footprint is what the tool would paint: the line at its width (the brush's size for
+  "Current brush", the plain line's width; none when every point is at 0 %), plus the fill when it
+  is on and possible (an open path fills as if closed). Varying thickness erases the line's
+  outline; mirror copies erase too (a fill or a varying line is one region, united with PathOps,
+  as mirrored copies wind the other way). Taper and pressure are ignored: full width to the ends.
+- ✓ commits ONE step labelled `EraseLabels19.STEP_PATH` (the Path tool), `STEP_FILL` (a fill
+  alone) or `STEP_LINE`; a refused commit keeps the path. A refused layer (locked, hidden, an
+  alpha-locked layer's pixels, a folder) shows the outline only and says why once per layer state
+  (`eraseRefused`, keyed on the layer and `layersVersion`, cleared at ✓).
+- No reopening while erasing (a tap starts an outline); an explicit reopen turns erase off;
+  turning erase on applies a reopened path first. "To Bézier" and its hand-back keep erase mode.
+- On a vector or legacy shape layer (content, not mask) row 1 shows A5's mode cell
+  (`VectorEraseChooser.modeCell`, `StripKeysV19.ERASE_MODE_CELL`, `EraseLabels19.MODE_CELL`)
+  right after "Stroke kind" (`CurveStripFacts.eraseCell`); its "Turn into pixels" opens
+  `ErasePixelsDialog`. Room for it at 360 dp with the VECTOR cell: "Stroke kind" becomes AUTO
+  (rank 1) on an open Curve and Polyline and on Path; Curve's generator chip and an open Path's
+  "Order N" (after the weight) become More items; the "Use brush size" / "Taper ends" shortcut
+  leaves the strip (both stay in the settings sheet). Without the cell the strips are v1.8's.
+
+Tests: `v19/a1/` (`GroupThicknessControlTest`, `GroupWeightControlTest`, `ThicknessRowGoldenTest`,
+`ThicknessFromZeroTest`, `CurveWidthConstantsTest`, `PolylineBevelRobolectricTest`,
+`CurvePolylineReopenTest`, `CurveEraseRobolectricTest` on raster, text, vector and legacy shape
+layers, `CurveStripInventoryTest` every strip state at 392 and 360 dp with the label scan; Timing
+`GroupThicknessBudgetTest`), `qa19/Qa19ThicknessUiTest`, `qa19/Qa19PolylineBevelUiTest`.
+
 <!-- /v19-A1 -->
 
 ### Shape tools (A9)

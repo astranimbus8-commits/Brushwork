@@ -310,10 +310,14 @@ internal fun curveSpec(tool: CurveTool, f: CurveStripFacts, ui: CurveStripUi): S
     val open = f.points > 0
     val kind = f.kind
     // v1.9 (R11 a): erasing a vector or shape layer, the mode cell follows the stroke kind in row 1
-    // (it never leaves it); room is made where row 1 is full: the stroke kind may go to the More
-    // row first (Curve and Polyline with a path open, Path), and a generated curve's item moves there.
+    // (it never leaves it), and room is made for it (rules 1, 2 and 5 at 360 dp with the VECTOR
+    // cell): the stroke kind may go to the More row first (Curve and Polyline with a path open,
+    // Path); a generated curve's item and an open Path's "Order N" are More items; the "Use brush
+    // size" / "Taper ends" shortcut leaves the strip (both stay in the settings sheet; a taper
+    // does not change what an erase takes).
     val cell = eraseCellItem(tool, f, ui)
     val kindRank = if (cell != null) 1 else 0
+    val shortcut = if (cell == null) brushOrTaper(tool, f) else emptyList()
     when (kind) {
         CurveKind.CURVE -> if (!open) {
             items += curvesItem(tool)
@@ -321,7 +325,7 @@ internal fun curveSpec(tool: CurveTool, f: CurveStripFacts, ui: CurveStripUi): S
             if (cell != null) items += cell
             if (f.stroke == CurveStroke.PLAIN) items += lineWidthItem(tool, ui, StripRow.ROW1, 1)
             items += closedItem(tool, StripRow.MORE)
-            items += brushOrTaper(tool, f)
+            items += shortcut
             items += sheetItems(tool, ui)
         } else {
             items += addItem(tool)
@@ -345,7 +349,7 @@ internal fun curveSpec(tool: CurveTool, f: CurveStripFacts, ui: CurveStripUi): S
                 items += previousItem(tool)
                 items += nextItem(tool)
             }
-            items += brushOrTaper(tool, f)
+            items += shortcut
             items += sheetItems(tool, ui)
             if (f.copies) items += removeCopiesItem(tool)
         }
@@ -354,7 +358,7 @@ internal fun curveSpec(tool: CurveTool, f: CurveStripFacts, ui: CurveStripUi): S
             if (cell != null) items += cell
             if (f.stroke == CurveStroke.PLAIN) items += lineWidthItem(tool, ui, StripRow.ROW1, 0)
             items += closedItem(tool, StripRow.MORE)
-            items += brushOrTaper(tool, f)
+            items += shortcut
             items += sheetItems(tool, ui)
         } else {
             items += addItem(tool)
@@ -366,7 +370,7 @@ internal fun curveSpec(tool: CurveTool, f: CurveStripFacts, ui: CurveStripUi): S
             if (f.anyThickness) items += all100Item(tool)
             items += selectAllItem(tool, f)
             if (f.selected > 0) items += deselectItem(tool)
-            items += brushOrTaper(tool, f)
+            items += shortcut
             items += sheetItems(tool, ui)
             if (f.copies) items += removeCopiesItem(tool)
             // v1.9 (R18): after v1.8's More items (StripKeysV19.BEVEL's rank).
@@ -386,8 +390,8 @@ internal fun curveSpec(tool: CurveTool, f: CurveStripFacts, ui: CurveStripUi): S
             items += addItem(tool)
             items += deleteItem(tool, f)
             items += closedItem(tool, StripRow.ROW1)
-            // (Erasing: the order goes to the More row before the stroke kind.)
-            items += orderItem(tool, f, StripRow.ROW1, if (cell != null) 2 else 0)
+            // (Erasing: the order is a More item, after the weight.)
+            if (cell == null) items += orderItem(tool, f, StripRow.ROW1)
             items += strokeKindItem(tool, f, StripRow.ROW1, 1)
             if (cell != null) items += cell
             items += endpointItem(tool)
@@ -397,6 +401,7 @@ internal fun curveSpec(tool: CurveTool, f: CurveStripFacts, ui: CurveStripUi): S
             if (f.generated != null) items += generatorItem(tool, f.generated, ui, StripRow.MORE, 0)
             thicknessItem(tool, f, ui)?.let { items += it }
             if (f.selected > 0) items += weightItem(tool, f, ui)
+            if (cell != null) items += orderItem(tool, f, StripRow.MORE)
             if (f.selected > 0) items += deselectItem(tool)
             if (f.points >= 2) items += toBezierItem(tool)
             items += sheetItems(tool, ui)
@@ -642,7 +647,7 @@ private fun closedItem(tool: CurveTool, row: StripRow): StripItem {
 internal fun orderLabel(order: Int): String = "Order $order"
 
 /** Path: "Order 4" (its value); its popup holds v1.7's stepper ("Lower order", "Higher order"). */
-private fun orderItem(tool: CurveTool, f: CurveStripFacts, row: StripRow, rank: Int = 0) = item(CurveKeys.ORDER, orderLabel(f.order), CURVE_ORDER_DP, row, rank) {
+private fun orderItem(tool: CurveTool, f: CurveStripFacts, row: StripRow) = item(CurveKeys.ORDER, orderLabel(f.order), CURVE_ORDER_DP, row) {
     val order = tool.pathOrder
     DropCell(orderLabel(order), CURVE_ORDER_DP, longPress = false, arrow = false, face = { CellText(orderLabel(order)) }) { _ ->
         OrderStepper(tool, tool.pathOrder)
