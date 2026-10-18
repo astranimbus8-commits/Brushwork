@@ -1,5 +1,6 @@
 package com.brushwork.paint.tools.text
 
+import com.brushwork.paint.core.Geometry
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.tools.vector.spline.NurbsGeometry
 import com.brushwork.paint.tools.vector.spline.SplineEditing
@@ -558,6 +559,43 @@ object TextPathNodes {
         if (!canBeSharp(nodes, index)) return null
         val p = nodes.points[index]
         return nodes.copy(points = nodes.points.toMutableList().also { it[index] = p.copy(sharp = !p.sharp) })
+    }
+
+    /**
+     * v1.9 (A3 step 13): where a tap at [at] (document px) on the guide adds a node, within
+     * [tolerance] of what the editor draws: the lines between the nodes (a polyline's guide
+     * itself; path nodes show them too), else the curve of path nodes. The node goes on the
+     * segment between two nodes there, strictly between them (at a segment's end lies a node), as
+     * Add point puts one on a segment: a polyline's exactly at the tap, path nodes' at the point of
+     * the segment nearest the tapped point of the curve (so the curve moves a little closer to it,
+     * as with Add points). The index the node takes and the node; null off the guide.
+     */
+    fun pointOnGuide(nodes: VSpline, at: Vec2, tolerance: Float): Pair<Int, VSplinePoint>? {
+        if (nodes.points.size < 2 || !at.x.isFinite() || !at.y.isFinite()) return null
+        val onLines = SplineEditing.polygonHit(nodes, at)
+        val hit = if (onLines != null && onLines.distance <= tolerance) {
+            onLines
+        } else {
+            if (isPolyline(nodes)) return null
+            val (q, d) = nearestOnGuide(guide(nodes), at) ?: return null
+            if (d > tolerance) return null
+            SplineEditing.polygonHit(nodes, q) ?: return null
+        }
+        if (!hit.interior) return null
+        return hit.segment + 1 to SplineEditing.pointOnPolygon(nodes, hit, hit.point)
+    }
+
+    /** The point of [guide]'s line nearest to [p] and its distance; null for a guide without a segment. */
+    private fun nearestOnGuide(guide: TextPathGuide, p: Vec2): Pair<Vec2, Float>? {
+        if (guide.vertexCount < 2) return null
+        var best: Vec2? = null
+        var bestD = Float.MAX_VALUE
+        for (i in 0 until guide.vertexCount - 1) {
+            val q = Geometry.projectOnSegment(p, guide.vertex(i), guide.vertex(i + 1))
+            val d = q.distanceTo(p)
+            if (d < bestD) { bestD = d; best = q }
+        }
+        return best?.let { it to bestD }
     }
 
     /** [nodes] with node [index] at [at] (kept within range). */

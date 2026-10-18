@@ -1782,8 +1782,8 @@ options on them) and R14 ("a button to duplicate the selection in the same layer
 ### Text (A3)
 
 <!-- v19-A3 -->
-Steps 1-10 of 13 are built. Step 11 (`MergedNumberedTextsTest`) waits for A4's merge; steps 12
-(vertical justify) and 13 (tap the guide to insert a point) are cuttable and not built yet.
+All 13 steps are built, including the cuttable steps 12 (vertical justify) and 13 (tap the guide
+to insert a point).
 
 - **Placeholder (R6).** `PlaceholderAmount.WORDS` ("3 words") is first in `CHIP_ORDER`; the
   amount chips wrap in a `FlowRow` (`TextFlowChips.kt`).
@@ -1792,6 +1792,14 @@ Steps 1-10 of 13 are built. Step 11 (`MergedNumberedTextsTest`) waits for A4's m
   except a paragraph's last line, which keeps `align` ("Last line:" in `TextAlignSection.kt`).
   `ALL` spreads that line too. The space goes into word gaps, or between clusters for CJK lines.
   Export writes a justified line as one run per word (`TextExport`, `ExportSceneBuilder`).
+  Vertical text (step 12) justifies its columns in `VerticalTextLayout.layout(justify)`, with the
+  same rules: no break changes, and `ON` spares the last column of each line. A spread column
+  starts at the top and ends at the block height (the box height, or the tallest column for
+  point text). The space goes into word gaps after the first letter. Opening spaces stay an
+  indent, and trailing spaces hang. A column without gaps spreads between cells when it holds
+  CJK letters, or under `ALL`; a one-word Latin column keeps `align` under `ON`. The sheet shows
+  "Justify columns", "Justify the last column too" and the caption "Last column:"
+  (`TextAlignSection`). Vertical text exports as outlines from the same glyphs.
 - **Kerning (R5).** `KerningModes.kt` turns a mode into extra advances on top of the font's
   kerning, as the v1.7 manual kerns do (`TextKerns.advancesPx`). Every route that draws kerned
   text therefore draws the modes, and a mode that moves nothing keeps v1.8's pixels. Auto is the
@@ -1823,7 +1831,19 @@ Steps 1-10 of 13 are built. Step 11 (`MergedNumberedTextsTest`) waits for A4's m
   time" (no text open) or Duplicate, Bring forward and Send backward (a text open) stand before
   Snap; Snap, then Numbers, end the row as in v1.8. The v1.8 pins in
   `Qa18PolishChromeVerifyTest` require this order. `StripKeysV19`'s ranks would put the v1.9
-  items after Snap; the lead decides which order stays.
+  items after Snap; the lead decides which order stays. While the selection bar or the object
+  bar shows (`StripContext.selectionBarShown`), Duplicate, Bring forward and Send backward leave
+  the More row, because the bars carry them (I10, as A9's `ShapeObjectItems`). The strip is a
+  pure `textSpec(tool, TextStripFacts)`, and the composable only reads the facts.
+- **Merged texts and the label scan (step 11).** `MergedNumberedTextsTest` (C22, after A4's merge):
+  "Merge down" and "Merge folder" keep each text's own numbers and pixels (I1). A text edited
+  after the merge renumbers only itself. A frame of a story merges as pixels (`WHY_FRAMES`).
+  `TextStripLabelScanTest` checks the Text strip in all 200 states. Each state keeps
+  `StripInventory.rules` at 360 and 392 dp. No label repeats or holds another, within the strip
+  and hint or against the bars, the node bar and the sheets' labels. One configuration is left
+  out, and the test pins it: a two-line hint at 360 dp with the VECTOR cell, where an open text
+  of a layer of several would take 388 dp. It cannot occur, because that text's text layer is
+  active, so `isVectorMode` is false and the cell does not show.
 - **Path nodes (R12).** `TextPathSpec.nodes` (frozen) holds a `VSpline`; `TextPathNodes` converts
   a guide. `asPath` gives a curve's 4 control points, a circle's 8 nodes, or a rectangle's exact
   arcs. `asPolyline` gives `CUBIC_POLYLINE_SEGMENTS + 1` points. The edits are
@@ -1839,7 +1859,14 @@ Steps 1-10 of 13 are built. Step 11 (`MergedNumberedTextsTest`) waits for A4's m
   within 24 dp). `TextPathNodeBar` sits where the selection bar does: 44 dp high, tag
   `V19Tags.TEXT_PATH_NODES`, placed by `TextPathNodeBar.topDp` from the `IbisDims`. Its ✓
   (`DONE_POINTS`) and the floating ✓ return to the sheet; the next ✓ commits one document step.
-  While nodes are edited, two fingers zoom the view and node drags do not snap.
+  While nodes are edited, two fingers zoom the view and node drags do not snap. A tap that
+  picks no node (step 13) adds one where it meets the guide within 24 dp, when the finger
+  lifts (`TextPathNodeEditor.tapGuide`, `TextPathNodes.pointOnGuide`). This is one Add point
+  step, and the new node is selected. A drag adds nothing, and neither does the first finger of
+  a two-finger gesture. The node goes on the line between two nodes, strictly between them, and
+  the closing segment of a closed guide counts. On a polyline it lands exactly at the tap. For a
+  tap on the curve of path nodes, it lands at the line's point nearest the tapped curve point,
+  as "Add point" places nodes on the lines. At 200 points the tap toasts `NODES_MAX`.
 <!-- /v19-A3 -->
 
 ### Drawing and mask preview (A6)

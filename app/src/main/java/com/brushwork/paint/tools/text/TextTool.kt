@@ -1874,7 +1874,8 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
         gestureStart = cur
         if (nodeEditor.active) {
             // v1.9 (R12): the nearest node within 24 dp is selected and follows the finger;
-            // elsewhere nothing is selected (the text stays put).
+            // elsewhere nothing is selected (the text stays put; a tap on the guide adds a node
+            // when the finger lifts, A3 step 13).
             mode = Mode.NODE
             nodeEditor.down(downDoc, t.screenToDocLength(t.dp(NODE_PICK_DP)))
             controller.invalidateOverlay()
@@ -2198,7 +2199,13 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
         clearReadout()
         when {
             // v1.9 (R12): a node that moved is one in-tool step; a tap only selected (or not).
-            m == Mode.NODE -> nodeEditor.up()
+            // A tap that picked no node adds one where it meets the guide (A3 step 13; on lift,
+            // so the first finger of a two-finger gesture adds nothing).
+            m == Mode.NODE -> {
+                nodeEditor.up()
+                val t = controller.viewTransform
+                if (!moved && nodeEditor.tapGuide(downDoc, t.screenToDocLength(t.dp(GUIDE_TAP_DP)))) controller.invalidateOverlay()
+            }
             moved -> {}
             // The editor is open (minimized to its pill while the canvas is used): the text can
             // be dragged and pinched, but a tap neither places it nor restarts the editor.
@@ -2628,6 +2635,9 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
         /** v1.9 (R12): a finger picks the nearest node within this; the selected node's ring (diameter). */
         private const val NODE_PICK_DP = 24f
         private const val NODE_RING_DP = 40f
+
+        /** v1.9 (A3 step 13): a tap this close to the guide adds a node there (the Path tool's IbisDims.PathInsertDistance). */
+        private const val GUIDE_TAP_DP = 24f
         private const val BOX_HANDLE_HALF_DP = 9f
         private const val BOX_HANDLE_WIDTH_DP = 6f
         /** Tapping this close to a text layer's box still counts as tapping its text. */

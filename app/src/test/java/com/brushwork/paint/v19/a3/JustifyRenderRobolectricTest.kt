@@ -85,7 +85,7 @@ class JustifyRenderRobolectricTest {
         assertNull(all.staticLayout)
         val widest = all.wrapLines!!.maxOf { it.width }
         for (l in all.wrapLines!!) assertEquals(widest, rightEdge(all, l), 0.01f)
-        // Vertical text keeps align in v1.9 (step 12).
+        // Vertical text spreads its columns in VerticalTextLayout (step 12, VerticalJustifyTest), never these lines.
         assertNull(block(boxed(TextJustify.ALL).let { it.copy(spec = it.spec.copy(vertical = true)) }).justified)
     }
 

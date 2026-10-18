@@ -26,7 +26,8 @@ enum class TextPathNodeEntry {
  * v1.9 (R12, D31): the node editing of the open text's path, inside the Text tool. An entry of
  * the path sheet turns the guide into nodes ([TextPathNodes]) and starts it with the toast
  * TextLabels19.NODES_STARTED; the node bar's buttons and node drags edit the nodes while the text
- * re-flows live. Each finished edit is one in-tool step of a [ToolHistory] of the path, which
+ * re-flows live; a tap on the guide off any node adds one there ([tapGuide], A3 step 13). Each
+ * finished edit is one in-tool step of a [ToolHistory] of the path, which
  * Undo and Redo go through first while this is the controller's `inToolHistory`
  * ([InToolHistoryOwner]); at its bottom they do what v1.8 did. The steps never reach the
  * document: the text, nodes and all, is committed as one document step by the Text tool's next ✓
@@ -144,6 +145,25 @@ class TextPathNodeEditor internal constructor(private val host: Host) : InToolHi
             return
         }
         if (applyStep(more, ADD_POINT_STEP)) selected = at
+    }
+
+    /**
+     * v1.9 (A3 step 13): a tap at [at] (document px) that picked no node: on the guide within
+     * [tolerance] ([TextPathNodes.pointOnGuide]) a node is added there, selected, as one in-tool
+     * step named [ADD_POINT_STEP] (Undo takes it back); TextLabels19.NODES_MAX at the cap. True
+     * when the tap met the guide.
+     */
+    fun tapGuide(at: Vec2, tolerance: Float): Boolean {
+        if (!active || selected >= 0 || dragging) return false
+        val n = nodes ?: return false
+        val (index, point) = TextPathNodes.pointOnGuide(n, at, tolerance) ?: return false
+        if (n.points.size >= TextPathSpec.MAX_NODES) {
+            host.toast(TextLabels19.NODES_MAX)
+            return true
+        }
+        val list = n.points.toMutableList().also { it.add(index, point) }
+        if (applyStep(n.copy(points = list), ADD_POINT_STEP)) selected = index
+        return true
     }
 
     /** "Delete point": the selected node goes (at least 2 stay); nothing is selected then. */
