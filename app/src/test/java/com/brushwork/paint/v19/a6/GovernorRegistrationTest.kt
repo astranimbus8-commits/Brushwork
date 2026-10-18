@@ -11,6 +11,7 @@ import android.graphics.Shader
 import com.brushwork.paint.AppSettings
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.engine.BitmapUtils
+import com.brushwork.paint.engine.GovernorPolicyV19
 import com.brushwork.paint.engine.MemoryGovernor
 import com.brushwork.paint.engine.MemoryPressure
 import com.brushwork.paint.engine.live.LiveAdjust
@@ -46,7 +47,8 @@ import org.robolectric.RuntimeEnvironment
  * hold, a pressure above NORMAL frees them (the canvas then draws the same pixels again), and the
  * proxies' entry lives only while they do. The default policy trims nothing (v1.8, I8). The
  * entries hold their owners weakly; `EditorController.dispose` closes the display tiles' entry
- * (the lead, at A6's merge). The "Fast adjustment preview" switch reads R13's note.
+ * (the lead, at A6's merge). Since A7b step 1 each editor also registers its "undo history"
+ * (`GovernorPolicyV19.UNDO_ENTRY`, priority 50). The "Fast adjustment preview" switch reads R13's note.
  * Step 9 (P3): a stroke's below-cache (priority 20) while it holds tiles.
  */
 @RunWith(RobolectricTestRunner::class)
@@ -152,7 +154,8 @@ class GovernorRegistrationTest {
         val entry = mine().single { it.name == "live proxies" }
         assertEquals(LiveAdjust.PROXY_PRIORITY, entry.priority)
         assertEquals(held, entry.bytes())
-        assertEquals("display caches go first", listOf("display tiles", "live proxies"), mine().map { it.name })
+        // v1.9 (A7b step 1, the lead at A7b's merge): every editor also registers its undo history, trimmed last.
+        assertEquals("display caches go first, the undo history last", listOf("display tiles", "live proxies", GovernorPolicyV19.UNDO_ENTRY), mine().map { it.name })
 
         assertEquals("NORMAL frees nothing", 0L, entry.trimmable.trim(MemoryPressure.NORMAL))
         assertEquals("MODERATE keeps a running session", 0L, entry.trimmable.trim(MemoryPressure.MODERATE))
