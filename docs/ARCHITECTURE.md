@@ -1517,7 +1517,9 @@ and lands the pending erase; a tool switch lands it too.
   with its copies. A `ToolEraseSession` (`ToolErase.begin(..., EraseSource.SHAPE)`) erases live as
   the outline changes, through A5's routing.
 - The footprint is the outline at the stroke width (a brush outline at its preset size), plus the
-  fill of a filled closed style; a fill-only style has no stroke width.
+  fill of a filled closed style; a fill-only style has no stroke width. The fill is non-zero, as
+  the painted fill is, and every copy winds as its source (`ShapeCopies.mapped`), so mirror copies
+  that overlap erase their overlap too.
 - Every edit works as when painting (Points mode, the bevel and the per-edit undo included) and
   updates the session. A mode picked in the mode cell applies at once (`refreshPreview`).
 - The commit (✓, a tap outside, a new drag, a tool or layer switch, turning the mode off) is ONE
@@ -1544,15 +1546,16 @@ and lands the pending erase; a tool switch lands it too.
   cell and at 392 dp, the cell in row 1 at each (`ShapeStripInventoryTest`).
 
 Known limits: with a fill-only style "Stroke with" is hidden, so erase mode is reached through
-slot 1 only; arrow heads add no fill to an erase footprint (`ShapeOutlines.brushOutline`);
-overlapping mirrored copies of a filled outline erase their overlap by even-odd (not filled); a
-pinch dropped as a no-op while the in-tool history is full has already lost its oldest entry; a
-legacy shape layer outlined with the brush converts with seed 0 when a shape joins it
-(`LayerConvert`).
+slot 1 only; arrow heads add no fill to an erase footprint (`ShapeOutlines.brushOutline`); a
+layer refused when the outline began (locked, hidden) is asked again only at the commit, so an
+outline whose layer was unlocked meanwhile erases nothing live until ✓; a pinch dropped as a
+no-op while the in-tool history is full has already lost its oldest entry; a legacy shape layer
+outlined with the brush converts with seed 0 when a shape joins it (`LayerConvert`).
 
 Tests: `v19/a9/` (`ShapePerEditUndoTest`, `ShapeTypeFlipHistoryTest`, `ShapeBevelRobolectricTest`,
 `ShapeJoinLayerTest`, `ShapeArrangeDuplicateTest`, `ShapeMoreRowHiddenWithBarsTest`,
-`ShapeSaveReopenTest`, `ShapeEraseRobolectricTest` (raster, vector, legacy shape and text layers),
+`ShapeSaveReopenTest`, `ShapeEraseRobolectricTest` (raster, vector, legacy shape and text layers,
+Turn into pixels with an outline pending, overlapping mirror copies),
 `ShapeStripInventoryTest`, Timing: `ShapeBudgetsTimingTest`). UI tests at 392 and 360 dp, font
 scales 1.3 and 2.0 (3 UI classes): `qa19/Qa19ShapeUndoUiTest`, `Qa19ShapeBevelUiTest`,
 `Qa19ShapeEraseUiTest`. Compat rows 10 (joined shapes, bevelled shape points) and 12 (R17 edits) of

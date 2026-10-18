@@ -25,8 +25,8 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 
 /**
- * v1.9 A9 (R18, I27): "Bevel points" in the real editor, on the user's 392 dp phone, at 360 dp,
- * and at 360 dp at each of [Qa19Ui.FONT_SCALES]: a rectangle in Points mode, its top left corner
+ * v1.9 A9 (R18, I27): "Bevel points" in the real editor, on the user's 392 dp phone and at 360 dp,
+ * each at font scale 1 and at each of [Qa19Ui.FONT_SCALES]: a rectangle in Points mode, its top left corner
  * selected by a tap, "Bevel points" from the More row bevels it at once and the two-line popup
  * shows inside the screen, above the ✓ / ✕ and the bottom bar, with none of its texts cut (nor
  * any on screen at any font scale, the Shape cells included; the coordinate pill's readouts are
@@ -41,8 +41,9 @@ class Qa19ShapeBevelUiTest {
 
     @Test
     fun bevelPointsAndItsPopup() = Qa19Ui.uiTest { h ->
-        h.section("392 dp") { bevel(h, Qa19Ui.Q392, 392f, 1f) }
+        // (I27: both widths at each font scale.)
         for (scale in listOf(1f) + Qa19Ui.FONT_SCALES) {
+            h.section("392 dp at font scale $scale") { bevel(h, Qa19Ui.Q392, 392f, scale) }
             h.section("360 dp at font scale $scale") { bevel(h, Qa19Ui.Q360, 360f, scale) }
         }
     }

@@ -23,7 +23,7 @@ import org.robolectric.annotation.Config
 
 /**
  * v1.9 A9 (R17): undo while a shape is edited takes back its last edit, not the whole edit, in
- * the real editor on the user's 392 dp phone, at 360 dp, and at 360 dp at each of
+ * the real editor on the user's 392 dp phone and at 360 dp, each at font scale 1 and at each of
  * [Qa19Ui.FONT_SCALES]: a rectangle placed in a shape layer of its own and opened again by a tap
  * on its outline is moved by a drag, then in Points mode its top left point is dragged; the first
  * "Undo" takes back the point drag (the moved shape stays, in Points mode), the second the move
@@ -37,8 +37,9 @@ class Qa19ShapeUndoUiTest {
 
     @Test
     fun undoTakesBackTheLastEditOfTheOpenShape() = Qa19Ui.uiTest { h ->
-        h.section("392 dp") { undo(h, Qa19Ui.Q392, 392f, 1f) }
+        // (I27: both widths at each font scale.)
         for (scale in listOf(1f) + Qa19Ui.FONT_SCALES) {
+            h.section("392 dp at font scale $scale") { undo(h, Qa19Ui.Q392, 392f, scale) }
             h.section("360 dp at font scale $scale") { undo(h, Qa19Ui.Q360, 360f, scale) }
         }
     }

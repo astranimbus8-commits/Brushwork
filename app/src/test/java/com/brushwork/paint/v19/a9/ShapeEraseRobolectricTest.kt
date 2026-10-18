@@ -2,10 +2,14 @@ package com.brushwork.paint.v19.a9
 
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.os.Looper
+import androidx.compose.runtime.snapshots.Snapshot
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.array.ArraySources
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.model.ColorMode
+import com.brushwork.paint.model.SymmetrySettings
+import com.brushwork.paint.model.SymmetryType
 import com.brushwork.paint.tools.ErasableTool
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.vector.OverlayPainter
@@ -24,6 +28,7 @@ import com.brushwork.paint.ui.tools.strip.StripKeysV19
 import com.brushwork.paint.ui.tools.strip.StripLayout
 import com.brushwork.paint.ui.tools.strip.StripRow
 import com.brushwork.paint.ui.tools.strip.StripSpec
+import com.brushwork.paint.ui.vector.ErasePixels
 import com.brushwork.paint.ui.vector.ShapeStripInfo
 import com.brushwork.paint.ui.vector.ShapeStripItems
 import com.brushwork.paint.vector.VAnchor
@@ -46,6 +51,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 import kotlin.math.cos
 import kotlin.math.roundToInt
 import kotlin.math.sin
@@ -182,6 +188,125 @@ class ShapeEraseRobolectricTest {
         assertArrayEquals("the commit is what the preview showed", preview, pixels(vec.bitmap))
         c.undo()
         assertSame(before, vec.vector)
+    }
+
+    /**
+     * R17 while erasing: undo takes back the outline's last edit (the erase follows it, the outline
+     * stays), redo brings it back, one edit each; after the commit undo and redo take back and
+     * bring back the whole erase, ONE step each.
+     */
+    @Test
+    fun undoAndRedoWhileErasingGoOneEditAndOneStepAtATime() {
+        val (c, tool) = setup()
+        val layer = c.doc.layers[0]
+        layer.bitmap.eraseColor(rig.red)
+        val w = c.doc.width
+        val drawn = pixels(layer.bitmap)
+        val steps = c.undoManager.undoCount
+        tool.setErase(true)
+        // The 4 px outline of (30, 30) - (110, 90), then moved 40 px right (an in-tool step).
+        rig.drawRect(c, tool)
+        val placed = tool.box!!
+        tool.place(ShapeBox(placed.cx + 40f, placed.cy, placed.w, placed.h, placed.rotationDeg))
+        assertEquals(0, shown(c, tool)[60 * w + 70] ushr 24)
+
+        c.undo()
+        assertTrue("the outline stays", tool.hasPendingWork)
+        assertEquals(placed, tool.box)
+        assertNotNull(tool.eraseSession)
+        assertEquals("the erase follows the outline back", 0, shown(c, tool)[60 * w + 30] ushr 24)
+        assertEquals(rig.red, shown(c, tool)[60 * w + 70])
+        assertEquals("no document step yet", steps, c.undoManager.undoCount)
+        c.redo()
+        assertEquals(placed.cx + 40f, tool.box!!.cx, 1e-3f)
+        val moved = shown(c, tool)
+        assertEquals(rig.red, moved[60 * w + 30])
+        assertEquals(0, moved[60 * w + 70] ushr 24)
+        assertArrayEquals("the layer waits for the commit", drawn, pixels(layer.bitmap))
+
+        tool.commit()
+        assertEquals(steps + 1, c.undoManager.undoCount)
+        assertEquals(EraseLabels19.STEP_SHAPE, c.undoManager.undoLabel)
+        assertArrayEquals(moved, pixels(layer.bitmap))
+        c.undo()
+        assertArrayEquals("one undo takes back the whole erase", drawn, pixels(layer.bitmap))
+        assertFalse(tool.hasPendingWork)
+        c.redo()
+        assertArrayEquals("one redo brings it back", moved, pixels(layer.bitmap))
+        assertEquals(steps + 1, c.undoManager.undoCount)
+    }
+
+    /**
+     * The mode cell's "Turn into pixels" with an outline pending: the strip's dialog closes (the
+     * tool refreshes), then the layer turns into pixels with A5's own step; the open erase follows
+     * the layer (the layer change reaches the tool through its state observer) and erases its
+     * pixels from then on, landing as ONE step [EraseLabels19.STEP_SHAPE] of its own.
+     */
+    @Test
+    fun turnIntoPixelsWithAnOutlinePendingMovesTheEraseOntoThePixels() {
+        val (c, tool) = setup(vectorLayer = true)
+        val vec = c.doc.layers[1]
+        c.vectors.addObjects(vec, listOf(box(40f, 60f, 160f, 140f)), "Add")
+        VectorEraserModes.setMode(c, VectorEraseMode.OBJECT)
+        val w = c.doc.width
+        val before = vec.vector!!
+        val steps = c.undoManager.undoCount
+        tool.setErase(true)
+        drawLine(c, tool)
+        assertTrue("erasing objects", c.renderOverride is DoomPreview)
+        assertTrue("the whole box goes", shown(c, tool)[100 * w + 60] ushr 24 == 0)
+        // The strip's dialog: onDismiss refreshes the tool, then the confirm turns the layer into pixels.
+        tool.refreshPreview()
+        assertTrue(ErasePixels.turnIntoPixels(c, vec))
+        Snapshot.sendApplyNotifications()
+        shadowOf(Looper.getMainLooper()).idle()
+        assertNull(vec.vector)
+        assertEquals("A5's rasterize, a step of its own", steps + 1, c.undoManager.undoCount)
+        assertTrue("the outline is still pending", tool.hasPendingWork)
+        assertNotNull(tool.eraseSession)
+        assertTrue("erasing pixels now: ${c.renderOverride}", c.renderOverride is VectorPreview)
+        assertSame(vec, c.renderOverride!!.layer)
+        val preview = shown(c, tool)
+        assertEquals("under the line", 0, preview[100 * w + 100] ushr 24)
+        assertEquals("beside it, the box's pixels stay", blue, preview[100 * w + 60])
+        assertEquals("the layer waits for the commit", blue, vec.bitmap.getPixel(100, 100))
+        assertTrue("no mode cell over pixels", ShapeStripItems.modeCell(tool, c, StripContext(selectionBarShown = false, vectorMode = false)) {} == null)
+
+        tool.commit()
+        assertNull(c.renderOverride)
+        assertEquals(steps + 2, c.undoManager.undoCount)
+        assertEquals(EraseLabels19.STEP_SHAPE, c.undoManager.undoLabel)
+        assertArrayEquals("the commit is what the preview showed", preview, pixels(vec.bitmap))
+        c.undo()
+        assertEquals(blue, vec.bitmap.getPixel(100, 100))
+        c.undo()
+        assertSame("the objects back", before, vec.vector)
+    }
+
+    /**
+     * Mirror copies of a filled shape that overlap erase their overlap too: every copy winds as
+     * its source ([com.brushwork.paint.tools.vector.ShapeCopies]), so the footprint's non-zero
+     * fill covers each copy and the overlap once, as the painted shape does.
+     */
+    @Test
+    fun overlappingMirrorCopiesOfAFilledShapeEraseTheirOverlap() {
+        val (c, tool) = setup()
+        val layer = c.doc.layers[0]
+        layer.bitmap.eraseColor(rig.red)
+        // The mirror axis at x = 150 (the canvas centre).
+        c.updateSymmetry(SymmetrySettings(type = SymmetryType.MIRROR))
+        tool.update { it.copy(type = ShapeType.RECTANGLE, style = ShapeStyle.FILL, fromCenter = false, keepProportions = false) }
+        tool.setErase(true)
+        // x 120 to 200 and its copy x 100 to 180: they overlap from 120 to 180.
+        rig.drag(c, 120f to 70f, 160f to 100f, 200f to 130f)
+        assertTrue(tool.hasCopies)
+        assertNotNull(tool.eraseSession)
+        tool.commit()
+        assertEquals(EraseLabels19.STEP_SHAPE, c.undoManager.undoLabel)
+        for (x in listOf(110, 130, 150, 170, 190)) assertEquals("erased at x $x", 0, layer.bitmap.getPixel(x, 100) ushr 24)
+        for (x in listOf(90, 210)) assertEquals("kept at x $x", rig.red, layer.bitmap.getPixel(x, 100))
+        assertEquals("kept below", rig.red, layer.bitmap.getPixel(150, 140))
+        c.updateSymmetry(SymmetrySettings())
     }
 
     @Test

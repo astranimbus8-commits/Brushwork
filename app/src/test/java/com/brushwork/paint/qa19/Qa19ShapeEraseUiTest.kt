@@ -25,8 +25,8 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 
 /**
- * v1.9 A9 (R11, I27): erasing with shapes in the real editor, on the user's 392 dp phone, at
- * 360 dp, and at 360 dp at each of [Qa19Ui.FONT_SCALES]. On a vector layer a rectangle is drawn,
+ * v1.9 A9 (R11, I27): erasing with shapes in the real editor, on the user's 392 dp phone and at
+ * 360 dp, each at font scale 1 and at each of [Qa19Ui.FONT_SCALES]. On a vector layer a rectangle is drawn,
  * then "Stroke with"'s last row [EraseLabels19.INSTEAD_OF_PAINT] turns erase mode on (the
  * rectangle is placed first, a shape object) and bottom-bar slot 1 says how to switch back
  * ([EraseLabels19.ERASING_SHAPE]); with the More row closed the Eraser's mode cell shows in row 1,
@@ -41,8 +41,9 @@ class Qa19ShapeEraseUiTest {
 
     @Test
     fun eraseWithShapes() = Qa19Ui.uiTest { h ->
-        h.section("392 dp") { erase(h, Qa19Ui.Q392, 392f, 1f) }
+        // (I27: both widths at each font scale.)
         for (scale in listOf(1f) + Qa19Ui.FONT_SCALES) {
+            h.section("392 dp at font scale $scale") { erase(h, Qa19Ui.Q392, 392f, scale) }
             h.section("360 dp at font scale $scale") { erase(h, Qa19Ui.Q360, 360f, scale) }
         }
     }
