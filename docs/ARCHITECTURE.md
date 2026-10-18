@@ -1824,20 +1824,26 @@ to insert a point).
   was and is. `TextLayerDraw` draws neighbours in picture order. A pixel edit of a layer of
   several texts toasts `RASTERIZED_TEXTS` with the count (C13, region `v19-A3 rasterizeMessage`).
   A text frame links only a layer of one text. For a layer of several, `TextFrameTool.join`
-  refuses with `ALONE_ONLY`.
+  refuses with `ALONE_ONLY`. A text among others cannot start to wrap around a picture
+  (`WRAP_ALONE_ONLY`; one that already wraps can only turn it off).
 - **Text items (R14).** `TextItemOps.duplicateItems(c, layer, area, ids)` returns one
   `UndoAction` for A4's Duplicate; the arrange items use `ArrangeOrder.step`. Duplicate and
-  Arrange commit the open text's pending changes first. In the Text More row, "New layer each
-  time" (no text open) or Duplicate, Bring forward and Send backward (a text open) stand before
-  Snap; Snap, then Numbers, end the row as in v1.8. The v1.8 pins in
-  `Qa18PolishChromeVerifyTest` require this order. `StripKeysV19`'s ranks would put the v1.9
-  items after Snap; the lead decides which order stays. The More row leaves out only what a bar
+  Arrange commit the open text's pending changes first. Duplicate of the open text is refused,
+  before anything is committed, in a full layer (`LAYER_FULL_NO_COPY`: a copy never starts a new
+  layer) and for a text that wraps around a picture (`WRAP_ALONE_ONLY`). In the Text More row,
+  "New layer each time" (no text open) or Duplicate, Bring forward and Send backward (a text
+  open) stand before Snap; Snap, then Numbers, end the row as in v1.8. The v1.8 pins in
+  `Qa18PolishChromeVerifyTest` require this order. `StripKeysV19`'s ranks (50-98: after v1.8's
+  More items) would put the v1.9 items after Snap, as A9's Shape More row has them. The lead
+  kept this order at the merge; Gate 2's strip inventory tests, with every area merged, settle
+  it against the ranks. The More row leaves out only what a bar
   beside the strip shows itself (I10). While the object bar shows, Duplicate, Bring forward and
   Send backward leave it. While the selection bar shows a Duplicate (a selection that
   `SelectionDuplicate.kindOf` can copy), only Duplicate leaves. The paste bar (a clipboard, no
   selection) carries none of them, so they stay. `TextStripFacts.of` reads which bar shows from
   the controller under `StripContext.selectionBarShown`. A9's `ShapeObjectItems` still hides its
-  items under any bar. The strip is a pure `textSpec(tool, TextStripFacts)`, and the composable
+  items under any bar, the paste bar included (design 2.3.5's wording); the lead left the same
+  narrowing there to Gate 2's I10 cross test. The strip is a pure `textSpec(tool, TextStripFacts)`, and the composable
   only reads the facts.
 - **Merged texts and the label scan (step 11).** `MergedNumberedTextsTest` (C22, after A4's merge):
   "Merge down" and "Merge folder" keep each text's own numbers and pixels (I1). A text edited
@@ -1861,7 +1867,7 @@ to insert a point).
   then starts with the `NODES_STARTED` toast, and `TextPathNodeEditor` becomes
   `EditorController.inToolHistory`. Each edit is one in-tool step of a
   `ToolHistory<TextPathSpec>`: Add point, Delete point, Sharp corner, or a node dragged (picked
-  within 24 dp). `TextPathNodeBar` sits where the selection bar does: 44 dp high, tag
+  within 24 dp; the step `MOVE_POINT`). `TextPathNodeBar` sits where the selection bar does: 44 dp high, tag
   `V19Tags.TEXT_PATH_NODES`, placed by `TextPathNodeBar.topDp` from the `IbisDims`. Its ✓
   (`DONE_POINTS`) and the floating ✓ return to the sheet; the next ✓ commits one document step.
   While nodes are edited, two fingers zoom the view and node drags do not snap. A tap that
@@ -1872,6 +1878,12 @@ to insert a point).
   the closing segment of a closed guide counts. On a polyline it lands exactly at the tap. For a
   tap on the curve of path nodes, it lands at the line's point nearest the tapped curve point,
   as "Add point" places nodes on the lines. At 200 points the tap toasts `NODES_MAX`.
+- **The lead at the merge.** `LAYER_FULL_NO_COPY`, `WRAP_ALONE_ONLY`, `ALONE_ONLY` and
+  `MOVE_POINT` are `TextLabels19` entries; they replaced A3's stand-ins in `TextTool`,
+  `TextFrameTool` and `TextPathNodeEditor`, and `LabelsV19Test` checks them on the Text strip,
+  the Text frames tool and the node bar. `TextItem.sanitized`'s KDoc says vertical columns
+  justify. `NODES_HINT` does not mention the tap on the guide: the caption has no line limit
+  and covers the canvas under the node bar, so a longer hint waits for the device check.
 <!-- /v19-A3 -->
 
 ### Drawing and mask preview (A6)
