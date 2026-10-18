@@ -34,6 +34,7 @@ import com.brushwork.paint.tools.text.TextWrapSpec
 import com.brushwork.paint.tools.transform.DocBox
 import com.brushwork.paint.tools.transform.SnapAxis
 import com.brushwork.paint.tools.transform.offset
+import com.brushwork.paint.ui.common.TextLabels19
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -965,7 +966,7 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
         // texts is lost and the link mode doesn't end without a word.
         val tItems = TextCodec.decodeAll(target.textData)
         if (tItems.size > 1) {
-            controller.toast(ALONE_ONLY)
+            controller.toast(TextLabels19.ALONE_ONLY)
             return false
         }
         val tItem = tItems.singleOrNull() ?: return false
@@ -1299,13 +1300,7 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
         const val HORIZONTAL_ONLY = "Only horizontal text boxes can be linked"
         const val SINGLE_FRAME_ONLY = "Only a text box or a story's single frame can be linked: unlink that story first"
         const val SAME_STORY = "That frame is already part of this story"
-
-        /**
-         * v1.9 (F2, I24): a text of a layer of several can't become a frame. Stands in for a
-         * TextLabels19 entry that LabelsV19 lacks (a LeadRequest), worded like
-         * [com.brushwork.paint.tools.text.TextTool.WRAP_ALONE_ONLY].
-         */
-        const val ALONE_ONLY = "Only a text alone in its layer can be linked"
+        // v1.9 (F2, I24): a text of a layer of several can't become a frame: TextLabels19.ALONE_ONLY.
         const val NOTHING_TO_UNLINK = "This is the last frame of its story: nothing to unlink"
         const val TOO_SMALL = "Drag a bigger rectangle to draw a text frame"
 

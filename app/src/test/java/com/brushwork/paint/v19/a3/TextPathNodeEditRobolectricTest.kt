@@ -202,7 +202,7 @@ class TextPathNodeEditRobolectricTest {
         assertNotEquals("the guide follows the finger before it lifts", specs.last(), live)
         assertEquals(to.x, at(tool, 2).x, 0.01f)
         assertEquals(to.y, at(tool, 2).y, 0.01f)
-        assertEquals(TextPathNodeEditor.MOVE_POINT_STEP, ed.undoLabel)
+        assertEquals(TextLabels19.MOVE_POINT, ed.undoLabel)
         specs += tool.item!!.path
         assertEquals("the node edits are no document steps", docSteps, c.undoManager.undoCount)
 

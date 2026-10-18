@@ -232,7 +232,7 @@ class TextPathNodeEditor internal constructor(private val host: Host) : InToolHi
         val now = host.path
         val dragged = dragIndex >= 0
         endDrag()
-        if (dragged && from != null && now != null && now != from) record(now, MOVE_POINT_STEP)
+        if (dragged && from != null && now != null && now != from) record(now, TextLabels19.MOVE_POINT)
     }
 
     /** The gesture was taken over (a second finger): the dragged node goes back. */
@@ -286,10 +286,12 @@ class TextPathNodeEditor internal constructor(private val host: Host) : InToolHi
         /** In-tool steps kept (the oldest go first). */
         const val HISTORY_CAP = 100
 
-        /** The steps' names, shown as "Undo: …" / "Redo: …" (the node bar's buttons, a drag). */
+        /**
+         * The steps' names, shown as "Undo: …" / "Redo: …" (the node bar's buttons; a drag is
+         * [TextLabels19.MOVE_POINT]).
+         */
         const val ADD_POINT_STEP = "Add point"
         const val DELETE_POINT_STEP = "Delete point"
         const val SHARP_CORNER_STEP = "Sharp corner"
-        const val MOVE_POINT_STEP = "Move point"
     }
 }

@@ -1059,7 +1059,7 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
         }
         // v1.9 (R14, I24): a text among others can only turn an existing wrap off.
         if (sharesLayer && !cur.wrap.isOn) {
-            controller.toast(WRAP_ALONE_ONLY)
+            controller.toast(TextLabels19.WRAP_ALONE_ONLY)
             return
         }
         numbersOpen = false
@@ -1407,18 +1407,18 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
      * joins); then [TextItemOps.duplicateItems] copies it with the object bar's offset as ONE step
      * [LayerLabels19.DUPLICATE_STEP], right above it in picture order, and the copy opens. Refused
      * with a message, before anything is committed, for a text that wraps around a picture
-     * ([WRAP_ALONE_ONLY]) and in a full layer (the first sentence of [TextLabels19.LAYER_FULL]).
+     * ([TextLabels19.WRAP_ALONE_ONLY]) and in a full layer ([TextLabels19.LAYER_FULL_NO_COPY]).
      * True when a copy was made.
      */
     fun duplicateOpen(): Boolean {
         val cur = item ?: return false
         if (cur.text.isBlank()) return false
         if (cur.wrap.isOn) {
-            controller.toast(WRAP_ALONE_ONLY)
+            controller.toast(TextLabels19.WRAP_ALONE_ONLY)
             return false
         }
         if (textsInOpenLayer() >= TextCodec.MAX_ITEMS) {
-            controller.toast(LAYER_FULL_ONLY)
+            controller.toast(TextLabels19.LAYER_FULL_NO_COPY)
             return false
         }
         val before = editingLayer?.takeIf { doc.indexOf(it) >= 0 }
@@ -2586,18 +2586,6 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
     companion object {
         /** Shown when vertical text or text on a path is asked to wrap. */
         const val WRAP_HORIZONTAL_ONLY = "Wrap works with horizontal text"
-
-        /**
-         * v1.9 (R14, I24): shown when a text that shares its layer is asked to wrap. Stands in for
-         * a TextLabels19 entry that LabelsV19 lacks (a LeadRequest).
-         */
-        const val WRAP_ALONE_ONLY = "Only a text alone in its layer can wrap around a picture"
-
-        /**
-         * v1.9 (R14): Duplicate in a layer of [TextCodec.MAX_ITEMS] texts: the first sentence of
-         * [TextLabels19.LAYER_FULL] (whose second sentence is about a new text, which starts a new layer).
-         */
-        val LAYER_FULL_ONLY: String = TextLabels19.LAYER_FULL.substringBefore(". ") + "."
 
         /** Shown when the "Letters" chip is tapped with no text to scale. */
         const val LETTERS_NEED_TEXT = "Tap the canvas to add a text, then scale its letters"

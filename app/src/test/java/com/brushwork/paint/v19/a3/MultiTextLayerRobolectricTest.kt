@@ -332,7 +332,7 @@ class MultiTextLayerRobolectricTest {
         assertFalse(tool.canWrap)
         c.message = null
         tool.openWrapSheet()
-        assertEquals(TextTool.WRAP_ALONE_ONLY, c.message)
+        assertEquals(TextLabels19.WRAP_ALONE_ONLY, c.message)
         assertFalse(tool.wrapSheetOpen)
     }
 
@@ -451,8 +451,10 @@ class MultiTextLayerRobolectricTest {
         val n = c.undoManager.undoCount
         c.message = null
         assertFalse(tool.duplicateOpen())
-        assertEquals(TextTool.LAYER_FULL_ONLY, c.message)
-        assertTrue(TextLabels19.LAYER_FULL.startsWith(TextTool.LAYER_FULL_ONLY))
+        assertEquals(TextLabels19.LAYER_FULL_NO_COPY, c.message)
+        // Not LAYER_FULL: a copy never starts a new layer; the message names the same limit.
+        assertNotEquals(TextLabels19.LAYER_FULL, c.message)
+        assertTrue(TextLabels19.LAYER_FULL_NO_COPY.contains("${TextCodec.MAX_ITEMS} texts"))
         assertEquals("nothing stored", data, layer.textData)
         assertEquals(n, c.undoManager.undoCount)
         assertEquals("the text stays open with its change", "Changed", tool.item?.text)
