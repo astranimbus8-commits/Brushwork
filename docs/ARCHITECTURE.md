@@ -1674,8 +1674,8 @@ options on them) and R14 ("a button to duplicate the selection in the same layer
     and opacity. The conditions, in order (the first that fails is the reason): no mask on either
     (`WHY_MASK`); both Normal (`WHY_BLEND`); neither clipping (`WHY_CLIP`); no live array
     (`WHY_COPIES`); no threaded or wrapped text (`WHY_FRAMES`, I24); at most `TextCodec.MAX_ITEMS`
-    texts in all (`WHY_TOO_MANY`); the same opacity (stand-in `LayerMerge.WHY_OPACITY`, lead
-    request); under 100 % no text of one layer meeting one of the other, by rounded paint bounds
+    texts in all (`WHY_TOO_MANY`); the same opacity (`WHY_OPACITY`, added by the lead at the
+    merge); under 100 % no text of one layer meeting one of the other, by rounded paint bounds
     (`WHY_OVERLAP`).
   - `VECTOR_OBJECTS`: two shape or vector layers (v1.8's vector-onto-vector case included). The
     upper layer's objects join the lower layer's on top with new ids (`VectorContent.plus`); a
@@ -1728,12 +1728,12 @@ options on them) and R14 ("a button to duplicate the selection in the same layer
     drawn onto a new ALPHA_8 mask and scanned for its tight bounds, never a full-document copy;
     a pixel copy that does not fit in memory restores the saved tiles and records nothing).
     This is a stand-in: the design floats the copy in Transform on the
-    same layer, which needs an in-layer placement in `TransformTool` (lead request: today closing
-    a placement over a painted layer deletes the layer).
+    same layer, which needs an in-layer placement in `TransformTool` (today closing a placement
+    over a painted layer deletes the layer); the lead deferred that change to Gate 2.
   - Objects: the objects the selection touches (`c.vectors.touching`) are copied right above the
     topmost of them (`ObjectEdits.duplicate`) and selected, with the toast `DUPLICATED`. When the
-    selection touches none, a toast says so (stand-in `SelectionDuplicate.NOTHING_HERE`, lead
-    request) and there is no step.
+    selection touches none, a toast says so (`LayerLabels19.NOTHING_TO_DUPLICATE`, with the
+    layer's name) and there is no step.
   - Texts: `TextItemOps.duplicateItems`, once A3 makes it available.
   - The item grows to its one-line label at any font size (`BarItem(fit = true)`).
   - Slid to its end, the bar must start with a whole item at least the cue's 12 dp in (v1.8
@@ -1774,7 +1774,8 @@ options on them) and R14 ("a button to duplicate the selection in the same layer
   - Forced updates: `LayerMergeExtractionTest`, `VectorLayerOpsRobolectricTest`,
     `ObjectActionsRobolectricTest` (Forward's plain step), `Qa18PolishChromeSelectionBarTest`
     (eleven items; the stroke waits for the tool menu to close, and its one retry closes a
-    menu still open and picks the marquee again when another tool took the stroke).
+    menu still open and picks the marquee again when another tool took the stroke); and, by the
+    lead at the merge, `qa18/ChromeLabelsTest` (the selection bar's list ends with Duplicate).
 
 <!-- /v19-A4 -->
 
