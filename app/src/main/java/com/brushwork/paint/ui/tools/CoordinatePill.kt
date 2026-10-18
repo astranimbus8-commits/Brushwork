@@ -94,6 +94,7 @@ import com.brushwork.paint.ui.editor.endCanvasGesture
 import com.brushwork.paint.ui.theme.IbisColors
 import com.brushwork.paint.ui.theme.IbisDims
 import com.brushwork.paint.ui.common.FitText
+import com.brushwork.paint.ui.common.scale1Size
 import kotlinx.serialization.builtins.serializer
 
 /**
@@ -462,10 +463,18 @@ private fun ScaleCell(controller: EditorController, tool: Tool, onX: Boolean, pe
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.Center,
         ) {
-            // v1.9 Gate 2 (I27): the texts shrink at a large font scale to stay in the 28 dp cell.
+            // v1.9 Gate 2 (I27): the texts shrink at a large font scale to stay in the 28 dp cell; a
+            // value never below its size at font scale 1 (a far-off one is cut at the cap, as in v1.7).
             FitText(if (onX) "X" else "Y", fontSize = IbisDims.PillPrefixText, style = PrefixStyle, maxLines = 1)
             Spacer(Modifier.width(5.dp))
-            FitText("$shown %", fontSize = IbisDims.PillValueText, style = ValueStyle, maxLines = 1, overflow = TextOverflow.Clip)
+            FitText(
+                "$shown %",
+                fontSize = IbisDims.PillValueText,
+                style = ValueStyle,
+                maxLines = 1,
+                overflow = TextOverflow.Clip,
+                floor = scale1Size(IbisDims.PillValueText),
+            )
         }
         if (fine) FineTag(Modifier.align(Alignment.BottomCenter))
     }
@@ -717,7 +726,8 @@ private fun AxisCell(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.Center,
         ) {
-            // v1.9 Gate 2 (I27): the texts shrink at a large font scale to stay in the 28 dp cell.
+            // v1.9 Gate 2 (I27): the texts shrink at a large font scale to stay in the 28 dp cell; a
+            // value never below its size at font scale 1 (a far-off one is cut at the cap, as in v1.7).
             FitText(axis, fontSize = IbisDims.PillPrefixText, style = PrefixStyle, maxLines = 1)
             Spacer(Modifier.width(5.dp))
             FitText(
@@ -726,6 +736,7 @@ private fun AxisCell(
                 style = ValueStyle,
                 maxLines = 1,
                 overflow = TextOverflow.Clip,
+                floor = scale1Size(IbisDims.PillValueText),
             )
         }
         if (fine) FineTag(Modifier.align(Alignment.BottomCenter))
