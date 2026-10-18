@@ -182,14 +182,20 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool,
         val region = MaskSpecs.changedRegion(base, s, d.width, d.height) ?: return false
         if (!region.intersect(0, 0, d.width, d.height)) return false
         if (MaskSpecs.estimateMillis(s, region) <= refineMinMillis) return false
+        // The bands' bytes (one per pixel of the region): short of memory, the release renders
+        // at once as in v1.8 (which says so when it can't either).
+        val r = try {
+            MaskRefine(controller, layer, base, s, label, region, brushSource()) { done ->
+                if (refine === done) refine = null
+                if (preview.shown === done.after) preview.end()
+                revision++
+                flashOverlay()
+            }
+        } catch (e: OutOfMemoryError) {
+            return false
+        }
         // The release's own position (moves still waiting for a frame were dropped).
         preview.update(s)
-        val r = MaskRefine(controller, layer, base, s, label, region, brushSource()) { done ->
-            if (refine === done) refine = null
-            if (preview.shown === done.after) preview.end()
-            revision++
-            flashOverlay()
-        }
         refine = r
         r.start()
         return true
@@ -1383,10 +1389,10 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool,
          */
         const val REFINE_MIN_MS = 24.0
 
-        /** [REFINE_MIN_MS]; tests lower it to refine their small documents. */
-        var refineMinMillis = REFINE_MIN_MS
+        /** [REFINE_MIN_MS]; tests lower it to refine their small documents (and set it back). */
+        internal var refineMinMillis = REFINE_MIN_MS
 
-        /** Most tiles of a live stroke's [MaskBrushRaster.StrokeTiles]; tests lower it to reach v1.8's way. */
-        var strokeTileCap = MaskBrushRaster.MAX_TILES
+        /** Most tiles of a live stroke's [MaskBrushRaster.StrokeTiles]; tests lower it to reach v1.8's way (and set it back). */
+        internal var strokeTileCap = MaskBrushRaster.MAX_TILES
     }
 }

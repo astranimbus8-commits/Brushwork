@@ -16,6 +16,8 @@ import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.DisplayTiles
 import com.brushwork.paint.masks.AdjustmentSpec
+import com.brushwork.paint.masks.MaskSpec
+import com.brushwork.paint.masks.RadialMask
 import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.FolderSpec
@@ -44,6 +46,11 @@ import kotlin.math.sin
  * Each case draws a wave across a 512 x 300 canvas (Background, the stroke's "Paint" layer, a
  * translucent "Top"), rendering the canvas every few moves as the view does; its last point
  * comes with the lift, so the lift adds dabs of its own.
+ *
+ * Review (10/10): the masks of an adjustment layer (painted and editable), the Eraser and smudge
+ * on a layer mask, and watercolor. A watercolor stroke on an adjustment layer's mask is the one
+ * that redraws as before: the effect stays clipped to the mask's coverage from before the stroke
+ * until the commit marks the layer changed, so showing the preview as the commit would be stale.
  */
 @RunWith(RobolectricTestRunner::class)
 class PreviewEqualsCommitParityTest {
@@ -101,7 +108,7 @@ class PreviewEqualsCommitParityTest {
         c.tiles.update(c.compositor, null)
         val steps = c.undoManager.undoCount
         c.pointerUp(pts[N - 1])
-        assertEquals("the stroke is one step", steps + 1, c.undoManager.undoCount)
+        assertEquals("the stroke is one step (message: ${c.message})", steps + 1, c.undoManager.undoCount)
         c.tiles.update(c.compositor, null)
         val fresh = DisplayTiles(W, H).also { it.update(c.compositor, null) }.pixels()
         val shownNow = c.tiles.pixels()
@@ -241,6 +248,79 @@ class PreviewEqualsCommitParityTest {
         parity(newController(ColorMode.MONOCHROME), ToolId.BRUSH, shown = false)
         parity(newController(ColorMode.MONOCHROME), ToolId.SMUDGE, shown = false)
         parity(newController(ColorMode.GRAYSCALE), ToolId.BRUSH, shown = false)
+    }
+
+    /**
+     * An Invert adjustment layer above "Paint" whose painted mask lets the effect through a band
+     * only (the compositor clips the effect to the mask's non-black bounds), active.
+     */
+    private fun EditorController.adjustmentWithBandMask(): Layer {
+        val adj = addAdjustmentLayer(AdjustmentSpec(filterId = "adjust.invert"), null)!!
+        addMask(adj, fromSelection = false)
+        val m = adj.mask!!
+        m.eraseColor(0xFF000000.toInt())
+        Canvas(m).drawRect(150f, 110f, 330f, 190f, Paint().apply { color = -1 })
+        adj.markChanged()
+        selectLayer(adj)
+        return adj
+    }
+
+    /** An Invert adjustment layer with an editable Radial mask (the effect clipped to the spec's coverage), active. */
+    private fun EditorController.adjustmentWithRadialSpec(): Layer {
+        val spec = MaskSpec(components = listOf(RadialMask(id = 1, cx = 240f, cy = 150f, rx = 90f, ry = 45f, feather = 0.3f)), nextId = 2)
+        val adj = addAdjustmentLayer(AdjustmentSpec(filterId = "adjust.invert"), spec)!!
+        selectLayer(adj)
+        return adj
+    }
+
+    @Test
+    fun adjustmentLayerPaintedMask() {
+        for (id in listOf(ToolId.BRUSH, ToolId.ERASER)) {
+            val c = newController()
+            c.adjustmentWithBandMask()
+            c.color = -1
+            parity(c, id, shown = true)
+        }
+    }
+
+    @Test
+    fun adjustmentLayerPaintedMaskWatercolor() {
+        val c = newController()
+        c.adjustmentWithBandMask()
+        c.color = -1
+        c.brush = BrushLibrary.byId("watercolor")!!.copy(size = 30f)
+        parity(c, ToolId.BRUSH, shown = false)
+    }
+
+    @Test
+    fun adjustmentLayerEditableMask() {
+        val c = newController()
+        c.adjustmentWithRadialSpec()
+        c.color = -1
+        parity(c, ToolId.BRUSH, shown = true)
+        val w = newController()
+        w.adjustmentWithRadialSpec()
+        w.color = -1
+        w.brush = BrushLibrary.byId("watercolor")!!.copy(size = 30f)
+        parity(w, ToolId.BRUSH, shown = false)
+    }
+
+    @Test
+    fun layerMaskEraserAndSmudge() {
+        for (id in listOf(ToolId.ERASER, ToolId.SMUDGE)) {
+            val c = newController()
+            c.addMask(c.paintLayer, fromSelection = false)
+            c.paintLayer.mask!!.let { m -> Canvas(m).drawRect(150f, 110f, 330f, 190f, Paint().apply { color = 0xFF000000.toInt() }) }
+            c.paintLayer.markChanged()
+            parity(c, id, shown = true)
+        }
+    }
+
+    @Test
+    fun watercolor() {
+        val c = newController()
+        c.brush = BrushLibrary.byId("watercolor")!!.copy(size = 30f)
+        parity(c, ToolId.BRUSH, shown = true)
     }
 
     private companion object {

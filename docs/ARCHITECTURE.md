@@ -1894,24 +1894,30 @@ A6 makes drawing, erasing and the mask tools cheaper per frame without changing 
 (I25) or v1.8's behaviour under Robolectric's EXACT policy (I8). Steps 1-10 of design 3.2 A6; P4,
 P3 and R11a are built and kept off (CUT (proxy)), each behind one constant.
 
-**The lift (P1, I25).** A brush, eraser, smudge or blur lift redraws only the parts of the canvas
+**The lift (P1, I25).** A brush, eraser, smudge, blur or watercolor lift redraws only the parts of the canvas
 in the 256 px undo tiles its dabs touched (`EditorController.commitStrokeEdit` in region `v19-A6 commitEdit`,
 `EditInvalidation.tilesAfterCommit`), not the stroke's bounding box; other `commitEdit` callers
 keep v1.8's rect. Where the canvas already shows the stroke exactly as it commits (an RGB
 document, no recorder-gated tool such as the clone stamp, not a path stroke, the stroke's
-override still installed; smudge and blur without a monochrome override) the lift passes
-`displayCurrent = true` and redraws only the dabs the canvas has not shown yet and the retapered
-end (`BrushTool.lastLiftShowedCommit` reports the decision). `v19/a6/PreviewEqualsCommitParityTest`
-pins the premise: after every lift the display equals a full redraw of the committed document, bit
-for bit, across blend modes, alpha lock, selection, grain, taper, masks, clipping, adjustment
-layers, folders, symmetry, smudge and blur; elsewhere the lift redraws its tiles as before.
+override still installed; smudge, blur and watercolor without a monochrome override and not on an
+adjustment layer's mask) the lift passes `displayCurrent = true` and redraws only the dabs the
+canvas has not shown yet and the retapered end (`BrushTool.lastLiftShowedCommit` reports the
+decision). A watercolor stroke on an adjustment layer's mask redraws its tiles as before: no
+override draws that mask while it paints, so `AdjustmentStage` keeps the effect clipped to the
+mask's coverage from before the stroke until the commit marks the layer changed (or turns its spec
+into a painted mask). `v19/a6/PreviewEqualsCommitParityTest` pins the premise: after every lift
+the display equals a full redraw of the committed document, bit for bit, across blend modes, alpha
+lock, selection, grain, taper, layer masks (brush, eraser, smudge), clipping, adjustment layers
+(above the stroke, and their painted and editable masks), folders, symmetry, smudge, blur and
+watercolor; elsewhere the lift redraws its tiles as before.
 
 **Per-frame allocations (P2).** `DisplayTiles` keeps each tile's Canvas and `CompositeTarget`
 with its bitmap, counts its dirty tiles (`hasDirty` is O(1); `dirty` holds null for a clean tile,
 as in v1.8, since `VectorPerfHarness` reads it, and each tile's own reused rect otherwise) and
 reuses its rects, order arrays and `TileUpdate` values; `Compositor` caches its blend Paint per (mode,
-alpha) on the main thread; `DirectStroke` (smudge, blur, watercolor, raster eraser) recycles its
-dabs.
+alpha) on the main thread; `DirectStroke` (smudge, blur, watercolor) recycles its dabs. The brush
+and the raster Eraser (`BufferStroke`) keep theirs, which the lift reads for its tiles, so their
+frames allocate only the new dabs.
 
 **Mask drags (R13).** Under the live policy (`LiveAdjust.Policy.LIVE`, the app's; tests opt in
 with `liveAdjust.policy` and `clock`) the Masks tool records a drag's newest spec and renders its
@@ -1927,7 +1933,9 @@ full-resolution render is estimated above `MaskTool.REFINE_MIN_MS` (24 ms) becom
 bands rendered on the main thread, one slice per Handler message within 6 ms of the live clock,
 while the preview shows the edit; it lands as ONE step through `MaskEdits.applyWith`, equal to
 v1.8's `MaskEdits.apply` (I1). It is a `DeferredStep`: another step, undo / redo, a new gesture
-or leaving the tool lands it first; a layer changed in another way drops it. Under EXACT every
+or leaving the tool lands it first; a layer changed in another way drops it. It holds one byte per
+pixel of the changed region (at most the document); when that does not fit in memory the release
+renders at once, as in v1.8. Under EXACT every
 move previews at once at v1.8's scale and the release renders at once (I8).
 
 **Memory (design 2.4.3).** Three entries in the `MemoryGovernor` registry, for A7b's policy:

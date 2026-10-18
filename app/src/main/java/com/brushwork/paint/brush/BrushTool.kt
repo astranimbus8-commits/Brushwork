@@ -1562,9 +1562,16 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
             lastLiftShowedCommit = shown && committed
         }
 
-        /** v1.9 A6 (I25): the canvas shows the layer's own pixels, except through the 1-bit threshold. */
+        /**
+         * v1.9 A6 (I25): the canvas shows the layer's own pixels, except through the 1-bit
+         * threshold, and except on an adjustment layer's mask (a watercolor stroke there; smudge
+         * and blur are refused): no override draws that mask, so the effect stays clipped to the
+         * mask's coverage as it was before the stroke (`AdjustmentStage` measures it again only
+         * when the commit marks the layer changed or turns its spec into a painted mask), and the
+         * commit redraws as in v1.8 (`PreviewEqualsCommitParityTest`).
+         */
         override val previewIsCommit: Boolean
-            get() = super.previewIsCommit && monochrome == null
+            get() = super.previewIsCommit && monochrome == null && !(rec.target == EditTarget.MASK && layer.isAdjustmentLayer)
 
         override fun cancel() {
             recorder?.cancel()
