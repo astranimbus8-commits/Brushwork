@@ -12,7 +12,9 @@ import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.Selection
 import com.brushwork.paint.qa18.Qa18PolishChromeSelectionBarTest
 import com.brushwork.paint.smoke.Smoke
+import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.select.SelectionDuplicate
+import com.brushwork.paint.tools.transform.TransformTool
 import com.brushwork.paint.ui.color.RobolectricUi
 import com.brushwork.paint.ui.common.LayerLabels19
 import com.brushwork.paint.ui.common.SavedSelectionLabels
@@ -33,8 +35,9 @@ import org.robolectric.annotation.Config
 
 /**
  * v1.9 QA (R14, A4; I27): the selection bar's [LayerLabels19.DUPLICATE] at 392 and 360 dp and at
- * each font scale. It is the bar's last item, after "Save", inside the bar and whole; a tap copies
- * the selected pixels within the layer (one step [LayerLabels19.DUPLICATE_STEP], no new layer);
+ * each font scale. It is the bar's last item, after "Save", inside the bar and whole; a tap floats
+ * a copy of the selected pixels in Transform on the same layer (Gate 2: no step yet, no new
+ * layer), and ✓ once it is moved lands it as one step [LayerLabels19.DUPLICATE_STEP];
  * on a vector layer it copies the objects the selection touches and its confirmation
  * ([LayerLabels19.DUPLICATED]) shows whole; on a legacy shape layer it is not there.
  */
@@ -103,10 +106,20 @@ class Qa19DuplicateUiTest {
                 val layers = s.c.doc.layers.size
                 val steps = s.c.undoManager.undoCount
                 Qa19Ui.click(LayerLabels19.DUPLICATE, exact = true)
+                // Gate 2: the copy floats in Transform over the same spot, with no step yet.
+                val tool = s.c.tools[ToolId.TRANSFORM] as TransformTool
+                assertEquals("$where: Transform", ToolId.TRANSFORM, s.c.activeToolId)
+                assertTrue("$where: the copy floats", tool.hasPendingWork)
+                assertEquals("$where: no step while it floats", steps, s.c.undoManager.undoCount)
+                val d = SelectionDuplicate.offset(s.c)
+                tool.moveBy(d.toFloat(), d.toFloat())
+                Qa19Ui.settle()
+                Qa19Ui.click(APPLY, exact = true)
+                Qa19Ui.settle()
+                assertFalse("$where: applied", tool.hasPendingWork)
                 assertEquals("$where: one step", steps + 1, s.c.undoManager.undoCount)
                 assertEquals(LayerLabels19.DUPLICATE_STEP, s.c.undoManager.undoLabel)
                 assertEquals("$where: no new layer", layers, s.c.doc.layers.size)
-                val d = SelectionDuplicate.offset(s.c)
                 assertEquals("$where: the copy", 0xFFE02020.toInt(), layer.bitmap.getPixel(139 + d, 119 + d))
                 assertEquals("$where: the selection on the copy", 50 + d, s.c.selection!!.bounds.left)
             }
@@ -142,5 +155,8 @@ class Qa19DuplicateUiTest {
     private companion object {
         /** The click labels of the selection bar's eight v1.6 items, in order (the last is "More"). */
         val V16_ITEMS = Qa18PolishChromeSelectionBarTest.ITEMS.take(8)
+
+        /** The ✓ of the Transform tool's pending edit (EditorChrome's PendingButtons builds it from the tool's label). */
+        val APPLY = "Apply ${ToolId.TRANSFORM.label.lowercase()} edit"
     }
 }

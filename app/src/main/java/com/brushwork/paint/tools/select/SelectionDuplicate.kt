@@ -2,19 +2,17 @@ package com.brushwork.paint.tools.select
 
 import android.graphics.Bitmap
 import android.graphics.Canvas
-import android.graphics.Paint
-import android.graphics.PorterDuff
-import android.graphics.PorterDuffXfermode
 import android.graphics.Rect
 import android.graphics.RectF
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.engine.BitmapUtils
-import com.brushwork.paint.engine.EditTarget
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.Selection
+import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.text.TextCodec
 import com.brushwork.paint.tools.text.TextItemOps
 import com.brushwork.paint.tools.transform.ContentBounds
+import com.brushwork.paint.tools.transform.TransformTool
 import com.brushwork.paint.ui.common.LayerLabels19
 import com.brushwork.paint.vector.select.ObjectActions
 import com.brushwork.paint.vector.select.ObjectEdits
@@ -23,16 +21,16 @@ import kotlin.math.roundToInt
 /**
  * v1.9 (R14; owner A4): the selection bar's [LayerLabels19.DUPLICATE], which copies what the
  * selection holds within the active layer (never a new layer: the layers panel duplicates layers).
- * One step [LayerLabels19.DUPLICATE_STEP] each, offset right and down like the object bar's
- * Duplicate ([ObjectActions.duplicateOffset]):
- * - a raster layer: the selected pixels (soft edges kept) are drawn again, offset, on the same
- *   layer, and the selection moves onto the copy, so Move or Transform takes it further. (The
- *   design floats the copy in Transform; its placement removes a layer that isn't fresh on ✕, so
- *   until it can place within a layer the copy lands at once: a LeadRequest.)
- * - a vector layer: the objects the selection touches are copied on top of them, and the copies
- *   become the object selection;
- * - a text layer: the texts that meet the selection, through [TextItemOps.duplicateItems]
- *   (offered only while [TextItemOps.available]).
+ * One step [LayerLabels19.DUPLICATE_STEP] each:
+ * - a raster layer: the selected pixels (soft edges kept) float as a copy in Transform at the same
+ *   spot of the same layer ([TransformTool.startInLayerCopy], Gate 2), to be dragged, scaled or
+ *   turned; ✓ draws it onto the layer as the step, the selection moving with it, and ✕ (or Undo
+ *   while it floats) leaves the layer as it was with no step;
+ * - a vector layer: the objects the selection touches are copied on top of them, offset right and
+ *   down like the object bar's Duplicate ([ObjectActions.duplicateOffset]), and the copies become
+ *   the object selection;
+ * - a text layer: the texts that meet the selection, through [TextItemOps.duplicateItems] with
+ *   the same offset (offered only while [TextItemOps.available]).
  * The last two toast [LayerLabels19.DUPLICATED] with the number of copies. A legacy shape layer
  * (a pixel copy would rasterize it: I20), an adjustment layer, a folder, a layer with a live array
  * and a mask being edited are not offered ([kindOf] null).
@@ -80,52 +78,32 @@ object SelectionDuplicate {
     fun offset(c: EditorController): Int = ObjectActions.duplicateOffset(c).roundToInt()
 
     /**
-     * The selected pixels of [layer], drawn again [offset] px right and down on the same layer
-     * (alpha lock respected), and the selection moved with them: ONE step.
+     * The selected pixels of [layer] (soft edges kept), floated in Transform at the same place of
+     * the same layer ([TransformTool.startInLayerCopy], Gate 2): nothing is recorded yet. ✓ lands
+     * them as ONE step [LayerLabels19.DUPLICATE_STEP] (alpha lock respected) with the selection
+     * moved along; ✕, Delete or Undo while it floats leaves the layer as it was with no step.
      */
     private fun pixels(c: EditorController, layer: Layer, sel: Selection): Boolean {
         val doc = c.doc
         val src = Rect(sel.bounds)
-        val d = offset(c)
-        val dest = Rect(src).apply { offset(d, d) }
-        if (src.isEmpty || !src.intersect(0, 0, doc.width, doc.height) || !dest.intersect(0, 0, doc.width, doc.height)) {
+        if (src.isEmpty || !src.intersect(0, 0, doc.width, doc.height)) {
             c.toast(LayerLabels19.NOTHING_TO_DUPLICATE.format(layer.name)); return false
         }
-        val copy: Bitmap
-        val moved: Selection
-        try {
-            copy = BitmapUtils.createLayerBitmap(src.width(), src.height())
-            Canvas(copy).apply { translate(-src.left.toFloat(), -src.top.toFloat()); SelectionEdits.drawSelected(this, layer.bitmap, sel) }
-            moved = shifted(sel, d, doc.width, doc.height)
+        val tool = c.tools[ToolId.TRANSFORM] as? TransformTool ?: return false
+        val copy = try {
+            BitmapUtils.createLayerBitmap(src.width(), src.height()).also { b ->
+                Canvas(b).apply { translate(-src.left.toFloat(), -src.top.toFloat()); SelectionEdits.drawSelected(this, layer.bitmap, sel) }
+            }
         } catch (e: OutOfMemoryError) {
             c.toast(LayerLabels19.NO_MEMORY); return false
         }
-        var done = false
-        try {
-            c.groupUndo(LayerLabels19.DUPLICATE_STEP) {
-                val rec = c.beginEdit(layer, EditTarget.CONTENT)
-                try {
-                    rec.touch(dest)
-                    val paint = Paint().apply { if (layer.alphaLocked) xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_ATOP) }
-                    Canvas(layer.bitmap).drawBitmap(copy, (src.left + d).toFloat(), (src.top + d).toFloat(), paint)
-                } catch (e: OutOfMemoryError) {
-                    // The tiles saved so far go back and nothing is recorded (groupUndo finds no step).
-                    rec.abort()
-                    return@groupUndo
-                }
-                c.commitEdit(rec, LayerLabels19.DUPLICATE_STEP)
-                c.setSelection(moved, recordUndo = true, label = LayerLabels19.DUPLICATE_STEP)
-                done = true
-            }
-        } finally {
-            copy.recycle()
-        }
-        if (!done) c.toast(LayerLabels19.NO_MEMORY)
-        return done
+        // The tool owns the copy from here (it recycles it when it can't float it).
+        return tool.startInLayerCopy(layer, copy, src, sel, LayerLabels19.DUPLICATE_STEP)
     }
 
     /**
-     * [sel] moved [d] px right and down (what leaves the canvas is dropped). Only the selection's
+     * [sel] moved [d] px right and down (what leaves the canvas is dropped). Since Gate 2 the raster
+     * Duplicate floats its copy in Transform instead, which moves the selection along. Only the selection's
      * bounds are drawn (ALPHA_8 onto a clear ALPHA_8 copies the coverage exactly) and then scanned
      * for the new tight bounds: never a full-document byte copy or rescan (PRINT is 12 Mpx).
      */

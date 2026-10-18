@@ -225,7 +225,7 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
     var transformState by mutableStateOf<TransformState?>(null)
         private set
 
-    /** True while placing an imported picture (commit label "Import picture"). */
+    /** True while placing an imported picture (commit label "Import picture"), a paste or a Duplicate's copy (v1.9). */
     var isPlacement by mutableStateOf(false)
         private set
 
@@ -373,7 +373,7 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
         val targetBitmap: Bitmap,
         val floating: Bitmap,
         val ownsFloating: Boolean,
-        /** Area the content was lifted from (null for placements). */
+        /** Area the content was lifted from (null for placements; an [inLayer] copy's source, never cleared). */
         val liftRect: Rect?,
         /** Selection the content was lifted with; it moves along on commit. */
         val selection: Selection?,
@@ -387,6 +387,12 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
         val objectLift: ObjectLift? = null,
         /** Where [objectLift] came from (taps on the objects, inside or outside the box, go to it). */
         val objectProvider: ObjectLiftProvider? = null,
+        /**
+         * v1.9 (R14): a placement of a copy of [layer]'s own pixels over that same layer
+         * ([startInLayerCopy]): the source stays, no layer is added or removed for it, and ✕
+         * leaves no step.
+         */
+        val inLayer: Boolean = false,
     ) {
         /** Source pixels -> document ([floating] may be smaller than the source: see [ObjectLift.floatingScale]). */
         val matrix = Matrix()
@@ -663,6 +669,30 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
             Session(layer, EditTarget.CONTENT, layer.bitmap, floating, floating !== image, null, null, 0, initial, placement = true, placementLabel = label),
             initial,
         )
+    }
+
+    /**
+     * v1.9 (R14): floats [copy], the pixels of [layer] within [from] (document px, [copy]'s size),
+     * over that same place of [layer] itself: the selection bar's Duplicate. ✓ draws it onto the
+     * layer as ONE step [label] and [selection] (what was copied) moves along with it in that
+     * step, unless the selection was changed meanwhile; ✕, Delete and Undo while it floats leave
+     * the layer and the selection as they were, with no step. [copy] belongs to the tool from now
+     * on. False (and [copy] recycled) when it can't float: [layer] is gone or [copy] doesn't fit [from].
+     */
+    fun startInLayerCopy(layer: Layer, copy: Bitmap, from: Rect, selection: Selection?, label: String): Boolean {
+        if (controller.activeToolId != ToolId.TRANSFORM) controller.selectTool(ToolId.TRANSFORM)
+        cancelJobs()
+        if (session != null) commit()
+        if (controller.doc.indexOf(layer) < 0 || copy.isRecycled || copy.width != from.width() || copy.height != from.height()) {
+            if (!copy.isRecycled) copy.recycle()
+            return false
+        }
+        val initial = TransformState.identity(from.left, from.top, from.width(), from.height())
+        startSession(
+            Session(layer, EditTarget.CONTENT, layer.bitmap, copy, true, Rect(from), selection, 0, initial, placement = true, placementLabel = label, inLayer = true),
+            initial,
+        )
+        return true
     }
 
     /** Lifts the active layer / selection now (same as touching the canvas while idle). */
@@ -1442,7 +1472,8 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
      * Deletes what is being transformed as ONE undo step "Delete": lifted pixels are removed
      * from the layer (the area they were lifted from is cleared and nothing is put back; a
      * lifted selection stays where it is), and a picture being placed is removed together with
-     * its new layer (undoing the step brings the layer back with the picture on it). Returns
+     * its new layer (undoing the step brings the layer back with the picture on it). A copy
+     * floating on its own layer (v1.9, [startInLayerCopy]) just goes, with no step. Returns
      * false if nothing was deleted (nothing lifted, the layer is locked...).
      */
     fun deleteContent(): Boolean {
@@ -1451,7 +1482,11 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
         pinch = null
         numericEdit = null
         clearGuides()
-        return if (s.placement) deletePlacement(s) else deleteLifted(s)
+        return when {
+            s.inLayer -> { cancelSession(s); true }
+            s.placement -> deletePlacement(s)
+            else -> deleteLifted(s)
+        }
     }
 
     private fun deleteLifted(s: Session): Boolean {
@@ -2006,7 +2041,7 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
         try {
             verts = MeshRenderer.vertices(e.mesh, view.srcW, view.srcH, sub, smoothMesh)
             area = MeshRenderer.bounds(verts)
-            s.liftRect?.let { rec.touch(it) }
+            if (!s.inLayer) s.liftRect?.let { rec.touch(it) }
             val touched = Rect(area)
             if (touched.intersect(0, 0, bmp.width, bmp.height)) rec.touch(touched)
             val canvas = Canvas(bmp)
@@ -2027,7 +2062,7 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
         } else {
             emptyList()
         }
-        val foldWithAdd = s.placement && isFreshImportLayer(s.layer, s.placementLabel)
+        val foldWithAdd = s.placement && !s.inLayer && isFreshImportLayer(s.layer, s.placementLabel)
         endSession(s)
         val recorded = controller.commitEdit(rec, label, extras)
         if (recorded && foldWithAdd) controller.mergeLastUndo(2, label)
@@ -2671,7 +2706,7 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
         val bmp = s.targetBitmap
         val rec = controller.beginEdit(s.layer, s.target)
         try {
-            s.liftRect?.let { rec.touch(it) }
+            if (!s.inLayer) s.liftRect?.let { rec.touch(it) }
             val newRect = docRect(st)
             if (newRect.intersect(0, 0, bmp.width, bmp.height)) rec.touch(newRect)
             val canvas = Canvas(bmp)
@@ -2687,8 +2722,9 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
         }
         val extras = if (moveSelection) moveSelection(s, st, label) else emptyList()
         // A placement on the layer that was just added for it: adding the layer and placing the
-        // pixels become ONE undo step (undo removes the picture and its layer together).
-        val foldWithAdd = s.placement && isFreshImportLayer(s.layer, s.placementLabel)
+        // pixels become ONE undo step (undo removes the picture and its layer together). Never a
+        // copy on its own layer (v1.9): that layer was there before.
+        val foldWithAdd = s.placement && !s.inLayer && isFreshImportLayer(s.layer, s.placementLabel)
         endSession(s)
         val recorded = controller.commitEdit(rec, label, extras)
         if (recorded && foldWithAdd) controller.mergeLastUndo(2, label)
@@ -2704,12 +2740,15 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
     private fun pixelFallback(lift: ObjectLift, st: TransformState): Boolean =
         lift is DataLift && lift.kind != DataKind.ARRAY && lift.mapped(st) == null
 
-    /** Ends the session without changes; a discarded placement also removes its empty layer. */
+    /**
+     * Ends the session without changes; a discarded placement also removes its empty layer (not a
+     * copy on its own layer, v1.9: that layer stays as it was).
+     */
     private fun cancelSession(s: Session) {
         endSession(s)
         // Deferred: discard() is also called from inside controller.deleteLayer(), which removes
         // a layer by a precomputed index right after — changing the list now would break it.
-        if (s.placement) controller.scope.launch(Dispatchers.Main) { removePlacementLayer(s.layer, s.placementLabel) }
+        if (s.placement && !s.inLayer) controller.scope.launch(Dispatchers.Main) { removePlacementLayer(s.layer, s.placementLabel) }
     }
 
     /** Clears the session (no pixel changes) and redraws what the preview covered. */
@@ -2874,8 +2913,9 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
         return ContentBounds.majority(intArrayOf(mask.getPixel(0, 0), mask.getPixel(w, 0), mask.getPixel(0, h), mask.getPixel(w, h)))
     }
 
-    /** Removes the lifted pixels from [canvas] (transparent, or the background for masks). */
+    /** Removes the lifted pixels from [canvas] (transparent, or the background for masks); a copy's source stays. */
     private fun clearSource(canvas: Canvas, s: Session) {
+        if (s.inLayer) return
         val r = s.liftRect ?: return
         val sel = s.selection
         if (s.target == EditTarget.MASK) {
@@ -2909,6 +2949,8 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
         val sel = s.selection ?: return emptyList()
         val r = s.liftRect ?: return emptyList()
         val before = controller.selection
+        // A copy's selection changed meanwhile (placements ignore selection changes): the new one stays.
+        if (s.inLayer && before !== sel) return emptyList()
         val moved = try {
             val crop = Bitmap.createBitmap(sel.mask, r.left, r.top, r.width(), r.height())
             val out = Bitmap.createBitmap(sel.width, sel.height, Bitmap.Config.ALPHA_8)
