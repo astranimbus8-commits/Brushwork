@@ -38,6 +38,7 @@ import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.LayerBlendMode
 import com.brushwork.paint.model.Selection
 import com.brushwork.paint.tools.DeletingTool
+import com.brushwork.paint.tools.ErasableTool
 import com.brushwork.paint.tools.ObjectDeletion
 import com.brushwork.paint.tools.ObjectPosition
 import com.brushwork.paint.tools.ObjectScale
@@ -65,6 +66,7 @@ import com.brushwork.paint.tools.transform.SnapLine
 import com.brushwork.paint.tools.transform.TransformIncrements
 import com.brushwork.paint.tools.transform.offset
 import com.brushwork.paint.ui.common.CogLabels18
+import com.brushwork.paint.ui.common.EraseLabels19
 import com.brushwork.paint.ui.common.FolderLabels
 import com.brushwork.paint.ui.common.LayerLabels19
 import com.brushwork.paint.ui.common.MirrorLabels18
@@ -78,6 +80,10 @@ import com.brushwork.paint.vector.VStrokeKind
 import com.brushwork.paint.vector.VectorContent
 import com.brushwork.paint.vector.VectorLayers
 import com.brushwork.paint.vector.VectorOps
+import com.brushwork.paint.vector.draw.EraseSource
+import com.brushwork.paint.vector.draw.ToolErase
+import com.brushwork.paint.vector.draw.ToolEraseResult
+import com.brushwork.paint.vector.draw.ToolEraseSession
 import com.brushwork.paint.vector.edit.VectorEditSession
 import com.brushwork.paint.vector.render.VectorLayerRenderer
 import com.brushwork.paint.vector.select.ObjectActions
@@ -253,6 +259,18 @@ data class ShapeSettings(
  * an untouched reopened shape closes and the document's last step is undone). The commit is still
  * ONE document step.
  *
+ * ERASE MODE (v1.9, R11; [ErasableTool]): bottom-bar slot 1 ([EraseLabels19.WITH_SHAPE]) or the
+ * last row of "Stroke with" ([EraseLabels19.INSTEAD_OF_PAINT]) turns it on, after what is pending
+ * lands. Every shape then drawn is an eraser: its outline (dashed, with its copies) erases live as
+ * it changes, through a [ToolEraseSession] on the active layer ([ToolErase.begin]: pixels of a
+ * raster layer or a mask, objects of a vector or legacy shape layer in the Eraser's mode; refused
+ * with its message, the outline shows alone), with the stroke at its width and, for a filled
+ * closed style, its fill. Every edit of the pending shape works as when painting and updates the
+ * erase. Its commit (✓, a tap outside, a tool or layer switch, turning erase mode off) is ONE step
+ * [EraseLabels19.STEP_SHAPE]; ✕ leaves no trace. "Editable (own layer)", "New layer each time"
+ * and joining are ignored, a tap opens no shape, and "Turn into path" and the object items are
+ * not offered. Transient: never saved, off whenever the tool is chosen again ([onSelected]).
+ *
  * VECTOR LAYERS (v1.5): on a vector layer a new shape becomes a shape object (`VShape`) on top
  * of the layer ("Editable (own layer)" is implied), ONE undo step "Shape"; a brush outline shown
  * live is kept as it is (its seed is stored, so the object's replay is those very pixels). A tap
@@ -276,7 +294,7 @@ data class ShapeSettings(
  * the Scale step from its start. Per axis a guide wins, then the grid, then the step; the readout
  * (`increments.readout`) says where a stepped gesture is.
  */
-class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, PillPositionTool, ScaledTool, DeletingTool {
+class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, PillPositionTool, ScaledTool, DeletingTool, ErasableTool {
     override val id = ToolId.SHAPE
 
     /** Current options (Compose state); change them with [update]. */
@@ -436,6 +454,28 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
     /** A shape object of a vector layer is open for editing (Compose state). */
     var editingObject by mutableStateOf(false)
         private set
+
+    // ------------------------------------------------------------------ erase mode (v1.9, R11)
+
+    /** Erase mode is on (Compose state): the shapes drawn erase (see the class comment). */
+    override var eraseOn by mutableStateOf(false)
+        private set
+
+    override val eraseLabel: String get() = EraseLabels19.WITH_SHAPE
+
+    override val erasingLabel: String get() = EraseLabels19.ERASING_SHAPE
+
+    /** The erase of the outline being drawn, open from its first change to its commit (null before, or refused). */
+    internal var eraseSession: ToolEraseSession? = null
+        private set
+
+    /** [ToolErase.begin] refused the outline being drawn (it said why once): it shows alone until its commit asks again. */
+    private var eraseRefused = false
+
+    /** The outline being erased with, its copies included (document px), drawn dashed; null without one. */
+    internal var eraseOutline: Path? = null
+        private set
+    private val erasePath = Path()
 
     // ------------------------------------------------------------------ gestures
 
@@ -863,7 +903,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         val cx = d.width / 2f; val cy = d.height / 2f
         // v1.8 (§3.1): its copies are taken at its start point, the centre.
         val maps = ObjectCopies.mapsAt(controller, cx, cy)
-        if (!checkCanPlaceNew(ObjectCopies.isPerspective(maps))) return false
+        if (!eraseOn && !checkCanPlaceNew(ObjectCopies.isPerspective(maps))) return false
         val size = max(1f, min(d.width, d.height) / 3f)
         targetLayer = d.activeLayer
         useNewMaps(maps)
@@ -1375,6 +1415,8 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
      * is rendering).
      */
     fun turnIntoPath(): Boolean {
+        // v1.9 (R11): an outline erasing is no shape to convert.
+        if (eraseOn) return false
         val b = box ?: return false
         turnIntoPathRefusal?.let {
             controller.toast(it)
@@ -2075,9 +2117,16 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         if (!started) {
             if (pt.distanceTo(downPoint) < controller.docLength(TOUCH_SLOP_DP)) return
             if (mode == Mode.CREATE) {
+                // v1.9 (R11): erase mode erases with one outline at a time: the pending one's
+                // erase lands first (refused: it stays, and no new shape starts).
+                if (eraseOn && box != null) {
+                    commit()
+                    if (box != null) { mode = Mode.NONE; snap.end(); return }
+                }
                 // v1.8 (§3.1): the ruler's maps are taken once, at the new shape's start point.
                 creatingMaps = ObjectCopies.mapsAt(controller, downPoint.x, downPoint.y)
-                if (!checkCanPlaceNew(ObjectCopies.isPerspective(creatingMaps))) { creatingMaps = emptyList(); mode = Mode.NONE; snap.end(); return }
+                // (An erase places no shape: its layer's check is the erase's own, ToolErase.begin.)
+                if (!eraseOn && !checkCanPlaceNew(ObjectCopies.isPerspective(creatingMaps))) { creatingMaps = emptyList(); mode = Mode.NONE; snap.end(); return }
                 if (box == null) targetLayer = controller.doc.activeLayer
                 // The first corner is a new point: it may snap (from where the finger landed).
                 anchor = snap.snapPoint(downPoint)
@@ -2458,8 +2507,8 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
             if (box == null) targetLayer = null
             // The tap opens the shape under the finger, never the one it just placed or closed (a
             // tap just outside an opened shape closes it: shapes open from a little farther away).
-            // On a vector layer its shape objects come first.
-            if (tap && box == null && !openShapeObjectAt(pt, skip = closedObject)) shapeLayerAt(pt, skip = closed)?.let { editLayer(it) }
+            // On a vector layer its shape objects come first. v1.9 (R11): never in erase mode.
+            if (tap && box == null && !eraseOn && !openShapeObjectAt(pt, skip = closedObject)) shapeLayerAt(pt, skip = closed)?.let { editLayer(it) }
         } else {
             if (box != null) commit()
             if (box == null) {
@@ -2923,6 +2972,10 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
 
     /** Rebuilds the preview of the pending / in-creation shapes and redraws. */
     fun refreshPreview() {
+        if (eraseOn) {
+            refreshErase()
+            return
+        }
         val vectorLayer = vectorLayerOfPending()
         if (vectorLayer != null) {
             refreshVectorPreview(vectorLayer)
@@ -2982,6 +3035,110 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
             if (specs.isNotEmpty()) ensureObserving()
             preview.show(layer, specs, asNewLayer = asNew || intoFolder, overlayOnly = intoFolder || (asNew && newLayerPreviewInOverlay(layer)))
         }
+        controller.invalidateOverlay()
+    }
+
+    // ------------------------------------------------------------------ erase mode (v1.9, R11)
+
+    /**
+     * v1.9 (R11, [ErasableTool]): erase mode on or off. What is pending lands first in the mode it
+     * was drawn in (placed, or its erase committed: [EraseLabels19.STEP_SHAPE]), or goes when it
+     * can't land; an open bevel popup closes.
+     */
+    override fun setErase(on: Boolean) {
+        if (on == eraseOn) return
+        closeBevelPopup()
+        if (hasPendingWork) commit()
+        if (hasPendingWork) discard()
+        endErase()
+        eraseOn = on
+        refreshPreview()
+    }
+
+    /** v1.9 (R11): erase mode is transient: it is off whenever the tool is chosen again. */
+    override fun onSelected() {
+        if (eraseOn) setErase(false)
+    }
+
+    /**
+     * Erase mode's preview: no paint preview at all (the erase session owns the layer's render
+     * override), the outline being drawn erases live ([showErase]) and shows dashed.
+     */
+    private fun refreshErase() {
+        brushPreview.cancel()
+        specOverlay.setBand(null, 0f)
+        overlaySpecs = emptyList()
+        brushGuide = null
+        preview.release()
+        if (vectorPreview != null || vectorGuides.isNotEmpty()) releaseVectorPreview()
+        showErase(begin = !eraseRefused)
+        if (eraseSession != null) ensureObserving()
+        controller.invalidateOverlay()
+    }
+
+    /**
+     * The outline being drawn (the one dragged out, else the pending one; with its copies) as an
+     * eraser: [eraseOutline] for the overlay and, when [begin] allows, its live erase on the
+     * shape's layer ([ToolErase.begin]; refused after saying why: [eraseRefused], the outline then
+     * shows alone). Its footprint is the stroke at its width (the brush's size for a brush
+     * outline) and, for a filled closed style, the fill. Returns the open session (null without
+     * an outline, or refused).
+     */
+    private fun showErase(begin: Boolean): ToolEraseSession? {
+        val creating = creatingBox
+        val o = creating?.let { newObject(it) } ?: box?.let { objectFor(it, points) }
+        if (o == null) {
+            endErase()
+            return null
+        }
+        val maps = if (creating != null) creatingDrawMaps() else pendingMaps()
+        val path = ShapeCopies.mappedAll(ShapeOutlines.brushOutline(o), maps).toAndroidPath(erasePath)
+        eraseOutline = path
+        var s = eraseSession
+        if (s == null && begin) {
+            s = ToolErase.begin(controller, targetLayer ?: controller.doc.activeLayer, EraseSource.SHAPE)
+            eraseSession = s
+            eraseRefused = s == null
+        }
+        s?.update(path, eraseWidth(o), !o.type.isLineLike && o.style.fill)
+        return s
+    }
+
+    /** The width [o]'s outline erases with (document px; 0 without a stroke). */
+    private fun eraseWidth(o: ShapeObject): Float = when {
+        !o.strokes -> 0f
+        o.paintsWithBrush -> o.brushPreset?.size?.takeIf { it.isFinite() && it > 0f } ?: o.strokeWidth
+        else -> o.strokeWidth
+    }
+
+    /** Ends the outline's erase without a step (the layer looks as before) and forgets the outline. */
+    private fun endErase() {
+        eraseSession?.cancel()
+        eraseSession = null
+        eraseRefused = false
+        eraseOutline = null
+    }
+
+    /**
+     * Erase mode's commit: the outline's erase lands as ONE step [EraseLabels19.STEP_SHAPE] (none
+     * when nothing was under it) and the outline goes. Refused (the layer can't be edited now; the
+     * message was shown): the outline stays pending.
+     */
+    private fun commitErase() {
+        val s = eraseSession ?: showErase(begin = true) ?: return
+        eraseSession = null
+        inCommit = true
+        val result = try {
+            s.commit(EraseLabels19.STEP_SHAPE)
+        } finally {
+            inCommit = false
+        }
+        if (result is ToolEraseResult.Refused) {
+            eraseRefused = true
+            controller.invalidateOverlay()
+            return
+        }
+        resetPending()
         controller.invalidateOverlay()
     }
 
@@ -3705,6 +3862,8 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
             return false
         }
         if (!controller.checkEditable(layer)) return false
+        // v1.9 (R11): opening a shape to edit it ends erase mode (its pending erase lands).
+        if (eraseOn) setErase(false)
         // Finish the pending shape first (placing it may add a layer).
         if (box != null) {
             commit()
@@ -3886,11 +4045,17 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         vectorGuides = emptyList()
         preview.release()
         preview.interacting = false
+        // v1.9 (R11): an erase still open goes with its outline.
+        endErase()
         clearHistory()
     }
 
     override fun commit() {
         val b = box ?: return
+        if (eraseOn) {
+            commitErase()
+            return
+        }
         val session = vectorSession
         if (session != null) {
             commitVectorEdit(session, b)
@@ -4072,7 +4237,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
     val objectActionsApply: Boolean get() = objectActionsApply(decode = false)
 
     private fun objectActionsApply(decode: Boolean): Boolean {
-        if (box == null || pointsMode) return false
+        if (box == null || pointsMode || eraseOn) return false
         if (editingObject) return true
         if (editingLayer != null) return false
         controller.layersVersion
@@ -4355,6 +4520,8 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         resizeGuides = emptyList()
         if (hasPendingWork) commit()
         if (hasPendingWork) discard()
+        // v1.9 (R11): a shape being dragged out in erase mode leaves no erase behind.
+        endErase()
         overlaySpecs = emptyList()
         preview.release()
         preview.interacting = false
@@ -4369,6 +4536,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
     }
 
     override fun onDispose() {
+        endErase()
         brushPreview.end()
         decodedLayers.clear()
         featureCache.clear()
@@ -4419,6 +4587,8 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         editGuide?.let { if (creating == null) painter.path(canvas, t, it) }
         brushGuide?.let { painter.path(canvas, t, it) }
         for (g in vectorGuides) painter.path(canvas, t, g)
+        // v1.9 (R11): the outline erasing (with its copies) is drawn dashed.
+        eraseOutline?.let { painter.path(canvas, t, it, dashed = true) }
         val pending = box
         val pts = points
         if (creating == null && pending != null && pointsMode && pts != null) {
@@ -4456,7 +4626,8 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
      */
     private fun drawPoints(canvas: Canvas, t: ViewTransform, b: ShapeBox, pts: List<ShapePoint>) {
         val o = objectFor(b, pts)
-        painter.path(canvas, t, outlinePathOf(o))
+        // (Erasing, the outline is the dashed one drawn before.)
+        if (!eraseOn) painter.path(canvas, t, outlinePathOf(o))
         val anchors = ShapePoints.docAnchors(b, pts)
         val closed = closedShape
         val selection = pointSelection.resized(anchors.size)

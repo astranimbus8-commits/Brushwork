@@ -24,6 +24,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
@@ -56,6 +57,7 @@ import androidx.compose.ui.unit.sp
 import com.brushwork.paint.tools.vector.LineCapStyle
 import com.brushwork.paint.ui.common.closeOnSecondFinger
 import com.brushwork.paint.ui.common.longPressLabel
+import com.brushwork.paint.ui.editor.EditorIcons
 import com.brushwork.paint.ui.theme.BrushworkColors
 import com.brushwork.paint.ui.theme.IbisColors
 
@@ -207,6 +209,8 @@ private fun cellTint(on: Boolean, enabled: Boolean): Color = when {
  * A dropdown cell [width] wide: [glyph] and ▾, known by [label] (its description, the v1.7
  * DropdownChip's, and its long-press label), opening its [entries] in an opaque menu anchored
  * here (a pick closes the menu, never the More row). The [selected] entry is checked.
+ * v1.9 (R11): [lastRow], when given, is a row of its own below a divider (with the eraser's
+ * icon, checked while [lastRowOn]); a tap closes the menu and runs [onLastRow].
  */
 @Composable
 internal fun <T> ShapeMenuCell(
@@ -217,6 +221,9 @@ internal fun <T> ShapeMenuCell(
     onPick: (T) -> Unit,
     width: Dp,
     entryGlyph: (@Composable (T) -> Unit)? = null,
+    lastRow: String? = null,
+    lastRowOn: Boolean = false,
+    onLastRow: () -> Unit = {},
     glyph: @Composable () -> Unit,
 ) {
     var open by remember { mutableStateOf(false) }
@@ -255,6 +262,19 @@ internal fun <T> ShapeMenuCell(
                     },
                     leadingIcon = entryGlyph?.let { g -> { g(e) } },
                     trailingIcon = { if (e == selected) Icon(Icons.Filled.Check, contentDescription = null) },
+                )
+            }
+            if (lastRow != null) {
+                HorizontalDivider()
+                DropdownMenuItem(
+                    text = { Text(lastRow) },
+                    onClick = {
+                        open = false
+                        onLastRow()
+                    },
+                    modifier = Modifier.semantics { this.selected = lastRowOn },
+                    leadingIcon = if (entryGlyph != null) { { Icon(EditorIcons.Eraser, contentDescription = null, modifier = Modifier.size(22.dp)) } } else null,
+                    trailingIcon = { if (lastRowOn) Icon(Icons.Filled.Check, contentDescription = null) },
                 )
             }
         }

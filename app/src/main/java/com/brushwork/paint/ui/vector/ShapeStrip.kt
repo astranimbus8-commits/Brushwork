@@ -45,8 +45,10 @@ import com.brushwork.paint.tools.vector.ShapeStroke
 import com.brushwork.paint.tools.vector.ShapeStyle
 import com.brushwork.paint.tools.vector.ShapeTool
 import com.brushwork.paint.tools.vector.ShapeType
+import com.brushwork.paint.ui.common.EraseLabels19
 import com.brushwork.paint.ui.common.MirrorLabels18
 import com.brushwork.paint.ui.common.PointLabels
+import com.brushwork.paint.ui.editor.endCanvasGesture
 import com.brushwork.paint.ui.theme.BrushworkColors
 import com.brushwork.paint.ui.tools.strip.LocalStripContext
 import com.brushwork.paint.ui.tools.strip.StripItem
@@ -76,6 +78,9 @@ import com.brushwork.paint.ui.tools.strip.StripSpec
  * ([shapeObjectItems]: duplicate, bring forward, send backward) after v1.8's More items while an
  * open shape is or becomes a shape object ([ShapeTool.objectActionsApply], never in Points
  * mode), hidden while the selection bar or the object bar shows (`StripContext.selectionBarShown`).
+ * v1.9 (R11): "Stroke with" ends with [EraseLabels19.INSTEAD_OF_PAINT] (erase mode, as bottom-bar
+ * slot 1: [ShapeTool.setErase]); while erasing, "Editable", "Turn into path" and the object items
+ * are hidden ([ShapeStripInfo.erasing]).
  *
  * Every handle is the v1.7 one (StripHandlesV17 "SHAPE"; "Snap" became "Snap to objects"). The
  * Shape settings and Numbers sheets and the typed handle scale are overlays: they outlive the
@@ -151,6 +156,11 @@ internal data class ShapeStripInfo(
     val hasCopies: Boolean,
     /** v1.9 (R14): the object items show ([ShapeTool.objectActionsApply]; [shapeObjectItems]). */
     val objectActions: Boolean,
+    /**
+     * v1.9 (R11): erase mode is on ([ShapeTool.eraseOn]): "Editable" and "Turn into path" are
+     * hidden (an erase places no shape), and so are the object items ([ShapeTool.objectActionsApply]).
+     */
+    val erasing: Boolean = false,
 ) {
     val lineLike: Boolean get() = type.isLineLike
 
@@ -177,13 +187,14 @@ internal data class ShapeStripInfo(
             val sel = tool.pointSelection.resized(n)
             val widthShown = s.strokes && (s.strokeWith == ShapeStroke.PLAIN || s.type == ShapeType.ARROW)
             // v1.8 (D21): a holed cog never reaches Points mode, yet it turns into a (compound) path.
-            val toPathShown = pointsMode || (pending && ShapePoints.refusal(s.type, s.outlineParams) != null)
+            val erasing = tool.eraseOn
+            val toPathShown = !erasing && (pointsMode || (pending && ShapePoints.refusal(s.type, s.outlineParams) != null))
             return ShapeStripInfo(
                 type = s.type,
                 strokes = s.strokes,
                 strokeWith = s.strokeWith,
                 widthText = if (widthShown) Units.format(tool.strokeWidth.toDouble(), s.unit, dpi.toDouble()) else null,
-                editableShown = tool.editingLayer == null && !tool.drawsOnVectorLayer,
+                editableShown = !erasing && tool.editingLayer == null && !tool.drawsOnVectorLayer,
                 pending = pending,
                 pointsMode = pointsMode,
                 custom = pending && pts != null,
@@ -196,6 +207,7 @@ internal data class ShapeStripInfo(
                 toPathRefusal = if (toPathShown) tool.turnIntoPathRefusal else null,
                 hasCopies = tool.hasCopies,
                 objectActions = tool.objectActionsApply,
+                erasing = erasing,
             )
         }
     }
@@ -352,6 +364,13 @@ internal object ShapeStripItems {
                     onPick = { w -> set { it.copy(strokeWith = w) } },
                     width = STROKE_WITH_DP.dp,
                     entryGlyph = { Icon(strokeIcon(it), contentDescription = null) },
+                    // v1.9 (R11): erase mode, as bottom-bar slot 1 ([ShapeTool.setErase]).
+                    lastRow = EraseLabels19.INSTEAD_OF_PAINT,
+                    lastRowOn = tool.eraseOn,
+                    onLastRow = {
+                        c.endCanvasGesture()
+                        tool.setErase(!tool.eraseOn)
+                    },
                 ) { Icon(strokeIcon(m), contentDescription = null, tint = BrushworkColors.OnChrome) }
             })
         }
