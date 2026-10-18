@@ -5,6 +5,7 @@ import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.Rect
 import com.brushwork.paint.EditorController
+import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.masks.AdjustmentEffects
 import com.brushwork.paint.model.ArraySpec
 import com.brushwork.paint.model.Layer
@@ -81,10 +82,18 @@ class SelectionDuplicateRobolectricTest {
         assertEquals("no step while it floats", steps, c.undoManager.undoCount)
         assertEquals("no new layer", layers, c.doc.layers.size)
         assertTrue("the layer is untouched while it floats", before.contentEquals(pixels(layer)))
-        // The user drags it d px right and down and taps ✓.
+        // The user drags it d px right and down; the canvas shows the layer as ✓ will leave it.
         tool.moveBy(d.toFloat(), d.toFloat())
+        assertTrue("the layer untouched while it moves", before.contentEquals(pixels(layer)))
+        val preview = c.renderOverride!!
+        assertSame("the preview draws the same layer", layer, preview.layer)
+        val shown = BitmapUtils.createLayerBitmap(kit.w, kit.h)
+        assertTrue(preview.drawContent(Canvas(shown)))
+        val live = kit.pixels(shown).also { shown.recycle() }
         tool.commit()
         kit.settle(c)
+        assertNull("the preview goes with ✓", c.renderOverride)
+        assertTrue("what was shown while it floated is what ✓ drew", live.contentEquals(pixels(layer)))
         assertFalse(tool.hasPendingWork)
         assertEquals("one step", steps + 1, c.undoManager.undoCount)
         assertEquals(LayerLabels19.DUPLICATE_STEP, c.undoManager.undoLabel)
@@ -152,6 +161,60 @@ class SelectionDuplicateRobolectricTest {
         }
         c.redo()
         assertEquals("the step before the Duplicate comes back", 0.5f, layer.opacity, 0.001f)
+    }
+
+    /**
+     * Gate 2 review: the bar shows while Transform holds an untouched lift of the selection; the
+     * Duplicate tapped there ends that lift with no step and floats the copy, and leaving
+     * Transform for another tool lands the moved copy as the ONE step, undone and redone exactly.
+     */
+    @Test
+    fun fromAnUntouchedLiftToAToolSwitchTheCopyIsOneStep() {
+        val c = kit.controller()
+        val layer = painted(c)
+        rectSelection(c, 10f, 10f, 70f, 60f)
+        val d = SelectionDuplicate.offset(c)
+        val before = pixels(layer)
+        val selBefore = c.selection!!.bounds
+        val steps = c.undoManager.undoCount
+        val tool = transform(c)
+        c.selectTool(ToolId.TRANSFORM)
+        assertTrue("the selection is lifted", kit.idleUntil { tool.lifted == TransformTool.Lifted.PIXELS })
+        assertFalse("untouched", tool.hasUserChanges)
+        assertTrue(SelectionDuplicate.duplicate(c))
+        assertEquals("the copy floats instead", TransformTool.Lifted.PLACEMENT, tool.lifted)
+        assertEquals("the untouched lift made no step", steps, c.undoManager.undoCount)
+        assertTrue("the layer untouched", before.contentEquals(pixels(layer)))
+        tool.moveBy(d.toFloat(), d.toFloat())
+        c.selectTool(ToolId.BRUSH)
+        kit.settle(c)
+        assertFalse("landed", tool.hasPendingWork)
+        assertEquals("one step", steps + 1, c.undoManager.undoCount)
+        assertEquals(LayerLabels19.DUPLICATE_STEP, c.undoManager.undoLabel)
+        val expected = before.copyOf().also { px ->
+            for (y in 20 + d until 50 + d) for (x in 20 + d until 60 + d) px[y * kit.w + x] = red
+        }
+        assertTrue("the original and the copy, pixel for pixel", expected.contentEquals(pixels(layer)))
+        assertEquals("the selection moved onto the copy", Rect(selBefore).apply { offset(d, d) }, c.selection!!.bounds)
+        c.undo()
+        assertTrue("undone: pixels", before.contentEquals(pixels(layer)))
+        assertEquals("undone: the selection", selBefore, c.selection!!.bounds)
+        assertEquals(steps, c.undoManager.undoCount)
+        c.redo()
+        assertTrue("redone: pixels", expected.contentEquals(pixels(layer)))
+        assertEquals(Rect(selBefore).apply { offset(d, d) }, c.selection!!.bounds)
+        // ✓ without a move is a step too (the copy lands on itself: opaque pixels stay as they are).
+        val sel = c.selection
+        assertTrue(SelectionDuplicate.duplicate(c))
+        tool.commit()
+        kit.settle(c)
+        assertEquals("unmoved: one step", steps + 2, c.undoManager.undoCount)
+        assertEquals(LayerLabels19.DUPLICATE_STEP, c.undoManager.undoLabel)
+        assertTrue("unmoved: the same pixels", expected.contentEquals(pixels(layer)))
+        assertEquals("unmoved: the same selection", sel!!.bounds, c.selection!!.bounds)
+        c.undo()
+        assertTrue("unmoved, undone", expected.contentEquals(pixels(layer)))
+        assertEquals(steps + 1, c.undoManager.undoCount)
     }
 
     /**
