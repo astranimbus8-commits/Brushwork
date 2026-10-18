@@ -110,12 +110,12 @@ class CrossObjectsBarsUiTest {
         assertTrue("$where: shown twice with the More row open: ${shownTwice(s)}", shownTwice(s).isEmpty())
         assertEquals("$where: the bar's Duplicate only", 1, controls(s, LayerLabels19.DUPLICATE))
 
-        // The object bar's own row instead (one row at a time): still each label once at most.
-        if (Qa19Ui.openObjectRow()) {
-            assertNull("$where: the More row closed", StripTestKit.stripMoreRow())
-            assertTrue("$where: shown twice with the bar's row open: ${shownTwice(s)}", shownTwice(s).isEmpty())
-            Qa19Ui.closeObjectRow()
-        }
+        // The object bar's own row instead (one row at a time): Forward and Backward there, once each.
+        assertTrue("$where: the object bar's own row opens", Qa19Ui.openObjectRow())
+        assertNull("$where: the More row closed", StripTestKit.stripMoreRow())
+        assertTrue("$where: shown twice with the bar's row open: ${shownTwice(s)}", shownTwice(s).isEmpty())
+        for (label in objectLabels) assertEquals("$where, the bar's row open: \"$label\" once", 1, controls(s, label))
+        Qa19Ui.closeObjectRow()
         assertTrue("$where: the shape still open", tool.hasPendingWork)
     }
 }

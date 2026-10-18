@@ -32,7 +32,9 @@ import org.robolectric.Shadows.shadowOf
  * exactly what the vector object bar's buttons do for the same object selected: ONE step each
  * with the bar's label, the same objects (data, ids, order) and the same pixels; undo gives back
  * the same layer in both. Only what is left open differs, as designed: the Shape tool reopens
- * the copy (or the shape) with no object selection, the bar keeps the result selected.
+ * the copy (or the shape) with no object selection, the bar keeps the result selected. A square
+ * away from the others lies at the bottom, so the last Send backward takes A4's plain step past
+ * it ([com.brushwork.paint.vector.select.ArrangeOrder]; v1.5's body said "Already at the back").
  */
 @RunWith(RobolectricTestRunner::class)
 class CrossObjectsShapeMoreRowTest {
@@ -68,8 +70,9 @@ class CrossObjectsShapeMoreRowTest {
     }
 
     /**
-     * A joined layer (S1), active, under the Shape tool: the rectangle (30, 30) - (110, 90) filled
-     * blue, then the ellipse (60, 50) - (140, 110) over it filled green, drawn as the user draws them.
+     * A joined layer (S1), active, under the Shape tool, drawn as the user draws them: the square
+     * (200, 160) - (250, 210) filled blue, away from the others; the rectangle (30, 30) - (110, 90)
+     * filled blue; then the ellipse (60, 50) - (140, 110) over the rectangle, filled green.
      */
     private fun joined(): Triple<EditorController, ShapeTool, Layer> {
         val c = rig.controller()
@@ -81,6 +84,8 @@ class CrossObjectsShapeMoreRowTest {
                 strokeWidth = 4f, fillColor = blue, editable = true, newLayerEachTime = false,
             )
         }
+        rig.drag(c, 200f to 160f, 225f to 185f, 250f to 210f)
+        tool.commit()
         rig.drag(c, 30f to 30f, 70f to 60f, 110f to 90f)
         tool.commit()
         tool.update { it.copy(type = ShapeType.ELLIPSE, fillColor = green) }
@@ -88,7 +93,7 @@ class CrossObjectsShapeMoreRowTest {
         rig.drag(c, 140f to 110f, 100f to 80f, 60f to 50f)
         tool.commit()
         val layer = c.activeLayer
-        assertEquals("S1: one vector layer of two shapes", listOf(true, true), layer.vector!!.objects.map { it is VShape })
+        assertEquals("S1: one vector layer of three shapes", listOf(true, true, true), layer.vector!!.objects.map { it is VShape })
         settle(c)
         return Triple(c, tool, layer)
     }
@@ -106,7 +111,7 @@ class CrossObjectsShapeMoreRowTest {
         b.vectors.update(lb, la.vector!!, "Twin")
         val start = state(a, la)
         assertEquals("twins", start, state(b, lb))
-        val (rectId, ellipseId) = la.vector!!.objects.map { it.id }
+        val (farId, rectId, ellipseId) = la.vector!!.objects.map { it.id }
 
         /**
          * [shapeRow] on A's rectangle reopened under Shape, [bar] on B's rectangle selected: ONE
@@ -144,10 +149,12 @@ class CrossObjectsShapeMoreRowTest {
             { tool.duplicateOpen() }, { ObjectActions.duplicate(b) },
         )
         val objects = duplicated.vector!!.objects
-        assertEquals("the copy right above the rectangle", listOf(rectId, ellipseId), listOf(objects[0].id, objects[2].id))
+        assertEquals("four objects", 4, objects.size)
+        assertEquals("the copy right above the rectangle", listOf(farId, rectId, ellipseId), listOf(objects[0].id, objects[1].id, objects[3].id))
+        assertTrue("the copy is a new object", objects[2].id !in setOf(farId, rectId, ellipseId))
         val d = ObjectActions.duplicateOffset(a)
-        val copy = (objects[1] as VShape).shape
-        val rect = (objects[0] as VShape).shape
+        val copy = (objects[2] as VShape).shape
+        val rect = (objects[1] as VShape).shape
         assertEquals(rect.cx + d, copy.cx, 0.01f)
         assertEquals(rect.cy + d, copy.cy, 0.01f)
         a.undo()
@@ -160,7 +167,7 @@ class CrossObjectsShapeMoreRowTest {
             "Bring forward", ObjectEdits.Arrange.FORWARD.label, StripKeysV19.FORWARD.key,
             { tool.arrangeOpen(ObjectEdits.Arrange.FORWARD) }, { ObjectActions.arrange(b, ObjectEdits.Arrange.FORWARD) },
         )
-        assertEquals(listOf(ellipseId, rectId), forward.vector!!.objects.map { it.id })
+        assertEquals(listOf(farId, ellipseId, rectId), forward.vector!!.objects.map { it.id })
         assertTrue("the pixels show the new order", forward.pixels != start.pixels)
 
         // Send backward: below it again.
@@ -168,11 +175,20 @@ class CrossObjectsShapeMoreRowTest {
             "Send backward", ObjectEdits.Arrange.BACKWARD.label, StripKeysV19.BACKWARD.key,
             { tool.arrangeOpen(ObjectEdits.Arrange.BACKWARD) }, { ObjectActions.arrange(b, ObjectEdits.Arrange.BACKWARD) },
         )
-        assertEquals(listOf(rectId, ellipseId), backward.vector!!.objects.map { it.id })
+        assertEquals(listOf(farId, rectId, ellipseId), backward.vector!!.objects.map { it.id })
         assertEquals("the pixels as at the start", start.pixels, backward.pixels)
 
-        // Undo both arrangements in both: the joined layer as it was, and the same.
-        repeat(2) { a.undo(); b.undo() }
+        // Send backward again: nothing below overlaps the rectangle, so A4's plain step puts it
+        // under the square (R19; v1.5's body said "Already at the back" and made no step).
+        val plain = same(
+            "Send backward, plain step", ObjectEdits.Arrange.BACKWARD.label, StripKeysV19.BACKWARD.key,
+            { tool.arrangeOpen(ObjectEdits.Arrange.BACKWARD) }, { ObjectActions.arrange(b, ObjectEdits.Arrange.BACKWARD) },
+        )
+        assertEquals(listOf(rectId, farId, ellipseId), plain.vector!!.objects.map { it.id })
+        assertEquals("nothing overlaps: the pixels as at the start", start.pixels, plain.pixels)
+
+        // Undo the three arrangements in both: the joined layer as it was, and the same.
+        repeat(3) { a.undo(); b.undo() }
         assertEquals(start, state(a, la))
         assertEquals(start, state(b, lb))
     }

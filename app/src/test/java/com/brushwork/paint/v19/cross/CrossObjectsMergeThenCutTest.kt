@@ -18,6 +18,7 @@ import com.brushwork.paint.tools.ToolPoint
 import com.brushwork.paint.tools.vector.ShapeStroke
 import com.brushwork.paint.tools.vector.ShapeStyle
 import com.brushwork.paint.tools.vector.ShapeType
+import com.brushwork.paint.ui.layers.LayerOps
 import com.brushwork.paint.v19.a9.A9Rig
 import com.brushwork.paint.vector.VPath
 import com.brushwork.paint.vector.VShape
@@ -41,7 +42,8 @@ import org.robolectric.Shadows.shadowOf
 
 /**
  * v1.9 Gate 2 cross test X2 (design 3.4; A4 x A5; R19, R11 b): two shape layers drawn with the
- * Shape tool ("New layer each time") merge down into one vector layer that keeps both shapes as
+ * Shape tool ("New layer each time") merge down from the layers panel ([LayerOps.mergeDown], with
+ * no merge dialog: nothing would become pixels) into one vector layer that keeps both shapes as
  * objects (R19: the type is kept, the picture unchanged), ONE step "Merge down"; the partial
  * eraser then cuts one of the shapes into editable paths in its place, ONE step "Erase", the
  * other shape untouched. Undo of the cut gives back the merged layer exactly, undo of the merge
@@ -122,11 +124,15 @@ class CrossObjectsMergeThenCutTest {
         val drawn = picture(c)
         val lowerName = lower.name
 
-        // Merge down: ONE step, the objects kept (R19), the picture as it was.
+        // Merge down from the layers panel: no question (nothing would become pixels), ONE step,
+        // the objects kept (R19), the picture as it was.
         assertEquals(MergeKind.VECTOR_OBJECTS, c.layerMerge.kindOf(upper, lower))
+        assertNull("no reason to merge into pixels", c.layerMerge.rasterReason(upper, lower))
         val steps = c.undoManager.undoCount
-        c.mergeDown(upper)
+        val asked = ArrayList<String>()
+        LayerOps.mergeDown(c, upper, ask = { asked += it })
         settle(c)
+        assertEquals("the merge dialog never asks", emptyList<String>(), asked)
         assertEquals("the merge is ONE step", steps + 1, c.undoManager.undoCount)
         assertEquals("Merge down", c.undoManager.undoLabel)
         assertEquals("the ellipse's layer went", -1, c.doc.indexOf(upper))

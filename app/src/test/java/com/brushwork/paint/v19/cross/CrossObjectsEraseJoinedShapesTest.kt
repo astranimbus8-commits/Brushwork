@@ -10,6 +10,7 @@ import com.brushwork.paint.brush.TipCache
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.storage.ProjectRepository
+import com.brushwork.paint.tools.ErasableTool
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.vector.CurveStroke
 import com.brushwork.paint.tools.vector.CurveTool
@@ -27,6 +28,7 @@ import com.brushwork.paint.vector.VShape
 import com.brushwork.paint.vector.VStrokeStyle
 import com.brushwork.paint.vector.VSubpath
 import com.brushwork.paint.vector.VectorContent
+import com.brushwork.paint.vector.VectorOps
 import com.brushwork.paint.vector.draw.DoomPreview
 import com.brushwork.paint.vector.draw.VectorEraseMode
 import com.brushwork.paint.vector.draw.VectorEraserModes
@@ -63,7 +65,8 @@ import java.io.File
  * Each erase is ONE step whose undo and redo give back exactly the layer's objects and pixels;
  * the layer stays a fresh rendering of its objects (I1) and is never turned into pixels by itself
  * (I20); the result saves and opens again as it was. The ellipse, never under the outline, is
- * untouched throughout.
+ * untouched throughout. A piece cut with Shape opens in a curve tool once erasing is off (A1's
+ * reopen), so the pieces are editable lines, not only objects.
  */
 @RunWith(RobolectricTestRunner::class)
 class CrossObjectsEraseJoinedShapesTest {
@@ -226,6 +229,28 @@ class CrossObjectsEraseJoinedShapesTest {
 
     private fun maxX(p: VPath): Float = p.subpaths.maxOf { s -> s.anchors.maxOf { it.x } }
 
+    /**
+     * [piece] of [layer] is an editable line: erase mode off (slot 1) and the Curve tool picked, a
+     * tap on its line opens it in a curve tool (the one of its kind, R14); ✕ then leaves the layer
+     * exactly as it was, with no step.
+     */
+    private fun assertOpensInACurveTool(where: String, c: EditorController, layer: Layer, piece: VPath) {
+        (c.currentTool as? ErasableTool)?.setErase(false)
+        c.selectTool(ToolId.CURVE)
+        val before = state(c, layer)
+        val steps = c.undoManager.undoCount
+        val pts = VectorOps.toVectorPath(piece).flatten(0.25f).single().points
+        val p = pts[pts.size / 3]
+        rig.tap(c, p.x, p.y)
+        idle()
+        val open = c.currentTool as? CurveTool
+        assertTrue("$where: a tap on the piece's line opens it (${c.activeToolId})", open != null && open.isReopened)
+        assertEquals("$where: opening it is no step", steps, c.undoManager.undoCount)
+        open!!.discard()
+        assertEquals("$where: ✕ is no step", steps, c.undoManager.undoCount)
+        assertEquals("$where: ✕ leaves the layer as it was", before, state(c, layer))
+    }
+
     @Test
     fun eachToolErasesTheJoinedShapesInEachModeInOneStepThatUndoesAndReopensExactly() {
         for (id in tools) for (mode in listOf(VectorEraseMode.OBJECT, VectorEraseMode.PARTIAL, VectorEraseMode.TO_INTERSECTION)) {
@@ -254,6 +279,8 @@ class CrossObjectsEraseJoinedShapesTest {
                     assertTrue("$where: the right piece starts after it (${minX(right)})", minX(right) >= 74.9f)
                     assertEquals("$where: the cut is a gap", 0, layer.bitmap.getPixel(70, 70) ushr 24)
                     assertEquals("$where: beside it the fill stays", blue, layer.bitmap.getPixel(45, 70))
+                    // (Once: what the user does next, after cutting with a shape.)
+                    if (id == ToolId.SHAPE) assertOpensInACurveTool(where, c, layer, left)
                 }
                 else -> {
                     // Over shapes alone nothing goes: they are only boundaries (v1.8). No step.
