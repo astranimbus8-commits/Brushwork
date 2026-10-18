@@ -2095,8 +2095,8 @@ unbounded. A soak harness runs the whole loop for Q10 and Q11 every night.
   most 1.5 s on main. Past it the work is cancelled and never lands: the layer keeps what it had,
   no step is recorded, and "<step> took too long and was cancelled" shows. An Undo or Redo that
   waited is that cancellation. Under another overlay ("Saving…", "Exporting…") the work lands on
-  the spot through the synchronous path. `NoRunBlockingOnMainTest` keeps them out
-  (A5's `EraseLanding` is a lead request).
+  the spot through the synchronous path. `NoRunBlockingOnMainTest` keeps them out. A5's
+  `EraseLanding` (`Cutting.flush`) still waits without a bound: deferred to Gate 2.
 - **Leaving** (`EditorSession.saveOnLeaving`, Home, app switch, screen off). It returns at once;
   on the app scope it waits up to the limit for the renders and the saved selections
   (`awaitDeferredWork`), lands what is pending synchronously (`leavingDeferred`: never
@@ -2113,8 +2113,11 @@ unbounded. A soak harness runs the whole loop for Q10 and Q11 every night.
   like a layer, so it counts as one, turned off or not. `addMask` refuses at the cap with the
   layer-limit message; an adjustment layer from a selection takes its two rooms at once
   (`canAddAdjustmentLayer`). The Layers panel's "n / max" counts masks too. An artwork over the
-  cap still opens (`MaskCapTest`). `LayerOps.addEnabledMask`, `MaskActions.addSpecMask`, folder
-  duplication and `ArraySources.hasRoom` do not count masks yet (lead requests).
+  cap still opens (`MaskCapTest`). The other ways a mask is made or copied need the room too
+  (the lead at the merge): "Add mask" on a layer whose mask was turned off
+  (`LayerOps.addEnabledMask`), an editable mask (`MaskEdits.addSpecMask`), a duplicated layer or
+  folder (`LayerStructure`: each copied mask one more), an array (`ArraySources.hasRoom`) and an
+  import (`PayloadImport.fitting`: a mask one more slot; an adjustment layer's two hold its own).
 - **Soak harness** (`SoakHarnessTest`, `@Category(Timing)`; it runs only with `-PsoakOnly`, which
   sets `bw.testSet=soak`: `.github/workflows/soak.yml`, nightly and on demand; it skips itself
   elsewhere). Two artworks (phone and PRINT (3:4) proportions at 512 px) go round 3 times: open from
@@ -2133,11 +2136,21 @@ unbounded. A soak harness runs the whole loop for Q10 and Q11 every night.
   (the job's JUnit XML keeps them). On the desktop JVM a run takes about 17 s; the longest call
   is a filter start (about 180 ms), the activations take under 5 ms.
 
-**For the merge (asked of the lead).** `MemoryGovernorRegistryTest.theDefaultPolicyIsV18`,
-`VectorAsyncBurstQaTest` (its 3 s gate is past the 1.5 s wait) and A6's
-`GovernorRegistrationTest` line 155 (an editor now also registers "undo history") still pin the
-behaviour before A7b. The undo entry needs nothing from `dispose`: it closes with the editor's
-scope. The rest are in the report's lead requests.
+**At the merge (the lead).** Applied: the three tests that pinned the behaviour before A7b pin
+A7b's (`MemoryGovernorRegistryTest.theDefaultPolicyIsV18AndTheAppRunsV19`: `MemoryGovernor`'s
+own default stays v1.8's and `GovernorPolicies.current()` is V19; `VectorAsyncBurstQaTest`'s
+gate opens after 1 s, within the 1.5 s wait; `GovernorRegistrationTest` lists "undo history"
+last); the mask rooms above (`MaskCapTest`); compat row 13 (`row13BandedSave`, fixture
+`qa19/compat/banded/`: one project saved whole and in bands of 7 rows, the same files byte for
+byte); an unused `runBlocking` import out of `EditorController`. The undo entry needs nothing
+from `dispose`: it closes with the editor's scope. Deferred to Gate 2: a bound on
+`EraseLanding`'s wait (A5's file; what a cut that times out leaves is undecided); a timeout
+count in the frozen history region, and an Undo or Redo that reports the cancellation instead
+of its label (`HistoryLabels`; the toast already says it); a rework of `EditorSession.close` (a
+change on close; the bounded waits cover it); a running byte total in `UndoManager` (an
+optimization); `Filter.kernelRadius` tiling for the neighbourhood filters and streamed
+`ArrayCodec` sources (features); the design's wording, for the lead's revision of the design
+(this block says what the code does).
 
 <!-- /v19-A7b -->
 
