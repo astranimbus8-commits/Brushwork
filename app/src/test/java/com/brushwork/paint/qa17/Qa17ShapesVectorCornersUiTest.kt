@@ -3,6 +3,7 @@ package com.brushwork.paint.qa17
 import android.graphics.Canvas
 import android.graphics.Rect
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.text.TextLayoutResult
@@ -25,11 +26,14 @@ import com.brushwork.paint.tools.vector.CurveTool
 import com.brushwork.paint.tools.vector.ShapeStyle
 import com.brushwork.paint.tools.vector.ShapeTool
 import com.brushwork.paint.tools.vector.ShapeType
+import com.brushwork.paint.ui.color.RobolectricUi
 import com.brushwork.paint.ui.common.PathfinderLabels
 import com.brushwork.paint.ui.common.PointLabels
 import com.brushwork.paint.ui.editor.HistoryLabels
 import com.brushwork.paint.ui.editor.chrome.ChromeHarness
 import com.brushwork.paint.ui.editor.chrome.ChromeScreen
+import com.brushwork.paint.ui.points.ThicknessRowLabels
+import com.brushwork.paint.ui.vector.TYPE_POINT_WEIGHT
 import com.brushwork.paint.vector.VPaint
 import com.brushwork.paint.vector.VPath
 import com.brushwork.paint.vector.VShape
@@ -124,6 +128,27 @@ class Qa17ShapesVectorCornersUiTest {
         val state = row.node.config.getOrNull(SemanticsProperties.StateDescription)
         val value = row.node.children.lastOrNull { n -> n.config.getOrNull(SemanticsProperties.Text)?.any { it.text == state } == true }
             ?: throw AssertionError("\"$label\" shows no \"$state\"")
+        assertWhole(s, label, state, row, value, arrowsDp = 28f)
+    }
+
+    /**
+     * v1.9 (R1 (a)): the value box of the one-point controls that several points now share (its
+     * click label [typeLabel]) shows its value whole: the text read as [description] ("Point
+     * weight 2", "Point thickness 200 %") is laid out without overflow inside the box. ‹ and › are
+     * buttons of their own beside the box, so no room is kept for arrows inside it.
+     */
+    private fun assertValueShows(s: ChromeScreen, typeLabel: String, description: String) {
+        Qa16Ui(s).reach(typeLabel, 40f)
+        settle()
+        val row = s.placed().lastOrNull { it.node.config.getOrNull(SemanticsActions.OnClick)?.label == typeLabel }
+            ?: throw AssertionError("no \"$typeLabel\" field")
+        val value = row.node.children.lastOrNull { n -> n.config.getOrNull(SemanticsProperties.ContentDescription)?.contains(description) == true }
+            ?: throw AssertionError("\"$typeLabel\" shows no \"$description\"")
+        assertWhole(s, typeLabel, description, row, value, arrowsDp = 0f)
+    }
+
+    /** [value]'s text, in the field [row], is one whole, unellipsized line, [arrowsDp] left of the field's right edge. */
+    private fun assertWhole(s: ChromeScreen, label: String, state: String?, row: RobolectricUi.Element, value: SemanticsNode, arrowsDp: Float) {
         val field = s.dp(row.bounds)
         val r = s.dp(value.boundsInWindow)
         val layouts = ArrayList<TextLayoutResult>()
@@ -137,7 +162,7 @@ class Qa17ShapesVectorCornersUiTest {
         }
         assertTrue(
             "\"$label\" shows \"$state\" whole: its text at $r (overflow $overflow: $why) in the field at $field",
-            r.width > 4f && overflow == false && r.right <= field.right - 28f,
+            r.width > 4f && overflow == false && r.right <= field.right - arrowsDp,
         )
     }
 
@@ -238,20 +263,21 @@ class Qa17ShapesVectorCornersUiTest {
         // The group fields of the two points: weight 2, thickness *2, each ONE in-tool step.
         var k = pathSteps(path)
         // v1.8: the group's weight field is the popup of the More row's "Point weight" item.
+        // v1.9 (R1 (a)): several points use the one-point controls and their texts.
         click("Point weight", exact = true)
-        pressInMenu(s, "Type Point weight", 40f)
+        pressInMenu(s, TYPE_POINT_WEIGHT, 40f)
         SmokeUi.typeAndDone("Point weight", "2")
         for (ci in sel) assertEquals(2f, path.spline!!.points[ci].weight, 1e-4f)
         assertEquals(k + 1, pathSteps(path))
         click("Point weight", exact = true)
-        assertValueShows(s, "Point weight")
+        assertValueShows(s, TYPE_POINT_WEIGHT, "Point weight 2")
         Finger.back()
         k = pathSteps(path)
-        press(s, "Type Point thickness", 40f)
+        press(s, ThicknessRowLabels.TYPE, 40f)
         SmokeUi.typeAndDone("Point thickness", "*2")
         for (ci in sel) assertEquals(2f, path.spline!!.points[ci].width, 1e-4f)
         assertEquals(k + 1, pathSteps(path))
-        assertValueShows(s, "Point thickness")
+        assertValueShows(s, ThicknessRowLabels.TYPE, "Point thickness 200 %")
         Qa17ShapesShots.screen(s, "shapes-vectorcorners-path")
         val applied = c.undoManager.undoCount
         click("Apply path edit")
