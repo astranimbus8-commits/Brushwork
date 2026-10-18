@@ -94,11 +94,24 @@ object ObjectActions {
     /**
      * Moves the selected objects in the stacking order (one step); "Already …" when nothing would change.
      *
-     * v1.9 (design 2.4.11): this signature is frozen at Gate 1 (A9's Shape More row calls it);
-     * A4 changes only the body (Forward and Backward through [ArrangeOrder.step]).
+     * v1.9 (R19, design 2.4.11; the signature is frozen at Gate 1, as A9's Shape More row calls
+     * it): Forward and Backward move each selected object past the next object whose paint bounds
+     * overlap its own, or one plain step when none does ([ArrangeOrder.step]), so they say
+     * "Already …" only at the top or the bottom. Front and Back are v1.5's.
      */
     fun arrange(c: EditorController, how: ObjectEdits.Arrange): Boolean = edit(c, relift = true) { layer, content, ids ->
-        val after = ObjectEdits.arrange(content, ids, how) { a, b -> ObjectBounds.overlap(content, a, b) }
+        val after = when (how) {
+            ObjectEdits.Arrange.FORWARD, ObjectEdits.Arrange.BACKWARD -> {
+                val objs = content.objects
+                val selected = objs.indices.filterTo(HashSet()) { objs[it].id in ids }
+                val dir = if (how == ObjectEdits.Arrange.FORWARD) 1 else -1
+                // The new list's object i is the old list's object perm[i].
+                ArrangeOrder.step(objs.map { ObjectBounds.of(content, it) }, selected, dir)
+                    ?.let { perm -> content.copy(objects = List(objs.size) { objs[perm[it]] }) }
+            }
+            ObjectEdits.Arrange.FRONT, ObjectEdits.Arrange.BACK ->
+                ObjectEdits.arrange(content, ids, how) { a, b -> ObjectBounds.overlap(content, a, b) }
+        }
         if (after == null) {
             c.toast(
                 when (how) {

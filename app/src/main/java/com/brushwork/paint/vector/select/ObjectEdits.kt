@@ -62,6 +62,9 @@ object ObjectEdits {
      * of them don't count, so every press makes a visible change), [Arrange.BACKWARD] right
      * below the nearest one under its bottom member. Null when nothing would change (already
      * in front / at the back).
+     *
+     * v1.9 (R19): the object bar's Forward and Backward go through [ArrangeOrder.step] instead
+     * ([ObjectActions.arrange]); Front and Back still come here.
      */
     fun arrange(content: VectorContent, ids: Set<Long>, how: Arrange, overlaps: (VObject, VObject) -> Boolean): VectorContent? {
         val objs = content.objects

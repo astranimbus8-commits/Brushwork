@@ -111,15 +111,20 @@ class ObjectActionsRobolectricTest {
         assertEquals(listOf(2L, 1L, 3L, 4L), ids(c))
         assertOneStep(c, ObjectEdits.Arrange.FORWARD.label) { ObjectActions.arrange(c, ObjectEdits.Arrange.FORWARD) }
         assertEquals(listOf(2L, 3L, 1L, 4L), ids(c))
-        // Nothing above overlaps it (4 is elsewhere): no change, said so.
+        // v1.9 (R19): nothing above overlaps it (4 is elsewhere): one plain step, no longer "Already in front".
+        assertOneStep(c, ObjectEdits.Arrange.FORWARD.label) { ObjectActions.arrange(c, ObjectEdits.Arrange.FORWARD) }
+        assertEquals(listOf(2L, 3L, 4L, 1L), ids(c))
+        // At the top: no change, said so.
         val steps = c.undoManager.undoCount
         assertFalse(ObjectActions.arrange(c, ObjectEdits.Arrange.FORWARD))
         assertEquals(steps, c.undoManager.undoCount)
         assertEquals("Already in front", c.message)
+        // Backward goes under the nearest overlapping object below (3), skipping 4.
+        assertOneStep(c, ObjectEdits.Arrange.BACKWARD.label) { ObjectActions.arrange(c, ObjectEdits.Arrange.BACKWARD) }
+        assertEquals(listOf(2L, 1L, 3L, 4L), ids(c))
         // To the front passes 4 too.
         assertOneStep(c, ObjectEdits.Arrange.FRONT.label) { ObjectActions.arrange(c, ObjectEdits.Arrange.FRONT) }
         assertEquals(listOf(2L, 3L, 4L, 1L), ids(c))
-        // Backward goes under the nearest overlapping object below (3), skipping 4.
         assertOneStep(c, ObjectEdits.Arrange.BACKWARD.label) { ObjectActions.arrange(c, ObjectEdits.Arrange.BACKWARD) }
         assertEquals(listOf(2L, 1L, 3L, 4L), ids(c))
         // Two selected objects keep their own order going to the back.
