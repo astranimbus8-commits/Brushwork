@@ -2,12 +2,17 @@ package com.brushwork.paint.v19.a7b
 
 import android.content.ComponentCallbacks2
 import android.content.Context
+import android.os.Looper
 import androidx.test.core.app.ApplicationProvider
 import com.brushwork.paint.engine.GovernorPolicyV19
 import com.brushwork.paint.engine.MemoryGovernor
 import com.brushwork.paint.engine.MemoryPressure
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.ui.common.StabilityLabels19
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -16,13 +21,14 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 
 /**
  * v1.9 A7b step 1 (design 3.2 A7b, R9): an editor's undo history is the governor's last entry.
  * The system's CRITICAL trim (as `BrushworkApp`'s ComponentCallbacks2 delivers it) drops its
  * oldest steps until the memory in use (Java and native heap) is under 70 % and says "Memory is
  * low: older undo steps were cleared"; a LOW trim, or memory already under 70 %, leaves the
- * history alone and says nothing.
+ * history alone and says nothing. The entry goes with the editor's scope (A7b 7/7 review).
  */
 @Suppress("DEPRECATION") // the trim levels are what Android still delivers
 @RunWith(RobolectricTestRunner::class)
@@ -42,9 +48,10 @@ class UndoTrimToastTest {
 
     @Test
     fun criticalPressureClearsTheOldestStepsAndSaysSo() {
+        val before = MemoryGovernor.entries()
         val c = Smoke.controller(app, Smoke.document(64, 48, layers = 1))
-        val entry = MemoryGovernor.entries().filter { it.name == GovernorPolicyV19.UNDO_ENTRY && it.priority == GovernorPolicyV19.PRIORITY_UNDO }
-        assertTrue("the editor's history is registered", entry.isNotEmpty())
+        val entry = MemoryGovernor.entries().single { e -> e.name == GovernorPolicyV19.UNDO_ENTRY && before.none { it === e } }
+        assertEquals("the editor's history is registered last in line", GovernorPolicyV19.PRIORITY_UNDO, entry.priority)
         // The steps' tiles are native (360 of 900 in use): the Java heap alone is under 70 %.
         val heap = FakeHeap(1000L, 540L, native = 360L)
         GovernorPolicyV19.heap = heap
@@ -77,5 +84,16 @@ class UndoTrimToastTest {
         assertEquals(0L, c.trimUndoForMemory(MemoryPressure.LOW))
         assertEquals(left, c.undoManager.undoCount)
         assertNull(c.message)
+
+        // The editor closes (EditorSession.close cancels its scope after dispose): the entry goes
+        // once the scope's work has ended, while the editor is still reachable.
+        c.dispose()
+        c.scope.launch { delay(60_000L) }
+        c.scope.cancel()
+        shadowOf(Looper.getMainLooper()).idle()
+        assertTrue("the scope ended", c.scope.coroutineContext[Job]!!.isCompleted)
+        assertTrue("its entry went with it", MemoryGovernor.entries().none { it === entry })
+        c.undoMemoryRegistration.close()
+        assertTrue(MemoryGovernor.entries().none { it === entry })
     }
 }

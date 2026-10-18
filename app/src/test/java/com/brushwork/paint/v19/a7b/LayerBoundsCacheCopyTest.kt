@@ -30,7 +30,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 /**
- * v1.9 A7b step 6 (design 2.8 R9c, risk H4): the smart-guide cache's background scans read
+ * v1.9 A7b step 6 (design 3.2 A7b, R9, risk H4): the smart-guide cache's background scans read
  * immutable copies of a layer and its mask, taken on the main thread and recycled when the scan
  * ends, never the layer's own bitmaps: a layer removed and recycled meanwhile (undo history
  * trimmed: `LayerTreeAction.dispose`) is never read by another thread. The results are those of

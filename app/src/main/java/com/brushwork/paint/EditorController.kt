@@ -357,7 +357,11 @@ class EditorController(
      * weakly (a closed editor's entry goes by itself). Under CRITICAL pressure it drops the oldest
      * steps until the memory in use (Java and native heap: bitmap pixels are native) is under 70 %
      * of `maxMemory` ([trimUndoForMemory]). `UndoManager` keeps its steps'
-     * sizes to itself, so the entry reports 0 bytes. [dispose] may close it.
+     * sizes to itself, so the entry reports 0 bytes.
+     *
+     * The entry is closed with the editor's [scope] (`EditorSession.close` cancels it after
+     * [dispose]), so a closed editor leaves no entry behind whether or not it is collected yet; the
+     * handler holds the registration only, never the editor.
      */
     internal val undoMemoryRegistration: MemoryGovernor.Registration =
         com.brushwork.paint.engine.GovernorPolicyV19.registerWeakly(
@@ -366,7 +370,7 @@ class EditorController(
             this,
             bytes = { 0L },
             trim = { c, pressure -> c.trimUndoForMemory(pressure) },
-        )
+        ).also { r -> scope.coroutineContext[kotlinx.coroutines.Job]?.invokeOnCompletion { r.close() } }
 
     /**
      * What the governor's undo entry frees: under [com.brushwork.paint.engine.MemoryPressure.CRITICAL]
@@ -402,7 +406,7 @@ class EditorController(
      * [canAddAdjustmentLayer], `ImportLayers`' room check, `ArrayOps` and the layer window's
      * "n / max" all read it. Without folders and arrays it is `doc.layers.size` (v1.6).
      *
-     * v1.9 (A7b step 6, design 2.8 R9c): plus one per layer mask (turned off or not: a mask is a
+     * v1.9 (A7b step 6, design 3.2 A7b, R9): plus one per layer mask (turned off or not: a mask is a
      * full-size ARGB bitmap, a layer's bytes), so a mask needs room like a layer ([addMask]
      * checks it) and the layer window's "n / max" counts masks. An artwork already over the
      * limit still opens; only adding stops.
@@ -2332,7 +2336,7 @@ class EditorController(
     /**
      * Gives [layer] a mask (from the selection when [fromSelection]) and starts editing it.
      *
-     * v1.9 (A7b step 6, design 2.8 R9c): a mask is a full-size bitmap, as much memory as a layer,
+     * v1.9 (A7b step 6, design 3.2 A7b, R9): a mask is a full-size bitmap, as much memory as a layer,
      * and [effectiveLayerCount] counts it: at [maxLayers] none is added, [layerLimitMessage]
      * says so (nothing changes).
      */

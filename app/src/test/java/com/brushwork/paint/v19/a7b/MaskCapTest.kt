@@ -20,7 +20,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 
 /**
- * v1.9 A7b step 6 (design 2.8 R9c): a layer mask is a full-size ARGB bitmap, as much memory as a
+ * v1.9 A7b step 6 (design 3.2 A7b, R9): a layer mask is a full-size ARGB bitmap, as much memory as a
  * layer, so `effectiveLayerCount` counts it (turned off or not) and `addMask` needs room like a
  * new layer: at the limit it says "Layer limit reached (n) for this canvas size" and changes
  * nothing. An artwork already over the limit still opens; only adding stops.

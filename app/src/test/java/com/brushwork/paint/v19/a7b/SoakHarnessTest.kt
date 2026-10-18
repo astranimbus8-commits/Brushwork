@@ -32,6 +32,7 @@ import com.brushwork.paint.tools.select.colorrange.ColorPreset
 import com.brushwork.paint.tools.select.colorrange.ColorSelectTool
 import com.brushwork.paint.tools.select.magnetic.MagneticLassoTool
 import com.brushwork.paint.ui.common.StabilityLabels19
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -53,7 +54,7 @@ import kotlin.random.Random
 /**
  * v1.9 A7b step 7 (design 3.2 A7b, 2.2, 5.5): the soak harness, the JVM side of the soak checks
  * Q10 (Magnetic lasso) and Q11 (Color select) that run on the phone. Two artworks of the phone's
- * and of PRINT's proportions (scaled to 512 px) go round [CYCLES] times: open (from the files the
+ * and of PRINT's (3:4) proportions (scaled to 512 px) go round [CYCLES] times: open (from the files the
  * last round saved), [STROKES] strokes (brush, eraser, on a layer mask), the system's LOW trim
  * every 50 strokes and CRITICAL every 100 (the undo history then drops all but its newest step,
  * and Undo and Redo still work), two filters, a Magnetic lasso round (activation, a 12-anchor
@@ -63,7 +64,8 @@ import kotlin.random.Random
  *
  * What holds: no crash and no handled report (CrashLog), nothing reaches a scope; every layer
  * reopens as it was saved; no live layer or mask is ever recycled; a closed editor leaves no
- * governor entry holding memory and the registry does not grow; no call holds the main thread as
+ * governor entry behind (its undo history's entry goes with its scope) and the registry does not
+ * grow; no call holds the main thread as
  * long as a FREEZE report ([FreezeWatchdog.FREEZE_MS]); the tools' activations leave their work
  * to other threads.
  *
@@ -113,7 +115,7 @@ class SoakHarnessTest {
     @Test
     fun phoneAndPrintArtworksGoRoundOpenStrokesFiltersToolsSavesAndTrims() {
         soak("Soak phone", 230, 512)
-        soak("Soak print", 410, 512)
+        soak("Soak print", 384, 512)
 
         CrashLog.drain()
         assertEquals("no crash and no handled report", emptyList<String>(), CrashLog.reports(app).map { "${it.id}: ${it.summary}" })
@@ -141,7 +143,7 @@ class SoakHarnessTest {
         var entriesAfterClose = -1
         repeat(CYCLES) { cycle ->
             val where = "$name, round ${cycle + 1}"
-            val (session, c) = open(pid, where)
+            val (session, c, undoEntry) = open(pid, where)
             if (saved != null) assertEquals("$where: reopens as saved", saved, layerHashes(c.doc))
             if (cycle == 0) setUpArtwork(c)
             val rnd = Random(cycle * 7919 + w)
@@ -153,26 +155,30 @@ class SoakHarnessTest {
             assertNothingRecycled(c, where)
             saved = save(session, c, where)
             close(session, where)
-            // A closed editor holds no cache memory, and the registry does not grow round by round
-            // (its weakly held undo entry goes at the next registration once it is collected).
+            // A closed editor holds no cache memory, its undo history's entry went with its scope
+            // (collected or not), and the registry does not grow round by round.
             val cacheBytes = MemoryGovernor.entries().filter { it.name in EDITOR_CACHES }.sumOf { it.bytes() }
             assertEquals("$where: memory held by closed editors' caches", 0L, cacheBytes)
-            System.gc()
+            assertTrue("$where: the closed editor's undo entry", MemoryGovernor.entries().none { it === undoEntry })
             val n = MemoryGovernor.entries().size
             if (entriesAfterClose < 0) entriesAfterClose = n
-            assertTrue("$where: governor entries $n, after the first round $entriesAfterClose", n <= entriesAfterClose + 1)
+            assertTrue("$where: governor entries $n, after the first round $entriesAfterClose", n <= entriesAfterClose)
         }
     }
 
-    private fun open(pid: String, where: String): Pair<EditorSession, EditorController> {
+    /** The session, its editor and the editor's undo history entry in the governor. */
+    private fun open(pid: String, where: String): Triple<EditorSession, EditorController, MemoryGovernor.Entry> {
         app.settings.autosaveSeconds = 600
+        val before = MemoryGovernor.entries()
         val session = EditorSession(app, pid)
         assertTrue("$where: opens", Smoke.pumpUntil { session.state !is EditorSession.State.Loading })
         val ready = session.state as? EditorSession.State.Ready ?: throw AssertionError("$where: ${session.state}")
         val c = ready.controller
         c.viewTransform.set(Matrix())
         c.tools
-        return session to c
+        val undoEntry = MemoryGovernor.entries().single { e -> e.name == GovernorPolicyV19.UNDO_ENTRY && before.none { it === e } }
+        assertEquals(GovernorPolicyV19.PRIORITY_UNDO, undoEntry.priority)
+        return Triple(session, c, undoEntry)
     }
 
     /**
@@ -440,10 +446,14 @@ class SoakHarnessTest {
         return layerHashes(c.doc)
     }
 
+    /** Closes as the editor's back arrow does; returns once the session's scope has completed. */
     private fun close(session: EditorSession, where: String) {
         var closed = false
         session.close { closed = true }
         assertTrue("$where: closed", Smoke.pumpUntil(60_000) { closed })
+        // The cancelled scope completes once its children (the autosave loop) have ended.
+        val job = session.scope.coroutineContext[Job]!!
+        assertTrue("$where: the editor's scope ended", Smoke.pumpUntil(60_000) { job.isCompleted })
     }
 
     private fun assertNothingRecycled(c: EditorController, where: String) {
@@ -479,8 +489,11 @@ class SoakHarnessTest {
         /** Strokes per round. */
         const val STROKES = 200
 
-        /** An activation's main-thread time, desktop (the edge map / proxy render off the main thread). */
-        const val ACTIVATION_MS = 250.0
+        /**
+         * An activation's main-thread time, desktop: Q11's "no frame over 32 ms at activation" (the
+         * edge map and the proxy render off the main thread), for both tools.
+         */
+        const val ACTIVATION_MS = 32.0
 
         /** A6's editor caches' governor entries (EditorController, LiveAdjust, StrokeBelowCache). */
         val EDITOR_CACHES = setOf("display tiles", "live proxies", "below-caches")

@@ -25,7 +25,7 @@ import kotlinx.coroutines.withContext
  * Everything here is called on the main thread; [onUpdated] runs there whenever new bounds or
  * lines arrived.
  *
- * v1.9 (A7b step 6, design 2.8 R9c, risk H4): the background thread never reads a layer's own
+ * v1.9 (A7b step 6, design 3.2 A7b, R9, risk H4): the background thread never reads a layer's own
  * pixels. Undo history trimmed meanwhile (`LayerTreeAction.dispose`) recycles the bitmaps of the
  * layers it removed, on the main thread, and a native read of a recycled bitmap can crash the app
  * where no exception is caught. So each background scan reads immutable copies of the layer and

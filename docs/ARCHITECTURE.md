@@ -2065,7 +2065,8 @@ unbounded. A soak harness runs the whole loop for Q10 and Q11 every night.
   Entries are trimmed lowest priority first. `PRIORITY_DISPLAY` 0: "display tiles"
   (`EditorController`, closed in `dispose`), `ThumbnailCache`, `OpticalKerning`.
   `PRIORITY_PROXIES` 10: "live proxies" (`LiveAdjust`). `PRIORITY_BELOW` 20: "below-caches"
-  (`StrokeBelowCache`). `PRIORITY_UNDO` 50: "undo history" (`UNDO_ENTRY`, one per editor).
+  (`StrokeBelowCache`). `PRIORITY_UNDO` 50: "undo history" (`UNDO_ENTRY`, one per editor,
+  closed when the editor's scope completes: `EditorSession.close` cancels it after `dispose`).
   NORMAL and MODERATE free nothing; LOW (`TRIM_MEMORY_RUNNING_LOW`) frees the entries under 20;
   CRITICAL (`RUNNING_CRITICAL`, `COMPLETE`) frees them all. A6's entries are held weakly
   (`WeakRegistration`, `registerWeakly`): a collected owner's entry reads 0 bytes and is closed.
@@ -2116,26 +2117,27 @@ unbounded. A soak harness runs the whole loop for Q10 and Q11 every night.
   duplication and `ArraySources.hasRoom` do not count masks yet (lead requests).
 - **Soak harness** (`SoakHarnessTest`, `@Category(Timing)`; it runs only with `-PsoakOnly`, which
   sets `bw.testSet=soak`: `.github/workflows/soak.yml`, nightly and on demand; it skips itself
-  elsewhere). Two artworks (phone and PRINT proportions at 512 px) go round 3 times: open from
+  elsewhere). Two artworks (phone and PRINT (3:4) proportions at 512 px) go round 3 times: open from
   the last save; 200 strokes (brush, eraser, a layer mask), LOW every 50, CRITICAL every 100 with
   Undo and Redo after it; a blur in a selection and Invert; a Magnetic lasso round (Q10: 12
   anchors, a drag, one selection step); a Color select round (Q11: Reds, fuzziness drags,
   samples, one selection step); a layer deleted with its folder just after the smart guides
   start scanning a copy of it, recycled by CRITICAL (H4: only a step with folders recycles
-  what it removed; whether the scan still runs then depends on the threads: it did in 6 of 6
-  rounds on the desktop, and `LayerBoundsCacheCopyTest` holds it running for certain); save;
+  what it removed; whether the scan still runs then depends on the threads: it did in 5 or 6
+  of the 6 rounds in desktop runs, and `LayerBoundsCacheCopyTest` holds it running for certain); save;
   close. It asserts no crash or handled report and no scope error, layers reopen as saved, no
-  live bitmap is recycled, and closed editors' caches hold 0 bytes. The registry must not grow
-  round by round. No main-thread call may reach a FREEZE report, and each tool activation's
-  best time must be within 250 ms (CI factor applied). It prints the longest call of each kind
+  live bitmap is recycled, and closed editors' caches hold 0 bytes. Once a closed editor's scope
+  has ended its undo entry is gone, and the registry does not grow round by round. No
+  main-thread call may reach a FREEZE report, and each tool activation's best time must be
+  within 32 ms (Q11's "no frame over 32 ms at activation"; CI factor applied). It prints the longest call of each kind
   (the job's JUnit XML keeps them). On the desktop JVM a run takes about 17 s; the longest call
   is a filter start (about 180 ms), the activations take under 5 ms.
 
 **For the merge (asked of the lead).** `MemoryGovernorRegistryTest.theDefaultPolicyIsV18`,
 `VectorAsyncBurstQaTest` (its 3 s gate is past the 1.5 s wait) and A6's
 `GovernorRegistrationTest` line 155 (an editor now also registers "undo history") still pin the
-behaviour before A7b. `EditorController.dispose` should close `undoMemoryRegistration`. The rest
-are in the report's lead requests.
+behaviour before A7b. The undo entry needs nothing from `dispose`: it closes with the editor's
+scope. The rest are in the report's lead requests.
 
 <!-- /v19-A7b -->
 
