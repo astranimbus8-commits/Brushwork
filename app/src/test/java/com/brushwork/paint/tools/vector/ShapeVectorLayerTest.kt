@@ -243,10 +243,15 @@ class ShapeVectorLayerTest {
         assertSame(before, c.vec.vector)
         assertArrayEquals(cache, pixels(c.vec.bitmap))
         assertEquals(steps, c.undoManager.undoCount)
-        // Undo while it is open (and changed) throws the change away first.
+        // v1.9 (R17): Undo while it is open (and changed) takes back the change; the object stays
+        // open as it was opened, and ✕ then leaves the layer exactly as it was.
         c.tap(100f, 90f)
+        val opened = tool.box
         tool.place(tool.box!!.copy(cx = 200f))
         c.undo()
+        assertTrue(tool.hasPendingWork)
+        assertEquals(opened, tool.box)
+        tool.discard()
         assertFalse(tool.hasPendingWork)
         assertSame(before, c.vec.vector)
         assertArrayEquals(cache, pixels(c.vec.bitmap))

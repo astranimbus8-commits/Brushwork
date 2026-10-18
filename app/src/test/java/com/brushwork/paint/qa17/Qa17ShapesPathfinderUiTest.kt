@@ -109,6 +109,9 @@ class Qa17ShapesPathfinderUiTest {
         QaCurves.tool(s, "Shape")
         val tool = c.currentTool as ShapeTool
         QaShapeStripKit.snapOff(c)
+        // v1.9 (R14): every shape in a layer of its own, the operands (the Shape cog's "New layer
+        // each time"; off, the next shape joins the selected shape layer: v19/a9/ShapeJoinLayerTest).
+        tool.update { it.copy(newLayerEachTime = true) }
         click("Shape type", exact = true)
         click(ShapeType.ELLIPSE.label, exact = true)
         click("Shape style", exact = true)

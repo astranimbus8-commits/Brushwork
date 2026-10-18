@@ -1,5 +1,6 @@
 package com.brushwork.paint.ui.vector
 
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
@@ -35,6 +36,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.core.Units
+import com.brushwork.paint.model.Layer
 import com.brushwork.paint.tools.points.Mixed
 import com.brushwork.paint.tools.points.PointSelection
 import com.brushwork.paint.tools.vector.LineCapStyle
@@ -44,13 +46,17 @@ import com.brushwork.paint.tools.vector.ShapeStroke
 import com.brushwork.paint.tools.vector.ShapeStyle
 import com.brushwork.paint.tools.vector.ShapeTool
 import com.brushwork.paint.tools.vector.ShapeType
+import com.brushwork.paint.ui.common.EraseLabels19
 import com.brushwork.paint.ui.common.MirrorLabels18
 import com.brushwork.paint.ui.common.PointLabels
+import com.brushwork.paint.ui.editor.endCanvasGesture
 import com.brushwork.paint.ui.theme.BrushworkColors
 import com.brushwork.paint.ui.tools.strip.LocalStripContext
+import com.brushwork.paint.ui.tools.strip.StripContext
 import com.brushwork.paint.ui.tools.strip.StripItem
 import com.brushwork.paint.ui.tools.strip.StripRow
 import com.brushwork.paint.ui.tools.strip.StripSpec
+import com.brushwork.paint.vector.draw.VectorEraserModes
 
 /**
  * The Shape tool's strip (v1.8, design §3.9 and §4.6; area F).
@@ -59,7 +65,9 @@ import com.brushwork.paint.ui.tools.strip.StripSpec
  * "Shape style" 56 (the style glyph and ▾), or for Line and Arrow "Line ends" 56 (plain lines
  * only; a brush paints its own ends), the stroke width 64 (AUTO 1; its text, "60 px", opens
  * "Shape settings") and, while a shape is open, "Points" 72. 260 dp in full, 192 without the
- * AUTO item; a cell that doesn't apply keeps its room (neighbours never jump).
+ * AUTO item; a cell that doesn't apply keeps its room (neighbours never jump). v1.9 (R11): while
+ * erasing a vector or shape layer the Eraser's mode cell 56 ([VectorEraseChooser.modeCell], rank
+ * 0, never leaves row 1) ends row 1, and "Points" leads the More row instead.
  *
  * The More row, in order: "Editable" (a new shape in a layer of its own: raster layers, not
  * while a shape layer is open), "Stroke with", "Center", "Proportional" ("Circle" for an
@@ -69,6 +77,15 @@ import com.brushwork.paint.ui.tools.strip.StripSpec
  * "Handles" popup), "Reset shape" (a shape with its own points) and "Turn into path" (also for
  * an open cog with a hole, whose Points mode is refused: D21 keeps its Turn into path, a compound
  * path); and [MirrorLabels18.REMOVE] while the open shape has copies (§3.1, one in-tool step).
+ * v1.9 (R18) adds [PointLabels19.BEVEL] in Points mode, last ([shapeBevelItem]; its popup is an overlay,
+ * [ShapeBevelPopupHost]), and shows the box's Center and Proportional / Circle outside Points
+ * mode only ([ShapeStripInfo.boxModifiersShown]). v1.9 (R14) adds the object items
+ * ([shapeObjectItems]: duplicate, bring forward, send backward) after v1.8's More items while an
+ * open shape is or becomes a shape object ([ShapeTool.objectActionsApply], never in Points
+ * mode), hidden while the selection bar or the object bar shows (`StripContext.selectionBarShown`).
+ * v1.9 (R11): "Stroke with" ends with [EraseLabels19.INSTEAD_OF_PAINT] (erase mode, as bottom-bar
+ * slot 1: [ShapeTool.setErase]); while erasing, "Editable", "Turn into path" and the object items
+ * are hidden ([ShapeStripInfo.erasing]).
  *
  * Every handle is the v1.7 one (StripHandlesV17 "SHAPE"; "Snap" became "Snap to objects"). The
  * Shape settings and Numbers sheets and the typed handle scale are overlays: they outlive the
@@ -88,6 +105,13 @@ internal fun shapeStrip(tool: ShapeTool, c: EditorController): StripSpec {
         strip.closeMore()
         showSettings = true
     }
+    // v1.9 (R11): erasing a vector or shape layer, the Eraser's mode cell in row 1; its
+    // [EraseLabels19.TURN_INTO_PIXELS] asks first (an overlay).
+    var asking by remember(c) { mutableStateOf<Layer?>(null) }
+    val modeCell = ShapeStripItems.modeCell(tool, c, strip) { layer ->
+        strip.closeMore()
+        asking = layer
+    }
     val items = ShapeStripItems.items(
         tool, c, info,
         openSettings = openSettings,
@@ -103,6 +127,8 @@ internal fun shapeStrip(tool: ShapeTool, c: EditorController): StripSpec {
             strip.closeMore()
             typingRoundness = true
         },
+        barShown = strip.selectionBarShown,
+        modeCell = modeCell,
     )
     val keys = items.map { it.key }.toSet()
     return StripSpec(
@@ -112,6 +138,15 @@ internal fun shapeStrip(tool: ShapeTool, c: EditorController): StripSpec {
             if (showNumbers) ShapeNumbersSheet(tool) { showNumbers = false }
             if (typingHandles) ShapeHandleScaleDialog(tool) { typingHandles = false }
             if (typingRoundness) ShapeRoundnessDialog(tool) { typingRoundness = false }
+            // v1.9 (R18): the bevel popup, while a bevel is open.
+            ShapeBevelPopupHost(tool)
+            // v1.9 (R11): the mode cell's [EraseLabels19.TURN_INTO_PIXELS]; the outline's erase follows the layer.
+            asking?.let { layer ->
+                ErasePixelsDialog(c, layer) {
+                    asking = null
+                    tool.refreshPreview()
+                }
+            }
         },
         // The v1.7 type, style and line-end chips' entries are inside their dropdowns; the
         // Handles group is inside "Handles".
@@ -139,11 +174,28 @@ internal data class ShapeStripInfo(
     val toPathShown: Boolean,
     val toPathRefusal: String?,
     val hasCopies: Boolean,
+    /** v1.9 (R14): the object items show ([ShapeTool.objectActionsApply]; [shapeObjectItems]). */
+    val objectActions: Boolean,
+    /**
+     * v1.9 (R11): erase mode is on ([ShapeTool.eraseOn]): "Editable" and "Turn into path" are
+     * hidden (an erase places no shape), and so are the object items ([ShapeTool.objectActionsApply]).
+     */
+    val erasing: Boolean = false,
 ) {
     val lineLike: Boolean get() = type.isLineLike
 
     /** The style cell shows: a closed type's style, or a plain line's ends. */
     val styleShown: Boolean get() = !lineLike || strokeWith == ShapeStroke.PLAIN
+
+    /**
+     * v1.9 (R18): [ShapeStripItems.CENTER_LABEL] and [ShapeStripItems.PROPORTIONAL_LABEL] /
+     * [ShapeStripItems.CIRCLE_LABEL] show outside Points mode only. They act on the box's resize
+     * handles and on a drag that draws a new shape; Points mode has no box handles, so there they
+     * only pre-set the next new shape. Without them the fullest Points mode (copies, a smooth
+     * point with handles and a corner selected, [PointLabels19.BEVEL]) keeps its More row within
+     * three lines at 360 dp, also with the VECTOR cell (a vector layer whose mask is edited).
+     */
+    val boxModifiersShown: Boolean get() = !pointsMode
 
     companion object {
         fun of(tool: ShapeTool, dpi: Float): ShapeStripInfo {
@@ -155,13 +207,14 @@ internal data class ShapeStripInfo(
             val sel = tool.pointSelection.resized(n)
             val widthShown = s.strokes && (s.strokeWith == ShapeStroke.PLAIN || s.type == ShapeType.ARROW)
             // v1.8 (D21): a holed cog never reaches Points mode, yet it turns into a (compound) path.
-            val toPathShown = pointsMode || (pending && ShapePoints.refusal(s.type, s.outlineParams) != null)
+            val erasing = tool.eraseOn
+            val toPathShown = !erasing && (pointsMode || (pending && ShapePoints.refusal(s.type, s.outlineParams) != null))
             return ShapeStripInfo(
                 type = s.type,
                 strokes = s.strokes,
                 strokeWith = s.strokeWith,
                 widthText = if (widthShown) Units.format(tool.strokeWidth.toDouble(), s.unit, dpi.toDouble()) else null,
-                editableShown = tool.editingLayer == null && !tool.drawsOnVectorLayer,
+                editableShown = !erasing && tool.editingLayer == null && !tool.drawsOnVectorLayer,
                 pending = pending,
                 pointsMode = pointsMode,
                 custom = pending && pts != null,
@@ -173,6 +226,8 @@ internal data class ShapeStripInfo(
                 toPathShown = toPathShown,
                 toPathRefusal = if (toPathShown) tool.turnIntoPathRefusal else null,
                 hasCopies = tool.hasCopies,
+                objectActions = tool.objectActionsApply,
+                erasing = erasing,
             )
         }
     }
@@ -250,6 +305,8 @@ internal object ShapeStripItems {
         openNumbers: () -> Unit,
         typeHandles: () -> Unit,
         typeRoundness: () -> Unit,
+        barShown: Boolean,
+        modeCell: StripItem? = null,
     ): List<StripItem> = buildList {
         fun set(f: (com.brushwork.paint.tools.vector.ShapeSettings) -> com.brushwork.paint.tools.vector.ShapeSettings) = tool.update(f)
         val lineLike = info.lineLike
@@ -304,11 +361,18 @@ internal object ShapeStripItems {
                 if (widthText != null) ShapeValueCell(widthText, WIDTH_DP.dp, openSettings)
             },
         )
-        add(
-            StripItem(POINTS, POINTS_LABEL, POINTS_DP.dp, shown = info.pending) {
-                if (tool.box != null) ShapeTextToggle(POINTS_LABEL, tool.pointsMode, { tool.setPointEditing(!tool.pointsMode) }, POINTS_DP.dp)
-            },
-        )
+        val points = @Composable {
+            if (tool.box != null) ShapeTextToggle(POINTS_LABEL, tool.pointsMode, { tool.setPointEditing(!tool.pointsMode) }, POINTS_DP.dp)
+        }
+        if (modeCell == null) {
+            add(StripItem(POINTS, POINTS_LABEL, POINTS_DP.dp, shown = info.pending, content = points))
+        } else {
+            // v1.9 (R11): erasing a vector or shape layer, the mode cell (rank 0) takes the end
+            // of row 1 and "Points" leads the More row: TYPE, STYLE, WIDTH and the cell keep row 1
+            // within 364 dp at 392 dp without the chip (all five need 368).
+            add(modeCell)
+            if (info.pending) add(more(POINTS, POINTS_LABEL, POINTS_DP, points))
+        }
 
         // ---- The More row.
         if (info.editableShown) {
@@ -328,14 +392,21 @@ internal object ShapeStripItems {
                     onPick = { w -> set { it.copy(strokeWith = w) } },
                     width = STROKE_WITH_DP.dp,
                     entryGlyph = { Icon(strokeIcon(it), contentDescription = null) },
+                    // v1.9 (R11): erase mode, as bottom-bar slot 1 ([ShapeTool.setErase]).
+                    lastRow = EraseLabels19.INSTEAD_OF_PAINT,
+                    lastRowOn = tool.eraseOn,
+                    onLastRow = {
+                        c.endCanvasGesture()
+                        tool.setErase(!tool.eraseOn)
+                    },
                 ) { Icon(strokeIcon(m), contentDescription = null, tint = BrushworkColors.OnChrome) }
             })
         }
-        add(more(CENTER, CENTER_LABEL) {
+        if (info.boxModifiersShown) add(more(CENTER, CENTER_LABEL) {
             val on = tool.settings.fromCenter
             ShapeIconToggle(Icons.Filled.CenterFocusStrong, CENTER_LABEL, on, { set { it.copy(fromCenter = !on) } })
         })
-        if (!lineLike) {
+        if (!lineLike && info.boxModifiersShown) {
             val label = if (info.type == ShapeType.ELLIPSE) CIRCLE_LABEL else PROPORTIONAL_LABEL
             add(more(PROPORTIONAL, label) {
                 val on = tool.settings.keepProportions
@@ -408,6 +479,31 @@ internal object ShapeStripItems {
         if (info.hasCopies) {
             add(more(REMOVE_COPIES, MirrorLabels18.REMOVE) { ShapeIconAction(Icons.Filled.LayersClear, MirrorLabels18.REMOVE) { tool.removeCopies() } })
         }
+        // v1.9 (R14): the object items (outside Points mode), hidden while the selection bar or the
+        // object bar shows: they offer the same labels (I10).
+        if (info.objectActions && !barShown) addAll(shapeObjectItems(tool))
+        // v1.9 (R18): [PointLabels19.BEVEL], after v1.8's More items (StripKeysV19 rank 60); in
+        // Points mode the box's Center and Proportional are hidden ([ShapeStripInfo.boxModifiersShown]).
+        if (info.pointsMode) add(shapeBevelItem(tool))
+    }
+
+    /**
+     * v1.9 (R11): the Eraser's mode cell ([VectorEraseChooser.modeCell], StripKeysV19.ERASE_MODE_CELL)
+     * while [tool] erases the objects of a vector or shape layer (erase mode on, the layer's content
+     * edited), else null. A mode picked is the Eraser's ([VectorEraserModes]) and the outline's erase
+     * follows it at once; [onPixels] asks before the active layer is turned into pixels.
+     */
+    fun modeCell(tool: ShapeTool, c: EditorController, ctx: StripContext, onPixels: (Layer) -> Unit): StripItem? {
+        if (!tool.eraseOn || !VectorEraserStrip.erasesObjects(c)) return null
+        val layer = c.activeLayer
+        return VectorEraseChooser.modeCell(
+            ctx, layer, VectorEraserModes.mode(c),
+            onMode = { m ->
+                VectorEraserModes.setMode(c, m)
+                tool.refreshPreview()
+            },
+            onPixels = { onPixels(layer) },
+        )
     }
 
     private fun more(key: String, label: String, widthDp: Float = CELL_DP, content: @Composable () -> Unit) =
@@ -455,7 +551,9 @@ private fun HandlesCell(tool: ShapeTool, hasSelection: Boolean, onType: () -> Un
                 onType()
             }
         }
-        Row(verticalAlignment = Alignment.CenterVertically) { ShapeHandleSideControls(tool, hasSelection) }
+        // v1.9 (I27): the side and "All points" wrap to a second line where they do not fit beside
+        // each other (the last chip was squeezed out of its label).
+        FlowRow { ShapeHandleSideControls(tool, hasSelection) }
         Spacer(Modifier.height(4.dp))
     }
 }

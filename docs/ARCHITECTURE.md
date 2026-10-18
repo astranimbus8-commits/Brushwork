@@ -522,9 +522,9 @@ by hand outside `engine/`) and rule L (no v1.8 label retyped as a literal outsid
       shows again; the "More options" menu still closes on an outside tap; a relaunch shows the
       row from the start, the first fit and "Fit to screen" leave room for it, and opening or
       closing it never moves the canvas. `Qa19StickyRowsNarrowUiTest` runs the canvas touches at
-      360 dp at font scales 1, 1.3 and 2.0, with no text overflow in the open row except the Shape
-      strip's angle cell (`ShapeStripItems.ANGLE_LABEL`, area A9's; `StripFontScaleTest` checks it,
-      I27).
+      360 dp at font scales 1, 1.3 and 2.0, with no text overflow in the open row (the Shape
+      strip's angle cell `ShapeStripItems.ANGLE_LABEL` was left out until A9 fitted the Shape cells
+      at 2.0, I27).
     - `Smoke.controller` clears the `UiPrefs` file, so each test's editors start with no
       remembered row (otherwise a row one editor opened shows in the next).
 - **The vector object bar (`ui/vector/VectorObjectBar.kt`, H).**
@@ -1445,6 +1445,123 @@ scale), `qa19/Qa19PolylineBevelUiTest`.
 ### Shape tools (A9)
 
 <!-- v19-A9 -->
+
+R17, R14 (S1), R18 and R11 for the Shape tool: per-edit undo, new shapes joining the selected shape
+layer, Bevel points, the More row's object items and erase mode. Code: `tools/vector/ShapeTool.kt`
+(the tool), `ui/vector/ShapeStrip.kt` and `ShapeStripParts.kt` (the strip), `ui/vector/ShapeBevel.kt`
+(the bevel item and popup host), `ui/vector/ShapeObjectItems.kt` (the object items),
+`ui/vector/ShapePointOptions.kt` (the Shape settings rows), `ui/vector/ShapeRoundnessCell.kt`.
+
+**Per-edit undo (R17).** While a shape is pending (a new one, a reopened legacy shape layer or a
+reopened `VShape`), each finished move, resize, rotation, line-end or point drag, nudge run, pinch,
+typed or scrubbed value, point edit and bevel is one in-tool step (`ShapeTool.history`, at most 200,
+the oldest dropped), for every type, with or without its own points; before v1.9 only a shape with
+points had them. Undo (the button or a two-finger tap) takes back the last edit and keeps the shape
+open; redo steps survive a two-finger tap or pinch on the shape or its points' gizmo, and a pinch
+that changed nothing leaves no step. At the bottom Undo acts as in v1.8: a new shape is discarded,
+an untouched reopened shape closes and the document's last step is undone. Edits that bring a
+reopened shape back to how it was opened are still undone one by one. The commit stays ONE
+document step (`ShapeTool.SHAPE_LABEL` for a new shape, `EDIT_SHAPE_LABEL` for a reopened one).
+Two rules:
+- Type flip: a type change between line-like (Line, Arrow) and box-like types clears the in-tool
+  history, because the old boxes don't map onto the new geometry. A change within one kind keeps it.
+- Entering Points mode after other edits is no step of its own, because the outline does not
+  change. Undo takes back the edit before it and leaves Points mode. At the bottom of the history
+  it is one step, as in v1.8.
+
+**Joining (R14, S1).** With "Editable (own layer)" on and `ShapeSettings.newLayerEachTime` off (the
+default), a NEW shape that v1.8 would put in a layer of its own joins the selected legacy shape
+layer (`joinTarget`). The layer becomes a vector layer in place (`LayerConvert.toVectorAction`) and
+the shape one of its objects, in ONE step `SHAPE_LABEL` (`commitJoin`, rendered under
+`VectorLayers.Policy.SYNC` so no render lands as a step of its own). There is no join into a layer
+that is locked or hidden (also through a folder), into a layer whose mask is edited, with
+Perspective copies, or with an outline whose brush moves pixels; v1.8's own layer is used instead.
+A shape outside the canvas stays pending and nothing converts.
+- "New layer each time" (`PlaceLabels19.NEW_LAYER_EACH_TIME`, `V19Tags.NEW_LAYER_EACH_TIME`) is a
+  row of Shape settings below "Editable (own layer)", shown while that one is on. On, it gives
+  v1.8's layer per shape. `newLayerEachTime` is NEVER-encoded, so v1.8 reads the settings.
+- "Editable (own layer)" now describes the join (`PlaceLabels19.SHAPE_EDITABLE_DESC`).
+
+**Bevel points (R18).** `PointLabels19.BEVEL` (`StripKeysV19.BEVEL`, 40 dp, last in the More row)
+shows in Points mode. Tapped, it bevels the selected sharp corners at once with the remembered
+Amount and Segments (`AppSettings.shapeBevelAmount` / `shapeBevelSegments`), as ONE in-tool step.
+- The new points are sharp, have no handles and a roundness of 0, so the shape's corner radius
+  does not round them. Points the bevel does not touch keep their smoothness, handles and roundness.
+- The new points are selected, and the `BevelPopup` (`ShapeBevelPopupHost`,
+  `V19Tags.BEVEL_POPUP`) adjusts that same step. It re-applies from the points before the bevel
+  (`BevelSession`, I22). It closes on Done, on a tap on the canvas (consumed), on another edit, on
+  undo, or when the shape closes.
+- A smooth corner or too many points says why (`PointLabels19.BEVEL_SHARP_ONLY`, `BEVEL_TOO_MANY`).
+- In Points mode the box's "Center" and "Proportional" / "Circle" are hidden
+  (`ShapeStripInfo.boxModifiersShown`; they act on box handles and new-shape drags only). That keeps
+  the fullest Points mode within three More lines at 360 dp with the VECTOR cell.
+
+**Object items (R14).** "Duplicate" (`LayerLabels19.DUPLICATE`), "Bring forward" and "Send
+backward" (`ObjectEdits.Arrange` labels; `StripKeysV19.DUPLICATE` / `FORWARD` / `BACKWARD`) come
+after v1.8's More items. They show while the open shape is, or once placed becomes, a shape object
+(`ShapeTool.objectActionsApply`): a reopened `VShape`, a new shape on a vector layer, or a new shape
+that will join the selected shape layer. They never show in Points mode, for a reopened legacy shape
+layer, or while erasing. They are hidden while the selection bar or the object bar shows
+(`StripContext.selectionBarShown`), because those offer the same labels (I10). A tap places the
+shape (its own step), runs the object bar's `ObjectActions.duplicate` / `arrange` on it alone (its
+own step), and opens the copy or the shape again. Renders land at once (SYNC policy) meanwhile.
+
+**Erase mode (R11).** `ShapeTool` is an `ErasableTool`: bottom-bar slot 1 reads
+`EraseLabels19.WITH_SHAPE` / `ERASING_SHAPE`. "Stroke with" ends with a divider and
+`EraseLabels19.INSTEAD_OF_PAINT` (checked while on), which toggles the same `setErase`. Turning the
+mode on or off lands what is pending first: a pending shape is placed, and a pending erase lands in
+the mode it was drawn in, so `setErase(false)` commits it. The mode is transient: it is never
+saved, and it goes off whenever the tool is chosen again (`onSelected`). A layer change keeps it on
+and lands the pending erase; a tool switch lands it too.
+- Every shape drawn is then an eraser outline, drawn dashed (`OverlayPainter.path(dashed = true)`)
+  with its copies. A `ToolEraseSession` (`ToolErase.begin(..., EraseSource.SHAPE)`) erases live as
+  the outline changes, through A5's routing.
+- The footprint is the outline at the stroke width (a brush outline at its preset size), plus the
+  fill of a filled closed style; a fill-only style has no stroke width. The fill is non-zero, as
+  the painted fill is, and every copy winds as its source (`ShapeCopies.mapped`), so mirror copies
+  that overlap erase their overlap too.
+- Every edit works as when painting (Points mode, the bevel and the per-edit undo included) and
+  updates the session. A mode picked in the mode cell applies at once (`refreshPreview`).
+- The commit (✓, a tap outside, a new drag, a tool or layer switch, turning the mode off) is ONE
+  step `EraseLabels19.STEP_SHAPE`; ✕ leaves no trace. Only one outline erases at a time: a drag
+  that starts a new shape lands the pending erase first.
+- A refused layer (`begin` null after its message: locked, hidden, alpha-locked pixels) shows the
+  outline alone. The commit asks again, and a refused commit keeps the outline pending.
+- "Editable (own layer)", "New layer each time" and joining are ignored. A tap opens no shape.
+  "Turn into path" and the object items are not offered. The layers panel's "Edit shape"
+  (`LayerOps.editShape`, through `ShapeTool.editLayer`) turns the mode off first. Nothing turns
+  into pixels silently (I20): a text layer takes v1.8's rasterize with its toast, inside the
+  erase step.
+- On a vector or legacy shape layer (`VectorEraserStrip.erasesObjects`), row 1 ends with
+  `VectorEraseChooser.modeCell` (`StripKeysV19.ERASE_MODE_CELL`, 56 dp, rank 0). Its Turn into
+  pixels asks through `ErasePixelsDialog` first, and the session follows the layer after.
+- Deviation from the A5 block's "must leave room for it in row 1": row 1's five cells (type 56,
+  style 56, width 64, Points 72, the mode cell 56) take 368 dp with their gaps and the More toggle,
+  over the 364 dp of a 392 dp screen. While the cell shows, "Points" therefore leads the More row
+  instead (`ShapeStripItems.items(modeCell)`). Row 1 is then type, style, width and the cell,
+  292 dp with the toggle. At 360 dp with the VECTOR cell the width (AUTO 1) goes to the More row,
+  as before.
+- The fullest erasing strip is Points mode on a shape with copies, a smooth point with handles and
+  a corner selected, the bevel last. It keeps three More lines at 360 dp with and without the VECTOR
+  cell and at 392 dp, the cell in row 1 at each (`ShapeStripInventoryTest`).
+
+Known limits: with a fill-only style "Stroke with" is hidden, so erase mode is reached through
+slot 1 only; arrow heads add no fill to an erase footprint (`ShapeOutlines.brushOutline`); a
+layer refused when the outline began (locked, hidden) is asked again only at the commit, so an
+outline whose layer was unlocked meanwhile erases nothing live until ✓; a pinch dropped as a
+no-op while the in-tool history is full has already lost its oldest entry; a legacy shape layer
+outlined with the brush converts with seed 0 when a shape joins it (`LayerConvert`).
+
+Tests: `v19/a9/` (`ShapePerEditUndoTest`, `ShapeTypeFlipHistoryTest`, `ShapeBevelRobolectricTest`,
+`ShapeJoinLayerTest`, `ShapeArrangeDuplicateTest`, `ShapeMoreRowHiddenWithBarsTest`,
+`ShapeSaveReopenTest`, `ShapeEraseRobolectricTest` (raster, vector, legacy shape and text layers,
+Turn into pixels with an outline pending, overlapping mirror copies),
+`ShapeStripInventoryTest`, Timing: `ShapeBudgetsTimingTest`). UI tests at 392 and 360 dp, font
+scales 1.3 and 2.0 (3 UI classes): `qa19/Qa19ShapeUndoUiTest`, `Qa19ShapeBevelUiTest`,
+`Qa19ShapeEraseUiTest`. Compat rows 10 (joined shapes, bevelled shape points) and 12 (R17 edits) of
+`Qa19CompatBackFromV18RobolectricTest` (fixtures `shapes-joined`, `bevel-shapes`, `shape-r17`):
+v1.8 reads them strictly, saves the shape layers back byte for byte, and reads every shape
+object's field as v1.9 does.
 
 <!-- /v19-A9 -->
 

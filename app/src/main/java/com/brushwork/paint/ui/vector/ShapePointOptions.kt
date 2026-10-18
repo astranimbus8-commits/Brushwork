@@ -46,6 +46,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -65,12 +66,14 @@ import com.brushwork.paint.tools.vector.ShapeTool
 import com.brushwork.paint.ui.common.ChoiceChips
 import com.brushwork.paint.ui.common.LengthField
 import com.brushwork.paint.ui.common.LocalIncrements
+import com.brushwork.paint.ui.common.PlaceLabels19
 import com.brushwork.paint.ui.common.PointLabels
 import com.brushwork.paint.ui.common.RepeatIconButton
 import com.brushwork.paint.ui.common.SectionHeader
 import com.brushwork.paint.ui.common.SliderScale
 import com.brushwork.paint.ui.common.ToggleRow
 import com.brushwork.paint.ui.common.ToolIconButton
+import com.brushwork.paint.ui.common.V19Tags
 import com.brushwork.paint.ui.common.stepOnLongPress
 import com.brushwork.paint.ui.editor.ValueInputDialog
 import com.brushwork.paint.ui.points.MixedNumberField
@@ -409,9 +412,18 @@ internal fun ShapeEditingSettings(tool: ShapeTool) {
     if (tool.editingLayer == null && !vector) {
         ToggleRow(
             "Editable (own layer)", s.editable, { v -> tool.update { it.copy(editable = v) } },
-            description = if (s.editable) "Each new shape goes into a layer of its own and can be edited again later"
+            // v1.9 (R14, S1): a new shape joins the selected shape layer.
+            description = if (s.editable) PlaceLabels19.SHAPE_EDITABLE_DESC
             else "New shapes are painted into the active layer",
         )
+        // v1.9 (R14): every new shape in a layer of its own again (v1.8), while it is editable.
+        if (s.editable) {
+            ToggleRow(
+                PlaceLabels19.NEW_LAYER_EACH_TIME, s.newLayerEachTime, { v -> tool.update { it.copy(newLayerEachTime = v) } },
+                modifier = Modifier.testTag(V19Tags.NEW_LAYER_EACH_TIME),
+                description = PlaceLabels19.NEW_LAYER_EACH_TIME_DESC,
+            )
+        }
     }
     if (vector) {
         Hint(

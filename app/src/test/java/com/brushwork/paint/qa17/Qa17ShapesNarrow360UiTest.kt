@@ -76,6 +76,9 @@ class Qa17ShapesNarrow360UiTest {
         QaCurves.tool(s, "Shape")
         val tool = c.currentTool as ShapeTool
         QaShapeStripKit.snapOff(c)
+        // v1.9 (R14): every shape in a layer of its own, the operands (the Shape cog's "New layer
+        // each time"; off, the next shape joins the selected shape layer: v19/a9/ShapeJoinLayerTest).
+        tool.update { it.copy(newLayerEachTime = true) }
         QaCurves.drag(s, Vec2(60f, 70f), Vec2(170f, 150f))
         assertNotNull("a pending rectangle", tool.box)
         press(s, "Points", 32f)

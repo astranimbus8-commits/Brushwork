@@ -10,6 +10,7 @@ import com.brushwork.paint.tools.vector.ShapeTool
 import com.brushwork.paint.tools.vector.ShapeType
 import com.brushwork.paint.ui.common.MirrorLabels18
 import com.brushwork.paint.ui.common.PointLabels
+import com.brushwork.paint.ui.common.PointLabels19
 import com.brushwork.paint.ui.tools.strip.StripInventory
 import com.brushwork.paint.ui.tools.strip.StripHandlesV17
 import com.brushwork.paint.ui.tools.strip.StripRig
@@ -48,7 +49,9 @@ import org.robolectric.shadows.ShadowLog
  *   the non-AUTO items take 192 dp, the whole row 260;
  * - the More row in the design's order: "Editable" (raster layers), "Stroke with", "Center",
  *   "Proportional", "15°", "Snap to objects", "Numbers", "Shape settings"; in Points mode the
- *   point actions; "Remove mirror copies" while the open shape has copies;
+ *   point actions; "Remove mirror copies" while the open shape has copies; v1.9 (R18): in Points
+ *   mode "Bevel points" last, and "Center" and "Proportional" hidden (they act on the box's
+ *   handles and on drawing a new shape; without them the fullest Points mode keeps three lines);
  * - every v1.7 handle reachable with its v1.7 label (the inventory against `StripHandlesV17`;
  *   only "Snap" became "Snap to objects"), the Handles group inside "Handles", no text cut by its
  *   item, the rules (widths rounded to 4 dp and measured, the More row on three lines at most)
@@ -115,6 +118,8 @@ class ShapeStripTest {
                     PointLabels.SELECT_ALL, "Smooth", "Auto tangent", "Delete point", "Deselect point", PointLabels.ROUNDNESS,
                     PointLabels.RESET_ROUNDNESS, "Handles", "Reset shape", PointLabels.TO_PATH, MirrorLabels18.REMOVE,
                 )) assertTrue("$k at $dp dp, Points mode: \"$h\" on the More row: $pointsMore", h in pointsMore)
+                assertTrue("$k at $dp dp, Points mode: the bevel last: $pointsMore", pointsMore.last() == PointLabels19.BEVEL)
+                for (h in listOf("Center", "Proportional")) assertFalse("$k at $dp dp, Points mode: no \"$h\": $pointsMore", h in pointsMore)
                 assertEquals("$k at $dp dp: Points mode texts fit", emptyList<String>(), clippedTexts())
                 assertEquals("$k at $dp dp: one control per label", pointsMore.size, pointsMore.toSet().size)
                 StripTestKit.closeMoreRow()

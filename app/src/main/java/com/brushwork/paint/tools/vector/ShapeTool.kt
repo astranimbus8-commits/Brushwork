@@ -26,6 +26,7 @@ import com.brushwork.paint.core.PackedPoints
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.engine.ArrayDraw
 import com.brushwork.paint.engine.EditTarget
+import com.brushwork.paint.engine.LayerConvert
 import com.brushwork.paint.engine.LayerRenderOverride
 import com.brushwork.paint.engine.LayerStructure
 import com.brushwork.paint.engine.ViewTransform
@@ -37,6 +38,7 @@ import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.LayerBlendMode
 import com.brushwork.paint.model.Selection
 import com.brushwork.paint.tools.DeletingTool
+import com.brushwork.paint.tools.ErasableTool
 import com.brushwork.paint.tools.ObjectDeletion
 import com.brushwork.paint.tools.ObjectPosition
 import com.brushwork.paint.tools.ObjectScale
@@ -46,7 +48,9 @@ import com.brushwork.paint.tools.ScaledTool
 import com.brushwork.paint.tools.Tool
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
+import com.brushwork.paint.tools.points.BevelPoint
 import com.brushwork.paint.tools.points.Mixed
+import com.brushwork.paint.tools.points.PointBevel
 import com.brushwork.paint.tools.points.PointEditor
 import com.brushwork.paint.tools.points.PointGizmo
 import com.brushwork.paint.tools.points.PointGroupMath
@@ -62,18 +66,29 @@ import com.brushwork.paint.tools.transform.SnapLine
 import com.brushwork.paint.tools.transform.TransformIncrements
 import com.brushwork.paint.tools.transform.offset
 import com.brushwork.paint.ui.common.CogLabels18
+import com.brushwork.paint.ui.common.EraseLabels19
 import com.brushwork.paint.ui.common.FolderLabels
+import com.brushwork.paint.ui.common.LayerLabels19
 import com.brushwork.paint.ui.common.MirrorLabels18
 import com.brushwork.paint.ui.common.PointLabels
+import com.brushwork.paint.ui.common.PointLabels19
 import com.brushwork.paint.ui.editor.HistoryLabels
 import com.brushwork.paint.vector.CopyMaps
 import com.brushwork.paint.vector.ObjectCopies
 import com.brushwork.paint.vector.VShape
 import com.brushwork.paint.vector.VStrokeKind
 import com.brushwork.paint.vector.VectorContent
+import com.brushwork.paint.vector.VectorLayers
 import com.brushwork.paint.vector.VectorOps
+import com.brushwork.paint.vector.draw.EraseSource
+import com.brushwork.paint.vector.draw.ToolErase
+import com.brushwork.paint.vector.draw.ToolEraseResult
+import com.brushwork.paint.vector.draw.ToolEraseSession
 import com.brushwork.paint.vector.edit.VectorEditSession
 import com.brushwork.paint.vector.render.VectorLayerRenderer
+import com.brushwork.paint.vector.select.ObjectActions
+import com.brushwork.paint.vector.select.ObjectEdits
+import com.brushwork.paint.vector.select.PendingRenders
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
@@ -81,6 +96,7 @@ import kotlinx.serialization.EncodeDefault
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.serializer
+import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.floor
@@ -233,7 +249,27 @@ data class ShapeSettings(
  * box-local so the box handles keep transforming it). Drag a point to move it; tap the outline
  * or a "+" between two points to insert one (the outline does not change); tap / long-press a
  * point to select it for delete / sharp / smooth / automatic tangent and to drag its tangent
- * handles. Undo (button or two-finger tap) takes back one edit while such a shape is pending.
+ * handles.
+ *
+ * PER-EDIT UNDO (v1.9, R17): while a shape is pending (new, a reopened shape layer or a reopened
+ * shape object of a vector layer), each finished move, resize, rotation, line-end or point drag,
+ * nudge run, pinch, typed or scrubbed value and point edit is one in-tool step, for every shape
+ * type, with or without its own points. Undo (button or two-finger tap) takes back the last edit,
+ * not the placement; at the bottom of these steps Undo acts as in v1.8 (a new shape is discarded,
+ * an untouched reopened shape closes and the document's last step is undone). The commit is still
+ * ONE document step.
+ *
+ * ERASE MODE (v1.9, R11; [ErasableTool]): bottom-bar slot 1 ([EraseLabels19.WITH_SHAPE]) or the
+ * last row of "Stroke with" ([EraseLabels19.INSTEAD_OF_PAINT]) turns it on, after what is pending
+ * lands. Every shape then drawn is an eraser: its outline (dashed, with its copies) erases live as
+ * it changes, through a [ToolEraseSession] on the active layer ([ToolErase.begin]: pixels of a
+ * raster layer or a mask, objects of a vector or legacy shape layer in the Eraser's mode; refused
+ * with its message, the outline shows alone), with the stroke at its width and, for a filled
+ * closed style, its fill. Every edit of the pending shape works as when painting and updates the
+ * erase. Its commit (✓, a tap outside, a tool or layer switch, turning erase mode off) is ONE step
+ * [EraseLabels19.STEP_SHAPE]; ✕ leaves no trace. "Editable (own layer)", PlaceLabels19.NEW_LAYER_EACH_TIME
+ * and joining are ignored, a tap opens no shape, and "Turn into path" and the object items are
+ * not offered. Transient: never saved, off whenever the tool is chosen again ([onSelected]).
  *
  * VECTOR LAYERS (v1.5): on a vector layer a new shape becomes a shape object (`VShape`) on top
  * of the layer ("Editable (own layer)" is implied), ONE undo step "Shape"; a brush outline shown
@@ -258,7 +294,7 @@ data class ShapeSettings(
  * the Scale step from its start. Per axis a guide wins, then the grid, then the step; the readout
  * (`increments.readout`) says where a stepped gesture is.
  */
-class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, PillPositionTool, ScaledTool, DeletingTool {
+class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, PillPositionTool, ScaledTool, DeletingTool, ErasableTool {
     override val id = ToolId.SHAPE
 
     /** Current options (Compose state); change them with [update]. */
@@ -320,7 +356,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
     var editingLayer by mutableStateOf<Layer?>(null)
         private set
 
-    /** True when [undoStep] can take back an edit of the pending shape's points. */
+    /** True when [undoStep] can take back an edit of the pending shape (v1.9, R17: of any shape). */
     override var canUndoStep by mutableStateOf(false)
         private set
 
@@ -330,11 +366,15 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
 
     override val hasPendingWork: Boolean get() = box != null
 
-    /** A shape layer that was only opened (nothing changed yet) doesn't swallow an undo. */
+    /**
+     * A shape layer that was only opened (nothing changed yet) doesn't swallow an undo. v1.9
+     * (R17): one whose edits brought it back as it was opened still has them to take back (undo
+     * then takes back the last of them, never the document's step before the shape).
+     */
     override val hasUserChanges: Boolean
         get() {
             val b = box ?: return false
-            if (!reopened) return true
+            if (!reopened || canUndoStep) return true
             return loadedObject != objectFor(b, points)
         }
 
@@ -415,6 +455,28 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
     var editingObject by mutableStateOf(false)
         private set
 
+    // ------------------------------------------------------------------ erase mode (v1.9, R11)
+
+    /** Erase mode is on (Compose state): the shapes drawn erase (see the class comment). */
+    override var eraseOn by mutableStateOf(false)
+        private set
+
+    override val eraseLabel: String get() = EraseLabels19.WITH_SHAPE
+
+    override val erasingLabel: String get() = EraseLabels19.ERASING_SHAPE
+
+    /** The erase of the outline being drawn, open from its first change to its commit (null before, or refused). */
+    internal var eraseSession: ToolEraseSession? = null
+        private set
+
+    /** [ToolErase.begin] refused the outline being drawn (it said why once): it shows alone until its commit asks again. */
+    private var eraseRefused = false
+
+    /** The outline being erased with, its copies included (document px), drawn dashed; null without one. */
+    internal var eraseOutline: Path? = null
+        private set
+    private val erasePath = Path()
+
     // ------------------------------------------------------------------ gestures
 
     /**
@@ -452,6 +514,12 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
     private var pinchStart: ShapeBox? = null
     private var pinchFocus = Vec2.ZERO
     private var pinchPushed = false
+    /**
+     * v1.9 (R17): the redo steps when the two-finger gesture began. Its step is saved at once, which
+     * drops them; a two-finger tap (the app's undo: the gesture is cancelled, then undo runs), a
+     * cancelled pinch or one that changed nothing brings them back with its step gone.
+     */
+    private var pinchRedo: List<PendingState> = emptyList()
 
     // ------------------------------------------------------------------ group gestures (v1.7 item 1)
 
@@ -531,6 +599,8 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
             return
         }
         settings = new
+        // v1.9 (R18): another action closes the bevel popup (the bevel stays).
+        closeBevelPopup()
         // While a shape layer is edited the options show that shape: only the drawing options
         // are the user's own (and saved).
         val user = userSettings
@@ -546,7 +616,13 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
             clearHistory()
             if (old.type.isLineLike == new.type.isLineLike) box = clean(b)
         }
-        if (b != null && old.type.isLineLike != new.type.isLineLike) box = clean(convert(b, new.type))
+        if (b != null && old.type.isLineLike != new.type.isLineLike) {
+            // v1.9 (R17): the edits before a change between a line-like and a box-like type do
+            // not map onto the new geometry: the in-tool history starts again (a change within
+            // one kind keeps it: its boxes still apply).
+            clearHistory()
+            box = clean(convert(b, new.type))
+        }
         refreshPreview()
     }
 
@@ -827,7 +903,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         val cx = d.width / 2f; val cy = d.height / 2f
         // v1.8 (§3.1): its copies are taken at its start point, the centre.
         val maps = ObjectCopies.mapsAt(controller, cx, cy)
-        if (!checkCanPlaceNew(ObjectCopies.isPerspective(maps))) return false
+        if (!eraseOn && !checkCanPlaceNew(ObjectCopies.isPerspective(maps))) return false
         val size = max(1f, min(d.width, d.height) / 3f)
         targetLayer = d.activeLayer
         useNewMaps(maps)
@@ -847,7 +923,8 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         if (!(b.cx.isFinite() && b.cy.isFinite() && b.w.isFinite() && b.h.isFinite() && b.rotationDeg.isFinite())) return
         val next = clean(b)
         if (next == cur) return
-        if (points != null) pushHistory(NumericKey("place", 0))
+        // v1.9 (R17): a typed or scrubbed placement is an in-tool step for every shape.
+        pushHistory(NumericKey("place", 0))
         box = next
         refreshPreview()
     }
@@ -897,7 +974,8 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
             refreshPreview()
             return
         }
-        if (points != null) pushHistory(NumericKey("nudge", -1))
+        // v1.9 (R17): a run of nudges of the whole shape is an in-tool step for every shape.
+        pushHistory(NumericKey("nudge", -1))
         box = clean(b.translated(d.x, d.y))
         refreshPreview()
     }
@@ -924,7 +1002,16 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
                     controller.toast(it)
                     return
                 }
-                pushHistory()
+                // v1.9 (R17): turning the outline into points changes nothing on screen, so after
+                // other edits it is no step of its own: undo takes back the edit before it (and
+                // leaves Points mode). At the bottom of the steps it is one, as in v1.8: undo
+                // then gives the regular shape back instead of discarding or closing it.
+                if (history.isEmpty()) {
+                    pushHistory()
+                } else {
+                    clearRedo()
+                    historyKey = null
+                }
                 points = ShapePoints.fromRegular(settings.type, settings.outlineParams)
             }
             pointsMode = true
@@ -1328,6 +1415,8 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
      * is rendering).
      */
     fun turnIntoPath(): Boolean {
+        // v1.9 (R11): an outline erasing is no shape to convert.
+        if (eraseOn) return false
         val b = box ?: return false
         turnIntoPathRefusal?.let {
             controller.toast(it)
@@ -1525,6 +1614,164 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         points = np
     }
 
+    // ------------------------------------------------------------------ bevel (v1.9, R18)
+
+    /**
+     * The bevel the popup adjusts: the points and the selection before it ([base], document px),
+     * and what its latest apply made. Session state (I22): the popup's changes re-apply from
+     * [base] in place, the bevel is ONE in-tool step, and the commit is still one document step.
+     */
+    private class BevelSession(
+        val base: List<ShapeAnchor>,
+        val baseSelection: PointSelection,
+        val rotationDeg: Float,
+        var amount: Float,
+        var segments: Int,
+    ) {
+        var points: List<ShapePoint>? = null
+        var box: ShapeBox? = null
+        var made: PointSelection = PointSelection.none(0)
+    }
+
+    private var bevelSession: BevelSession? = null
+
+    private var bevelPopupState by mutableStateOf(false)
+
+    /** The popup's Amount (0.01..0.5) and Segments (1..8): the remembered ones, or the open bevel's (Compose state). */
+    var bevelAmount by mutableFloatStateOf(PointBevel.clampAmount(controller.settings.shapeBevelAmount))
+        private set
+    var bevelSegments by mutableIntStateOf(PointBevel.clampSegments(controller.settings.shapeBevelSegments))
+        private set
+
+    /**
+     * The bevel popup shows (Compose state): from [bevelPoints] until "Done", a tap on the canvas
+     * (consumed: it adds no point), another edit, undo, or the shape closing.
+     */
+    val bevelPopupOpen: Boolean
+        get() = bevelPopupState && box != null && pointsMode && bevelSession?.let { isCurrent(it) } == true
+
+    /** A one-finger gesture that started while the popup showed: it only closes the popup. */
+    private var bevelTap = false
+
+    /** [PointLabels19.BEVEL] shows: in Points mode (Compose state). */
+    val bevelShown: Boolean get() = box != null && pointsMode && points != null
+
+    /** [PointLabels19.BEVEL] applies: in Points mode with points selected (Compose state). */
+    val canBevel: Boolean get() = bevelShown && !pointSelection.resized(pointCount).isEmpty
+
+    /** The open bevel is what the shape shows, and its points are still the selected ones. */
+    private fun isCurrent(s: BevelSession): Boolean =
+        s.points != null && points == s.points && box == s.box && pointSelection == s.made
+
+    /**
+     * R18 [PointLabels19.BEVEL]: bevels the selected sharp corners at once with the remembered
+     * Amount and Segments, as ONE in-tool step, selects the new points and opens the popup on
+     * that step. A second tap while the new points stay selected reopens the popup instead of
+     * bevelling again. Points the bevel does not touch keep their smoothness, handles and
+     * roundness (through `origin`); new points are sharp, without handles and with a roundness of
+     * 0, so the shape's corner radius does not round them. Says why when nothing changes
+     * ([PointLabels19.BEVEL_SHARP_ONLY], [PointLabels19.BEVEL_TOO_MANY]).
+     */
+    fun bevelPoints(): Boolean {
+        val b = box ?: return false
+        if (!pointsMode) return false
+        val anchors = docAnchors() ?: return false
+        val sel = pointSelection.resized(anchors.size)
+        if (sel.isEmpty) return false
+        bevelSession?.let { s ->
+            if (isCurrent(s)) {
+                bevelPopupState = true
+                return true
+            }
+        }
+        val amount = PointBevel.clampAmount(controller.settings.shapeBevelAmount)
+        val segments = PointBevel.clampSegments(controller.settings.shapeBevelSegments)
+        val r = bevelOf(anchors, sel, amount, segments)
+        if (r !is PointBevel.Result.Ok) {
+            bevelRefused(r)
+            return false
+        }
+        historyKey = null
+        pushHistory()
+        val s = BevelSession(anchors, sel, b.rotationDeg, amount, segments)
+        bevelSession = s
+        applyBevel(s, r)
+        bevelPopupState = true
+        return true
+    }
+
+    /** The popup's Amount: the open bevel again from its points before it (no new step). */
+    fun changeBevelAmount(amount: Float) {
+        val s = bevelSession?.takeIf { isCurrent(it) } ?: return
+        rebevel(s, PointBevel.clampAmount(amount), s.segments)
+    }
+
+    /** The popup's Segments: the open bevel again from its points before it (no new step). */
+    fun changeBevelSegments(segments: Int) {
+        val s = bevelSession?.takeIf { isCurrent(it) } ?: return
+        rebevel(s, s.amount, PointBevel.clampSegments(segments))
+    }
+
+    /** "Done" (or a tap on the canvas): the popup closes; the bevel stays as it is. */
+    fun closeBevelPopup() {
+        bevelPopupState = false
+    }
+
+    private fun rebevel(s: BevelSession, amount: Float, segments: Int) {
+        if (amount == s.amount && segments == s.segments) return
+        val r = bevelOf(s.base, s.baseSelection, amount, segments)
+        if (r !is PointBevel.Result.Ok) {
+            // Too many points: the bevel keeps its last values.
+            bevelRefused(r)
+            return
+        }
+        s.amount = amount
+        s.segments = segments
+        applyBevel(s, r)
+        // Remembered for the next bevel.
+        controller.settings.shapeBevelAmount = amount
+        controller.settings.shapeBevelSegments = segments
+    }
+
+    private fun bevelOf(anchors: List<ShapeAnchor>, sel: PointSelection, amount: Float, segments: Int): PointBevel.Result {
+        val closed = closedShape
+        val sharp = PointBevel.shapeSharp(anchors, closed, settings.corner, settings.cornerRadius)
+        return PointBevel.bevel(
+            anchors.map { BevelPoint(it.pos.x, it.pos.y) }, closed, sharp, sel.indices.toSet(),
+            amount, segments, PointBevel.MAX_POINTS_SHAPE,
+        )
+    }
+
+    private fun bevelRefused(r: PointBevel.Result) {
+        when (r) {
+            is PointBevel.Result.TooMany -> controller.toast(String.format(Locale.ROOT, PointLabels19.BEVEL_TOO_MANY, r.max))
+            PointBevel.Result.NoSharpCorner -> controller.toast(PointLabels19.BEVEL_SHARP_ONLY)
+            is PointBevel.Result.Ok -> {}
+        }
+    }
+
+    /** Puts [r] on the shape: untouched points as they were, new ones sharp with a roundness of 0, selected. */
+    private fun applyBevel(s: BevelSession, r: PointBevel.Result.Ok) {
+        val anchors = r.points.mapIndexed { i, p ->
+            val o = r.origin[i]
+            if (o >= 0) s.base[o] else ShapeAnchor(Vec2(p.x, p.y), smooth = false, handleIn = null, handleOut = null, radius = 0f)
+        }
+        applyAnchors(anchors, s.rotationDeg)
+        pointSelection = PointSelection.none(anchors.size).plusAll(r.selected)
+        s.points = points
+        s.box = box
+        s.made = pointSelection
+        bevelAmount = s.amount
+        bevelSegments = s.segments
+        refreshPreview()
+    }
+
+    /** Another edit, an undo or the shape closing ends the bevel session (its popup closes). */
+    private fun endBevel() {
+        bevelSession = null
+        bevelPopupState = false
+    }
+
     // ------------------------------------------------------------------ handle scaling (v1.6 §3.3, Points)
 
     /** Which handles the Handles group scales (Compose state). */
@@ -1649,6 +1896,8 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
      */
     private fun pushHistory(key: Any? = null) {
         val b = box ?: return
+        // v1.9 (R18): another edit ends the open bevel (its popup closes).
+        endBevel()
         val now = if (key != null) clock() else 0L
         val coalesce = key != null && key == historyKey && history.isNotEmpty() && (numericHeld || now - historyKeyTime <= COALESCE_MS)
         historyKey = key
@@ -1667,6 +1916,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
     }
 
     private fun clearHistory() {
+        endBevel()
         history.clear()
         redo.clear()
         redoCount = 0
@@ -1680,9 +1930,10 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
     }
 
     /**
-     * Takes back one edit of a shape with its own points (a point moved, inserted, deleted,
-     * made smooth... or the shape moved / resized meanwhile). Also used by the app's undo
-     * (button / two-finger tap); without such edits undo discards the pending shape.
+     * Takes back one edit of the pending shape (moved, resized, turned, nudged, pinched, a typed
+     * value, a point moved, inserted, deleted, made smooth...; v1.9, R17: of every shape, not only
+     * one with its own points). Also used by the app's undo (button / two-finger tap); without such
+     * edits undo acts as in v1.8 (it discards the pending shape).
      */
     override fun undoStep(): Boolean {
         val b = box ?: return false
@@ -1709,6 +1960,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
     }
 
     private fun restoreState(s: PendingState) {
+        endBevel()
         handleBase = null
         handleStepSaved = false
         handleScale = 1f
@@ -1725,8 +1977,8 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
 
     /**
      * The in-tool history and the pending shape at [historyMark] time: equal marks mean nothing
-     * changed in between (the states compare by value, so a coalesced edit, or a move of a shape
-     * without its own points, which keeps no step, still counts as a change).
+     * changed in between (the states compare by value, so a coalesced edit, which keeps no step
+     * of its own, still counts as a change).
      */
     private data class HistoryMark(
         val settings: ShapeSettings,
@@ -1780,6 +2032,13 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
 
     override fun onDown(p: ToolPoint) {
         val pt = Vec2(p.x, p.y)
+        // v1.9 (R18): a finger on the canvas while the bevel popup shows only closes it (on
+        // release): it neither adds, selects nor moves anything. Two fingers still pan and zoom.
+        bevelTap = bevelPopupOpen
+        if (bevelTap) {
+            mode = Mode.NONE
+            return
+        }
         downPoint = pt
         started = false
         longPressed = false
@@ -1858,9 +2117,16 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         if (!started) {
             if (pt.distanceTo(downPoint) < controller.docLength(TOUCH_SLOP_DP)) return
             if (mode == Mode.CREATE) {
+                // v1.9 (R11): erase mode erases with one outline at a time: the pending one's
+                // erase lands first (refused: it stays, and no new shape starts).
+                if (eraseOn && box != null) {
+                    commit()
+                    if (box != null) { mode = Mode.NONE; snap.end(); return }
+                }
                 // v1.8 (§3.1): the ruler's maps are taken once, at the new shape's start point.
                 creatingMaps = ObjectCopies.mapsAt(controller, downPoint.x, downPoint.y)
-                if (!checkCanPlaceNew(ObjectCopies.isPerspective(creatingMaps))) { creatingMaps = emptyList(); mode = Mode.NONE; snap.end(); return }
+                // (An erase places no shape: its layer's check is the erase's own, ToolErase.begin.)
+                if (!eraseOn && !checkCanPlaceNew(ObjectCopies.isPerspective(creatingMaps))) { creatingMaps = emptyList(); mode = Mode.NONE; snap.end(); return }
                 if (box == null) targetLayer = controller.doc.activeLayer
                 // The first corner is a new point: it may snap (from where the finger landed).
                 anchor = snap.snapPoint(downPoint)
@@ -1886,8 +2152,9 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
                 beginGroupEdit(if (mode == Mode.GIZMO) "Gizmo" else "Move points")
                 gesturePushed = true
             }
-            // A shape with its own points: every change can be undone one at a time.
-            if (mode != Mode.CREATE && !gesturePushed && points != null) { pushHistory(); gesturePushed = true }
+            // v1.9 (R17): every finished move, resize, rotation, line-end or point drag of the
+            // pending shape is one in-tool step, with or without its own points.
+            if (mode != Mode.CREATE && !gesturePushed) { pushHistory(); gesturePushed = true }
             // The point being dragged is the selected one (its actions and numbers follow it).
             if (mode == Mode.POINT && dragIndex >= 0) selectedPoint = dragIndex
             // The preview follows the finger as cheaply as possible until it lifts.
@@ -2135,6 +2402,13 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
     }
 
     override fun onUp(p: ToolPoint) {
+        if (bevelTap) {
+            bevelTap = false
+            closeBevelPopup()
+            mode = Mode.NONE
+            controller.invalidateOverlay()
+            return
+        }
         when (mode) {
             Mode.NONE -> {}
             Mode.CREATE -> createUp(Vec2(p.x, p.y))
@@ -2233,8 +2507,8 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
             if (box == null) targetLayer = null
             // The tap opens the shape under the finger, never the one it just placed or closed (a
             // tap just outside an opened shape closes it: shapes open from a little farther away).
-            // On a vector layer its shape objects come first.
-            if (tap && box == null && !openShapeObjectAt(pt, skip = closedObject)) shapeLayerAt(pt, skip = closed)?.let { editLayer(it) }
+            // On a vector layer its shape objects come first. v1.9 (R11): never in erase mode.
+            if (tap && box == null && !eraseOn && !openShapeObjectAt(pt, skip = closedObject)) shapeLayerAt(pt, skip = closed)?.let { editLayer(it) }
         } else {
             if (box != null) commit()
             if (box == null) {
@@ -2253,6 +2527,8 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
     }
 
     override fun onCancel() {
+        // A cancelled finger (a pinch began: pan and zoom) leaves the bevel popup open.
+        bevelTap = false
         setDragging(false)
         snap.end()
         showReadout(null)
@@ -2309,7 +2585,13 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
      * keeps that edit going instead of turning into color picking (a point gets selected);
      * elsewhere the controller decides.
      */
-    override fun onLongPress(p: ToolPoint): Boolean = when (mode) {
+    override fun onLongPress(p: ToolPoint): Boolean = when {
+        // The finger that closes the bevel popup picks no color either.
+        bevelTap -> true
+        else -> longPressIn(mode)
+    }
+
+    private fun longPressIn(mode: Mode): Boolean = when (mode) {
         Mode.NONE, Mode.CREATE -> false
         Mode.POINT -> {
             if (!started) {
@@ -2337,6 +2619,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
             creatingBox = null
             mode = Mode.NONE
             endGroupGesture()
+            pinchRedo = redo.toList()
             beginGroupEdit("Pinch")
             if (groupBase == null) return false
             groupPinchPivot = layout.pivotDoc
@@ -2357,8 +2640,10 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         mode = Mode.NONE
         pinchStart = bx
         pinchFocus = focus
-        pinchPushed = points != null
-        if (pinchPushed) pushHistory()
+        // v1.9 (R17): a pinch is one in-tool step for every shape (a pinch that moved nothing drops it, below).
+        pinchRedo = redo.toList()
+        pushHistory()
+        pinchPushed = true
         setDragging(true)
         return true
     }
@@ -2381,10 +2666,15 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
             groupPinchPivot = null
             showReadout(null)
             setDragging(false)
-            if (cancelled && box != null) {
+            val b = box
+            if (cancelled && b != null) {
                 // Back to the points before the pinch (its step is dropped).
                 history.removeLastOrNull()?.let { restoreState(it) }
-                canUndoStep = history.isNotEmpty()
+                dropPinchStep()
+            } else if (b != null && history.lastOrNull() == pendingState(b)) {
+                // v1.9 (R17): a pinch that left the points as they were is no edit.
+                history.removeLast()
+                dropPinchStep()
             }
             endGroupEdit()
             refreshPreview()
@@ -2396,10 +2686,28 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         setDragging(false)
         if (cancelled && box != null) {
             box = start
-            if (pinchPushed) history.removeLastOrNull().also { canUndoStep = history.isNotEmpty() }
+            if (pinchPushed) { history.removeLastOrNull(); dropPinchStep() }
+        } else if (pinchPushed && box == start) {
+            // v1.9 (R17): a pinch that left the shape as it was is no edit (its step is dropped).
+            history.removeLastOrNull()
+            dropPinchStep()
         }
         pinchPushed = false
         refreshPreview()
+    }
+
+    /**
+     * v1.9 (R17): the two-finger gesture's step was taken off [history] (a tap, a cancelled pinch
+     * or one that changed nothing): the redo steps are those it began with ([pinchRedo]), so the
+     * two-finger tap that undoes never loses what earlier undos left to redo.
+     */
+    private fun dropPinchStep() {
+        canUndoStep = history.isNotEmpty()
+        redo.clear()
+        redo.addAll(pinchRedo)
+        redoCount = redo.size
+        historyKey = null
+        pinchRedo = emptyList()
     }
 
     /**
@@ -2664,6 +2972,10 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
 
     /** Rebuilds the preview of the pending / in-creation shapes and redraws. */
     fun refreshPreview() {
+        if (eraseOn) {
+            refreshErase()
+            return
+        }
         val vectorLayer = vectorLayerOfPending()
         if (vectorLayer != null) {
             refreshVectorPreview(vectorLayer)
@@ -2723,6 +3035,110 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
             if (specs.isNotEmpty()) ensureObserving()
             preview.show(layer, specs, asNewLayer = asNew || intoFolder, overlayOnly = intoFolder || (asNew && newLayerPreviewInOverlay(layer)))
         }
+        controller.invalidateOverlay()
+    }
+
+    // ------------------------------------------------------------------ erase mode (v1.9, R11)
+
+    /**
+     * v1.9 (R11, [ErasableTool]): erase mode on or off. What is pending lands first in the mode it
+     * was drawn in (placed, or its erase committed: [EraseLabels19.STEP_SHAPE]), or goes when it
+     * can't land; an open bevel popup closes.
+     */
+    override fun setErase(on: Boolean) {
+        if (on == eraseOn) return
+        closeBevelPopup()
+        if (hasPendingWork) commit()
+        if (hasPendingWork) discard()
+        endErase()
+        eraseOn = on
+        refreshPreview()
+    }
+
+    /** v1.9 (R11): erase mode is transient: it is off whenever the tool is chosen again. */
+    override fun onSelected() {
+        if (eraseOn) setErase(false)
+    }
+
+    /**
+     * Erase mode's preview: no paint preview at all (the erase session owns the layer's render
+     * override), the outline being drawn erases live ([showErase]) and shows dashed.
+     */
+    private fun refreshErase() {
+        brushPreview.cancel()
+        specOverlay.setBand(null, 0f)
+        overlaySpecs = emptyList()
+        brushGuide = null
+        preview.release()
+        if (vectorPreview != null || vectorGuides.isNotEmpty()) releaseVectorPreview()
+        showErase(begin = !eraseRefused)
+        if (eraseSession != null) ensureObserving()
+        controller.invalidateOverlay()
+    }
+
+    /**
+     * The outline being drawn (the one dragged out, else the pending one; with its copies) as an
+     * eraser: [eraseOutline] for the overlay and, when [begin] allows, its live erase on the
+     * shape's layer ([ToolErase.begin]; refused after saying why: [eraseRefused], the outline then
+     * shows alone). Its footprint is the stroke at its width (the brush's size for a brush
+     * outline) and, for a filled closed style, the fill. Returns the open session (null without
+     * an outline, or refused).
+     */
+    private fun showErase(begin: Boolean): ToolEraseSession? {
+        val creating = creatingBox
+        val o = creating?.let { newObject(it) } ?: box?.let { objectFor(it, points) }
+        if (o == null) {
+            endErase()
+            return null
+        }
+        val maps = if (creating != null) creatingDrawMaps() else pendingMaps()
+        val path = ShapeCopies.mappedAll(ShapeOutlines.brushOutline(o), maps).toAndroidPath(erasePath)
+        eraseOutline = path
+        var s = eraseSession
+        if (s == null && begin) {
+            s = ToolErase.begin(controller, targetLayer ?: controller.doc.activeLayer, EraseSource.SHAPE)
+            eraseSession = s
+            eraseRefused = s == null
+        }
+        s?.update(path, eraseWidth(o), !o.type.isLineLike && o.style.fill)
+        return s
+    }
+
+    /** The width [o]'s outline erases with (document px; 0 without a stroke). */
+    private fun eraseWidth(o: ShapeObject): Float = when {
+        !o.strokes -> 0f
+        o.paintsWithBrush -> o.brushPreset?.size?.takeIf { it.isFinite() && it > 0f } ?: o.strokeWidth
+        else -> o.strokeWidth
+    }
+
+    /** Ends the outline's erase without a step (the layer looks as before) and forgets the outline. */
+    private fun endErase() {
+        eraseSession?.cancel()
+        eraseSession = null
+        eraseRefused = false
+        eraseOutline = null
+    }
+
+    /**
+     * Erase mode's commit: the outline's erase lands as ONE step [EraseLabels19.STEP_SHAPE] (none
+     * when nothing was under it) and the outline goes. Refused (the layer can't be edited now; the
+     * message was shown): the outline stays pending.
+     */
+    private fun commitErase() {
+        val s = eraseSession ?: showErase(begin = true) ?: return
+        eraseSession = null
+        inCommit = true
+        val result = try {
+            s.commit(EraseLabels19.STEP_SHAPE)
+        } finally {
+            inCommit = false
+        }
+        if (result is ToolEraseResult.Refused) {
+            eraseRefused = true
+            controller.invalidateOverlay()
+            return
+        }
+        resetPending()
         controller.invalidateOverlay()
     }
 
@@ -3446,6 +3862,8 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
             return false
         }
         if (!controller.checkEditable(layer)) return false
+        // v1.9 (R11): opening a shape to edit it ends erase mode (its pending erase lands).
+        if (eraseOn) setErase(false)
         // Finish the pending shape first (placing it may add a layer).
         if (box != null) {
             commit()
@@ -3627,11 +4045,17 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         vectorGuides = emptyList()
         preview.release()
         preview.interacting = false
+        // v1.9 (R11): an erase still open goes with its outline.
+        endErase()
         clearHistory()
     }
 
     override fun commit() {
         val b = box ?: return
+        if (eraseOn) {
+            commitErase()
+            return
+        }
         val session = vectorSession
         if (session != null) {
             commitVectorEdit(session, b)
@@ -3645,6 +4069,11 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         val layer = targetLayer ?: controller.doc.activeLayer
         if (isVectorTarget(layer)) {
             commitVectorNew(layer, b)
+            return
+        }
+        // v1.9 (R14, S1): into the selected shape layer, which becomes a vector layer.
+        joinTarget(settings)?.let {
+            commitJoin(it, b)
             return
         }
         if (placesInNewLayer(settings)) {
@@ -3740,6 +4169,135 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
             refreshPreview()
         }
         controller.invalidateOverlay()
+    }
+
+    // ------------------------------------------------------------------ joining a shape layer (v1.9, R14 S1)
+
+    /**
+     * v1.9 (R14, S1): the legacy shape layer a NEW shape joins, or null (v1.8: a layer of its
+     * own). With "Editable (own layer)" on and [ShapeSettings.newLayerEachTime] off, a new shape
+     * that would get a layer of its own joins the selected shape layer instead: the layer becomes
+     * a vector layer in place ([LayerConvert]) and the shape one of its objects, in the same step.
+     * Not into a layer that may not be edited (locked or hidden, also through a folder; its mask
+     * edited), nor with Perspective copies or an outline whose brush moves pixels: those place
+     * the shape as in v1.8. Without [decode] the layer's shape data is not decoded (the strip asks
+     * every drag frame, [objectActionsApply]); a layer whose data does not decode is then taken.
+     */
+    private fun joinTarget(s: ShapeSettings = newShapeSettings(), decode: Boolean = true): Layer? {
+        if (s.newLayerEachTime || editingLayer != null || vectorSession != null) return null
+        if (!placesInNewLayer(s)) return null
+        val doc = controller.doc
+        val layer = targetLayer ?: doc.activeLayer
+        if (!layer.isShapeLayer || layer.isVectorLayer || doc.indexOf(layer) < 0) return null
+        if (controller.editTargetOf(layer) != EditTarget.CONTENT) return null
+        if (layer.isFolder || !doc.effectiveVisible(layer) || doc.effectiveLocked(layer)) return null
+        val b = box ?: return null
+        if (objectFor(b, points).paintsWithBrush && brushMovesPixels()) return null
+        if (decode && LayerConvert.shapeToVector(layer) == null) return null
+        return layer
+    }
+
+    /**
+     * S1: the pending new shape joins [layer] (see [joinTarget]): the conversion and the new
+     * object are ONE step [SHAPE_LABEL] (rendered at once: no render may land as a step of its
+     * own). A shape outside the canvas stays pending and nothing converts.
+     */
+    private fun commitJoin(layer: Layer, b: ShapeBox) {
+        val o = objectFor(b, points)
+        val doc = controller.doc
+        val area = paintRect(o)
+        if (area == null || !area.intersect(0, 0, doc.width, doc.height)) {
+            controller.toast("The shape is outside the canvas")
+            return
+        }
+        val vectors = controller.vectors
+        val policy = vectors.policy
+        vectors.policy = VectorLayers.Policy.SYNC
+        try {
+            controller.undoStepNamed(SHAPE_LABEL) {
+                LayerConvert.toVectorAction(controller, layer, label = SHAPE_LABEL)?.let { controller.pushUndo(it) }
+                commitVectorNew(layer, b)
+            }
+        } finally {
+            vectors.policy = policy
+        }
+    }
+
+    // ------------------------------------------------------------------ object actions (v1.9, R14)
+
+    /**
+     * v1.9 (R14): the More row's object items apply ([LayerLabels19.DUPLICATE],
+     * [ObjectEdits.Arrange.FORWARD], [ObjectEdits.Arrange.BACKWARD]): a shape is open outside
+     * Points mode and is, or once placed becomes, a shape object of a vector layer: a reopened
+     * shape object, a new shape on a vector layer, or a new shape that joins the selected shape
+     * layer ([joinTarget]). Not for a reopened legacy shape layer (its one shape has no objects
+     * beside it) nor for a shape painted or placed in a layer of its own. Compose state; cheap
+     * (the strip asks every drag frame).
+     */
+    val objectActionsApply: Boolean get() = objectActionsApply(decode = false)
+
+    private fun objectActionsApply(decode: Boolean): Boolean {
+        if (box == null || pointsMode || eraseOn) return false
+        if (editingObject) return true
+        if (editingLayer != null) return false
+        controller.layersVersion
+        val layer = targetLayer ?: controller.doc.activeLayer
+        return isVectorTarget(layer) || joinTarget(settings, decode) != null
+    }
+
+    /**
+     * v1.9 (R14): the More row's [LayerLabels19.DUPLICATE]. The open shape is placed (a new one:
+     * its own step [SHAPE_LABEL]; a reopened one: its edit, nothing for an untouched one), the
+     * object bar's [ObjectActions.duplicate] copies it (its own step), and the copy opens. False
+     * when nothing was copied: the placed shape opens again (or stays pending when it could not
+     * be placed, with the message).
+     */
+    fun duplicateOpen(): Boolean = actOnPlaced { ObjectActions.duplicate(controller) }
+
+    /**
+     * v1.9 (R14): the More row's [ObjectEdits.Arrange.FORWARD] / [ObjectEdits.Arrange.BACKWARD]:
+     * as [duplicateOpen], through the object bar's [ObjectActions.arrange] (past the next object
+     * it overlaps, one step; "already" with nothing to pass); the shape opens again.
+     */
+    fun arrangeOpen(how: ObjectEdits.Arrange): Boolean = actOnPlaced { ObjectActions.arrange(controller, how) }
+
+    /**
+     * Places the open shape, runs the object bar's [action] on it alone (selected for the call),
+     * and opens the object it leaves selected (the copy) or the shape itself. Renders land at once
+     * meanwhile (as [commitJoin]): the object acted on and the one opened are known now.
+     */
+    private fun actOnPlaced(action: () -> Boolean): Boolean {
+        if (!objectActionsApply(decode = true)) return false
+        val vectors = controller.vectors
+        val policy = vectors.policy
+        vectors.policy = VectorLayers.Policy.SYNC
+        try {
+            val layer = vectorSession?.layer ?: (targetLayer ?: controller.doc.activeLayer)
+            lastVectorId = null
+            commit()
+            vectors.flushPending()
+            val id = lastVectorId
+            // Refused (locked, outside the canvas...): the shape stays pending, with the message.
+            if (box != null || id == null || layer.vector?.byId(id) !is VShape) return false
+            if (controller.doc.activeLayer !== layer) controller.selectLayer(layer)
+            var done = false
+            if (controller.doc.activeLayer === layer) {
+                if (PendingRenders.busy(controller)) {
+                    controller.toast(ObjectActions.STILL_UPDATING)
+                } else {
+                    vectors.setSelection(layer, setOf(id))
+                    done = action()
+                }
+            }
+            val left = vectors.selectedIds.singleOrNull()?.takeIf { done && vectors.selectedLayer === layer }
+            vectors.setSelection(null, emptySet())
+            val open = left?.takeIf { layer.vector?.byId(it) is VShape } ?: id
+            if (controller.doc.activeLayer === layer) editShapeObject(layer, open)
+            controller.invalidateOverlay()
+            return done
+        } finally {
+            vectors.policy = policy
+        }
     }
 
     /** Draws [spec] into a new layer's canvas, limited to [sel] (in bounded tiles). */
@@ -3962,6 +4520,8 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         resizeGuides = emptyList()
         if (hasPendingWork) commit()
         if (hasPendingWork) discard()
+        // v1.9 (R11): a shape being dragged out in erase mode leaves no erase behind.
+        endErase()
         overlaySpecs = emptyList()
         preview.release()
         preview.interacting = false
@@ -3976,6 +4536,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
     }
 
     override fun onDispose() {
+        endErase()
         brushPreview.end()
         decodedLayers.clear()
         featureCache.clear()
@@ -4026,6 +4587,8 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         editGuide?.let { if (creating == null) painter.path(canvas, t, it) }
         brushGuide?.let { painter.path(canvas, t, it) }
         for (g in vectorGuides) painter.path(canvas, t, g)
+        // v1.9 (R11): the outline erasing (with its copies) is drawn dashed.
+        eraseOutline?.let { painter.path(canvas, t, it, dashed = true) }
         val pending = box
         val pts = points
         if (creating == null && pending != null && pointsMode && pts != null) {
@@ -4063,7 +4626,8 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
      */
     private fun drawPoints(canvas: Canvas, t: ViewTransform, b: ShapeBox, pts: List<ShapePoint>) {
         val o = objectFor(b, pts)
-        painter.path(canvas, t, outlinePathOf(o))
+        // (Erasing, the outline is the dashed one drawn before.)
+        if (!eraseOn) painter.path(canvas, t, outlinePathOf(o))
         val anchors = ShapePoints.docAnchors(b, pts)
         val closed = closedShape
         val selection = pointSelection.resized(anchors.size)
