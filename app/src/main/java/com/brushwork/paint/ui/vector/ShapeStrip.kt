@@ -480,12 +480,20 @@ internal object ShapeStripItems {
             add(more(REMOVE_COPIES, MirrorLabels18.REMOVE) { ShapeIconAction(Icons.Filled.LayersClear, MirrorLabels18.REMOVE) { tool.removeCopies() } })
         }
         // v1.9 (R14): the object items (outside Points mode), hidden while the selection bar or the
-        // object bar shows: they offer the same labels (I10).
-        if (info.objectActions && !barShown) addAll(shapeObjectItems(tool))
+        // object bar shows: they offer the same labels (I10). The paste bar (no selection, no
+        // selected objects, something copied) offers Paste only, so they stay (Gate 2).
+        if (info.objectActions && !(barShown && objectBarUp(c))) addAll(shapeObjectItems(tool))
         // v1.9 (R18): [PointLabels19.BEVEL], after v1.8's More items (StripKeysV19 rank 60); in
         // Points mode the box's Center and Proportional are hidden ([ShapeStripInfo.boxModifiersShown]).
         if (info.pointsMode) add(shapeBevelItem(tool))
     }
+
+    /**
+     * v1.9 Gate 2: the bar the editor shows (`StripContext.selectionBarShown`) is the selection bar
+     * (a selection) or the object bar (selected objects), not the paste bar alone (nothing
+     * selected, something copied: Paste and Hide only). The object items hide under the first two.
+     */
+    fun objectBarUp(c: EditorController): Boolean = c.selection != null || c.vectors.selectedIds.isNotEmpty()
 
     /**
      * v1.9 (R11): the Eraser's mode cell ([VectorEraseChooser.modeCell], StripKeysV19.ERASE_MODE_CELL)

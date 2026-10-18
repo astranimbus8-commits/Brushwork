@@ -20,8 +20,8 @@ import com.brushwork.paint.vector.select.ObjectEdits
  * [ObjectEdits.Arrange.BACKWARD], with the object bar's icons and actions
  * ([ShapeTool.duplicateOpen], [ShapeTool.arrangeOpen]). The strip adds them while
  * [ShapeTool.objectActionsApply] (an open shape object outside Points mode) and the selection bar
- * and the object bar are hidden (`StripContext.selectionBarShown`): the bars and the strip never
- * show the same labels (I10).
+ * and the object bar are hidden (`StripContext.selectionBarShown` and [ShapeStripItems.objectBarUp]):
+ * the bars and the strip never show the same labels (I10). Under the paste bar alone they show.
  */
 internal fun shapeObjectItems(tool: ShapeTool): List<StripItem> {
     val forward = ObjectEdits.Arrange.FORWARD
