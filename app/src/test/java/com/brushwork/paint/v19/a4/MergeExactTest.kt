@@ -49,6 +49,29 @@ class MergeExactTest {
         }
     }
 
+    /**
+     * Texts and objects far apart are drawn piece by piece (each one's own paint bounds, not their
+     * bounding box): nothing of them is missed and the pixels between them stay as they were.
+     */
+    @Test
+    fun farApartTextsAndObjectsLookTheSame() {
+        run {
+            val c = kit.controller()
+            val lower = kit.textLayer(c, kit.text("Middle", 120f, 90f), name = "Lower")
+            val upper = kit.textLayer(c, kit.text("Ab", 30f, 22f, 0xFFC02020.toInt()), kit.text("Cd", 205f, 160f, 0xFF20A040.toInt()), name = "Upper")
+            mergeAndCompare("texts in opposite corners", c, upper, lower, MergeKind.TEXT_ITEMS) { kit.renderTexts(it) }
+        }
+        val red = 0xFFE04020.toInt()
+        val blue = 0xFF3070D0.toInt()
+        for (opacity in listOf(1f, 0.5f)) {
+            val c = kit.controller()
+            val lower = kit.vectorLayer(c, listOf(kit.box(90f, 60f, 150f, 120f, red)), "Lower")
+            val upper = kit.vectorLayer(c, listOf(kit.box(6f, 6f, 40f, 34f, blue), kit.box(100f, 70f, 130f, 100f, blue), kit.box(200f, 146f, 234f, 174f, red)), "Upper")
+            c.setLayerProps(upper, upper.props().copy(opacity = opacity))
+            mergeAndCompare("objects in opposite corners and over the lower one at $opacity", c, upper, lower, MergeKind.VECTOR_OBJECTS, tol = 3) { kit.render(it.vector!!) }
+        }
+    }
+
     @Test
     fun shapeAndVectorMergesLookTheSame() {
         val red = 0xFFE04020.toInt()

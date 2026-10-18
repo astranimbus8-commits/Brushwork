@@ -2,6 +2,7 @@ package com.brushwork.paint.qa19
 
 import android.graphics.Paint
 import android.graphics.Path
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -9,12 +10,14 @@ import androidx.compose.ui.semantics.getOrNull
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.Selection
+import com.brushwork.paint.qa18.Qa18PolishChromeSelectionBarTest
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.tools.select.SelectionDuplicate
 import com.brushwork.paint.ui.color.RobolectricUi
 import com.brushwork.paint.ui.common.LayerLabels19
 import com.brushwork.paint.ui.common.SavedSelectionLabels
 import com.brushwork.paint.ui.common.V19Tags
+import com.brushwork.paint.ui.editor.chrome.ChromeScreen
 import com.brushwork.paint.ui.editor.chrome.ChromeTags
 import com.brushwork.paint.v19.a4.A4Kit
 import org.junit.Assert.assertEquals
@@ -41,6 +44,13 @@ class Qa19DuplicateUiTest {
 
     private fun select(c: EditorController, l: Float, t: Float, r: Float, b: Float) =
         c.setSelection(Selection.fromPath(Path().apply { addRect(l, t, r, b, Path.Direction.CW) }, c.doc.width, c.doc.height, antiAlias = false))
+
+    /** The bounds (dp, as shown) of the item of the selection bar [bar] whose click label is [label]. */
+    private fun barItem(s: ChromeScreen, bar: Rect, label: String): Rect? =
+        s.placed().map { it.node }
+            .filter { it.config.getOrNull(SemanticsActions.OnClick)?.label == label }
+            .map { s.dp(it.boundsInWindow) }
+            .lastOrNull { it.center.y >= bar.top && it.center.y <= bar.bottom }
 
     /** Slides the selection bar to its end (its scroll action, as far as it goes). */
     private fun scrollToEnd() {
@@ -69,6 +79,19 @@ class Qa19DuplicateUiTest {
                 val bar = s.tagged(ChromeTags.SELECTION_BAR) ?: throw AssertionError("$where: no selection bar")
                 assertNotNull("$where: Duplicate on the bar", Qa19Ui.tagged(V19Tags.DUPLICATE))
                 assertTrue("$where: the bar $bar within the screen ${s.widthDp} dp", bar.left >= -0.5f && bar.right <= s.widthDp + 0.5f)
+                // The eight v1.6 items keep their places (design 3.2 A4 (e)): the k-th starts at the
+                // bar's 4 dp edge padding plus k items of 46 dp (SelectionBar's BarEdge, BarItemWidth),
+                // wherever the bar shows it; at 392 dp "More" (the eighth) is wholly inside the bar.
+                V16_ITEMS.forEachIndexed { k, label ->
+                    val expected = bar.left + 4f + 46f * k
+                    if (expected >= bar.right - 1f) return@forEachIndexed
+                    val item = barItem(s, bar, label) ?: throw AssertionError("$where: no \"$label\"")
+                    assertEquals("$where: \"$label\" keeps its place ($item in $bar)", expected, item.left, 1f)
+                }
+                if (width == Qa19Ui.Q392) {
+                    val more = barItem(s, bar, V16_ITEMS.last()) ?: throw AssertionError("$where: no \"${V16_ITEMS.last()}\"")
+                    assertTrue("$where: \"${V16_ITEMS.last()}\" whole in the bar ($more in $bar)", more.right <= bar.right + 0.5f && more.width >= 46f - 1f)
+                }
                 // Slid to its end (the bar scrolls sideways): Duplicate is its last item, after Save.
                 scrollToEnd()
                 val duplicate = s.tagged(V19Tags.DUPLICATE) ?: throw AssertionError("$where: no Duplicate once slid")
@@ -114,5 +137,10 @@ class Qa19DuplicateUiTest {
             }
         }
         kit.close()
+    }
+
+    private companion object {
+        /** The click labels of the selection bar's eight v1.6 items, in order (the last is "More"). */
+        val V16_ITEMS = Qa18PolishChromeSelectionBarTest.ITEMS.take(8)
     }
 }

@@ -1687,6 +1687,11 @@ options on them) and R14 ("a button to duplicate the selection in the same layer
     with a shape or vector layer is `WHY_KINDS`.
   - Every kind is ONE step "Merge down" that undo restores whole (data, pixels, props, the
     removed layer). No merge draws the paper (I21, `LayerMergePaperTest`).
+  - The kept types are not rendered anew: the upper layer's pixels are drawn over the lower
+    layer's, piece by piece (`LayerMerge.disjoint`, the disjoint rects of a `Region`): each
+    text's own paint bounds, each object's (up to `MAX_PARTS` = 64 objects; more, or a legacy
+    shape layer, take one bounding box or the whole layer). Only the undo tiles the pieces meet
+    are saved, so two texts in opposite corners of a PHONE canvas touch two places, not 2.6 Mpx.
 - **The opacity fold (D26).** A shape or vector layer under 100 % folds its opacity into each
   object's own opacity, and the merged layer is at 100 %. That is exact when no two of its objects
   share a pixel (their paint bounds rounded out are pairwise disjoint: a sweep by left edge), so
@@ -1719,7 +1724,10 @@ options on them) and R14 ("a button to duplicate the selection in the same layer
   `ObjectActions.duplicateOffset` (16 px at 100 %).
   - Pixels: the selected pixels (`SelectionEdits.drawSelected`) are drawn again, offset right and
     down, on the same layer (an alpha lock keeps them inside the painted pixels), and the
-    selection moves onto them. This is a stand-in: the design floats the copy in Transform on the
+    selection moves onto them (`SelectionDuplicate.shifted`: only the selection's bounds are
+    drawn onto a new ALPHA_8 mask and scanned for its tight bounds, never a full-document copy;
+    a pixel copy that does not fit in memory restores the saved tiles and records nothing).
+    This is a stand-in: the design floats the copy in Transform on the
     same layer, which needs an in-layer placement in `TransformTool` (lead request: today closing
     a placement over a painted layer deletes the layer).
   - Objects: the objects the selection touches (`c.vectors.touching`) are copied right above the
@@ -1757,13 +1765,16 @@ options on them) and R14 ("a button to duplicate the selection in the same layer
 - **Tests.**
   - `v19/a4`: `MergeKeepsTypeTest`, `MergeExactTest`, `MergeRasterReasonTest`,
     `MergeConfirmDialogTest` (UI), `LayerMergePaperTest`, `ShapeBadgeTest`,
-    `SelectionDuplicateRobolectricTest`, `ArrangeOneStepTest`, `MergeFolderKeepsTypeTest`, with
+    `SelectionDuplicateRobolectricTest`, `ArrangeOneStepTest`, `MergeFolderKeepsTypeTest`,
+    `MergeUndoReopenTest` (every merge and Duplicate kind: undo and redo restore pixels, data,
+    props, the layer list and the selection byte for byte; the results reopen as saved), with
     `A4Kit`.
   - `qa19`: `Qa19MergeUiTest` and `Qa19DuplicateUiTest` (392 and 360 dp, font scales 1, 1.3 and
-    2.0, I27).
+    2.0, I27; the eight v1.6 items keep their x positions, "More" whole at 392 dp).
   - Forced updates: `LayerMergeExtractionTest`, `VectorLayerOpsRobolectricTest`,
     `ObjectActionsRobolectricTest` (Forward's plain step), `Qa18PolishChromeSelectionBarTest`
-    (eleven items; the stroke waits for the tool menu to close).
+    (eleven items; the stroke waits for the tool menu to close, and its one retry closes a
+    menu still open and picks the marquee again when another tool took the stroke).
 
 <!-- /v19-A4 -->
 

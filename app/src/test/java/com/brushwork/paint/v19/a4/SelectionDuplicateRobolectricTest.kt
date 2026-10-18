@@ -83,6 +83,45 @@ class SelectionDuplicateRobolectricTest {
         assertEquals(Rect(selBefore).apply { offset(d, d) }, c.selection!!.bounds)
     }
 
+    /**
+     * The moved selection is the old coverage byte for byte, [d] px right and down; what leaves
+     * the canvas is dropped and the bounds stay tight even where the cut leaves a clear edge.
+     */
+    @Test
+    fun aMovedSelectionKeepsItsSoftEdgesAndDropsWhatLeavesTheCanvas() {
+        val w = 64
+        val h = 48
+        val d = 16
+        val bytes = ByteArray(w * h)
+        // A soft patch x 30..55, y 20..39; its column 47 and row 31 are clear, and the canvas
+        // edge cuts the moved patch right after them (x 63, y 47).
+        for (y in 20 until 40) for (x in 30 until 56) {
+            if (x == 47 || y == 31) continue
+            bytes[y * w + x] = ((x * 7 + y * 13) % 255 + 1).toByte()
+        }
+        bytes[25 * w + 35] = 0xFF.toByte()
+        val sel = Selection.fromBytes(bytes, w, h)
+        val moved = SelectionDuplicate.shifted(sel, d, w, h)
+        val expected = ByteArray(w * h)
+        for (y in 0 until h) for (x in 0 until w) {
+            val tx = x + d
+            val ty = y + d
+            if (tx < w && ty < h) expected[ty * w + tx] = bytes[y * w + x]
+        }
+        assertTrue("the coverage, shifted exactly", expected.contentEquals(moved.toBytes()))
+        assertEquals("tight bounds: the clear cut edge is left out", Rect(46, 36, 63, 47), moved.bounds)
+        assertEquals(Selection.computeBounds(moved.mask), moved.bounds)
+        // Inside the canvas nothing is lost.
+        val small = ByteArray(w * h).also { for (y in 2 until 9) for (x in 3 until 12) it[y * w + x] = (x * 20 + y).toByte() }
+        val inside = SelectionDuplicate.shifted(Selection.fromBytes(small, w, h), d, w, h)
+        val expectedInside = ByteArray(w * h).also { for (y in 2 until 9) for (x in 3 until 12) it[(y + d) * w + x + d] = small[y * w + x] }
+        assertTrue("inside: shifted exactly", expectedInside.contentEquals(inside.toBytes()))
+        assertEquals(Rect(3 + d, 2 + d, 12 + d, 9 + d), inside.bounds)
+        // Moved off the canvas entirely: an empty selection.
+        val corner = ByteArray(w * h).also { it[(h - 2) * w + w - 2] = 0x80.toByte() }
+        assertTrue("off the canvas: empty", SelectionDuplicate.shifted(Selection.fromBytes(corner, w, h), d, w, h).isEmpty)
+    }
+
     @Test
     fun aLockedTransparencyKeepsTheCopyInsideThePaintedPixels() {
         val c = kit.controller()

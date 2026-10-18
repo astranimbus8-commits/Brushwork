@@ -6,6 +6,8 @@ import android.graphics.Paint
 import android.graphics.PorterDuff
 import android.graphics.Rect
 import android.graphics.RectF
+import android.graphics.Region
+import android.graphics.RegionIterator
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.LayerListEvent
 import com.brushwork.paint.LayerListKind
@@ -214,9 +216,9 @@ internal class LayerMerge(private val c: EditorController) {
         val below = TextCodec.decodeAll(lower.textData)
         if (above.isEmpty() || below.isEmpty() || above.size + below.size > TextCodec.MAX_ITEMS) return false
         val data = TextCodec.encodeAll(below + above)
-        val area = Rect()
-        for (r in textPixelRects(above)) area.union(r)
-        return mergeData(upper, lower, lower.dataSnapshot().copy(text = data), area)
+        // Each text's own pixels, not their bounding box: two texts in opposite corners touch two
+        // places, not the whole canvas.
+        return mergeData(upper, lower, lower.dataSnapshot().copy(text = data), textPixelRects(above))
     }
 
     /**
@@ -306,7 +308,7 @@ internal class LayerMerge(private val c: EditorController) {
             // overlap; the pixels are their rendering (I1), redrawn wherever either layer painted.
             val all = Rect(paintArea(lower, below)).apply { union(paintArea(upper, above)) }
             val document = Rect(0, 0, c.doc.width, c.doc.height)
-            return mergeData(upper, lower, after, all, props) { cv ->
+            return mergeData(upper, lower, after, listOf(all), props) { cv, _ ->
                 cv.save()
                 cv.clipRect(all)
                 cv.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
@@ -314,10 +316,9 @@ internal class LayerMerge(private val c: EditorController) {
                 cv.restore()
             }
         }
-        val upperArea = paintArea(upper, above)
+        val upperParts = disjoint(paintParts(upper, above))
         val lowerArea = if (lower.opacity < 1f) paintArea(lower, below) else Rect()
-        val area = Rect(upperArea).apply { union(lowerArea) }
-        return mergeData(upper, lower, after, area, props) { cv ->
+        return mergeData(upper, lower, after, upperParts + listOf(lowerArea), props) { cv, _ ->
             if (!lowerArea.isEmpty) {
                 cv.save()
                 cv.clipRect(lowerArea)
@@ -325,7 +326,7 @@ internal class LayerMerge(private val c: EditorController) {
                 cv.restore()
             }
             val paint = if (upper.opacity < 1f) Paint().apply { alpha = alphaOf(upper.opacity) } else null
-            cv.drawBitmap(upper.bitmap, upperArea, upperArea, paint)
+            for (r in upperParts) cv.drawBitmap(upper.bitmap, r, r, paint)
         }
     }
 
@@ -333,12 +334,41 @@ internal class LayerMerge(private val c: EditorController) {
     private fun paintArea(layer: Layer, content: VectorContent): Rect =
         if (layer.isVectorLayer) pixelRect(ObjectIndex.of(content).unionBounds()) else Rect(0, 0, c.doc.width, c.doc.height)
 
+    /**
+     * [paintArea] in pieces: up to [MAX_PARTS] objects, each object's own paint bounds rounded out
+     * (objects far apart touch only their own tiles); more objects, or a legacy shape layer, the
+     * one [paintArea].
+     */
+    private fun paintParts(layer: Layer, content: VectorContent): List<Rect> {
+        if (!layer.isVectorLayer || content.objects.size > MAX_PARTS) return listOf(paintArea(layer, content))
+        val index = ObjectIndex.of(content)
+        return (0 until index.size).map { pixelRect(index.bounds(it)) }.filterNot { it.isEmpty }
+    }
+
+    /**
+     * [rects] within the document as disjoint rects covering the same pixels (a [Region]'s), so a
+     * draw over each piece reaches every pixel once.
+     */
+    private fun disjoint(rects: List<Rect>): List<Rect> {
+        val region = Region()
+        for (r in rects) {
+            val x = Rect(r)
+            if (x.intersect(0, 0, c.doc.width, c.doc.height)) region.op(x, Region.Op.UNION)
+        }
+        val out = ArrayList<Rect>()
+        val pieces = RegionIterator(region)
+        val r = Rect()
+        while (pieces.next(r)) out += Rect(r)
+        return out
+    }
+
     /** [opacity] as a paint alpha, rounded as the vector renderer rounds an object's opacity. */
     private fun alphaOf(opacity: Float): Int = (opacity.coerceIn(0f, 1f) * 255f + 0.5f).toInt()
 
     /**
      * Stores [after] as [lower]'s data (and [props] as its properties when given) and changes its
-     * pixels within [area] (document px) by [draw] (by default [upper]'s pixels drawn over them),
+     * pixels within [parts] (document px; only the undo tiles they meet are saved) by [draw],
+     * given them as disjoint pieces ([disjoint]; by default [upper]'s pixels drawn over each),
      * then removes [upper]: ONE step "Merge down" (as in [VectorLayerOps.mergeVector], a locked or
      * hidden lower layer is merged into as well). False, with nothing recorded, when the pixels
      * don't fit in memory.
@@ -347,22 +377,22 @@ internal class LayerMerge(private val c: EditorController) {
         upper: Layer,
         lower: Layer,
         after: LayerData,
-        area: Rect,
+        parts: List<Rect>,
         props: LayerProps? = null,
-        draw: (Canvas) -> Unit = { it.drawBitmap(upper.bitmap, area, area, null) },
+        draw: (Canvas, List<Rect>) -> Unit = { cv, pieces -> for (r in pieces) cv.drawBitmap(upper.bitmap, r, r, null) },
     ): Boolean {
         val doc = c.doc
-        if (!area.intersect(0, 0, doc.width, doc.height)) area.setEmpty()
+        val pieces = disjoint(parts)
         var ok = false
         c.groupUndo(MERGE_LABEL) {
             val before = lower.dataSnapshot()
             val dataAction = LayerDataAction(MERGE_LABEL, lower, before, after)
-            if (!area.isEmpty) {
+            if (pieces.isNotEmpty()) {
                 // The data changes with the pixels: the edit keeps it (preserveData).
                 val rec = c.beginEdit(lower, EditTarget.CONTENT).also { it.preserveData = true }
                 try {
-                    rec.touch(area)
-                    draw(Canvas(lower.bitmap))
+                    for (r in pieces) rec.touch(r)
+                    draw(Canvas(lower.bitmap), pieces)
                 } catch (e: OutOfMemoryError) {
                     rec.abort()
                     return@groupUndo
@@ -498,6 +528,9 @@ internal class LayerMerge(private val c: EditorController) {
 
     private companion object {
         const val MERGE_LABEL = "Merge down"
+
+        /** At most this many objects are drawn piece by piece ([paintParts]); more take their one bounding box. */
+        const val MAX_PARTS = 64
 
         /**
          * Stand-in for a `LayerLabels19.WHY_OPACITY` entry (LeadRequest): R19 names no reason for two

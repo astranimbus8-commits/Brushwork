@@ -70,8 +70,18 @@ class Qa18PolishChromeSelectionBarTest {
         menuGone(s)
         Fingers18.stroke(s, 100f, 80f, 260f, 210f)
         if (s.c.selection == null) {
-            System.err.println("[polish-chrome] $what: no selection after the first stroke (tool ${s.c.activeToolId}, windows ${SmokeUi.windows().size}); again")
+            System.err.println("[polish-chrome] $what: no selection after the first stroke (tool ${s.c.activeToolId}, windows ${SmokeUi.windows().size}, tool menu ${s.tagged(ChromeTags.TOOL_MENU)}); again")
+            // A tool menu still open (a second tap on its button opened it again) closes by Back.
+            if (s.tagged(ChromeTags.TOOL_MENU) != null) {
+                Finger.back()
+                Smoke.pump(300); SmokeUi.settle()
+            }
             menuGone(s)
+            // The stroke may have gone to the menu and picked another tool: the marquee again.
+            if (s.c.activeToolId != ToolId.MARQUEE) {
+                Qa18MenusShots.pick(s, ToolId.MARQUEE)
+                menuGone(s)
+            }
             Fingers18.stroke(s, 100f, 80f, 260f, 210f)
         }
         assertNotNull("$what: a selection", s.c.selection)
@@ -208,7 +218,7 @@ class Qa18PolishChromeSelectionBarTest {
         return 0.2126 * ch((c shr 16) and 0xFF) + 0.7152 * ch((c shr 8) and 0xFF) + 0.0722 * ch(c and 0xFF)
     }
 
-    private companion object {
+    internal companion object {
         /** What the bar's eleven items do (their click labels; v1.9 adds [LayerLabels19.DUPLICATE_DESC]). */
         val ITEMS = listOf(
             "Copy selection", "Cut selection", "Paste as a new layer", "Clear the selection", "Delete the selected pixels",

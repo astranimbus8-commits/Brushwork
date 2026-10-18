@@ -14,6 +14,7 @@ import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.Selection
 import com.brushwork.paint.tools.text.TextCodec
 import com.brushwork.paint.tools.text.TextItemOps
+import com.brushwork.paint.tools.transform.ContentBounds
 import com.brushwork.paint.ui.common.LayerLabels19
 import com.brushwork.paint.vector.select.ObjectActions
 import com.brushwork.paint.vector.select.ObjectEdits
@@ -99,34 +100,45 @@ object SelectionDuplicate {
         } catch (e: OutOfMemoryError) {
             c.toast(NO_MEMORY); return false
         }
+        var done = false
         try {
             c.groupUndo(LayerLabels19.DUPLICATE_STEP) {
                 val rec = c.beginEdit(layer, EditTarget.CONTENT)
-                rec.touch(dest)
-                val paint = Paint().apply { if (layer.alphaLocked) xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_ATOP) }
-                Canvas(layer.bitmap).drawBitmap(copy, (src.left + d).toFloat(), (src.top + d).toFloat(), paint)
+                try {
+                    rec.touch(dest)
+                    val paint = Paint().apply { if (layer.alphaLocked) xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_ATOP) }
+                    Canvas(layer.bitmap).drawBitmap(copy, (src.left + d).toFloat(), (src.top + d).toFloat(), paint)
+                } catch (e: OutOfMemoryError) {
+                    // The tiles saved so far go back and nothing is recorded (groupUndo finds no step).
+                    rec.abort()
+                    return@groupUndo
+                }
                 c.commitEdit(rec, LayerLabels19.DUPLICATE_STEP)
                 c.setSelection(moved, recordUndo = true, label = LayerLabels19.DUPLICATE_STEP)
+                done = true
             }
         } finally {
             copy.recycle()
         }
-        return true
+        if (!done) c.toast(NO_MEMORY)
+        return done
     }
 
-    /** [sel] moved [d] px right and down (what leaves the canvas is dropped). */
+    /**
+     * [sel] moved [d] px right and down (what leaves the canvas is dropped). Only the selection's
+     * bounds are drawn (ALPHA_8 onto a clear ALPHA_8 copies the coverage exactly) and then scanned
+     * for the new tight bounds: never a full-document byte copy or rescan (PRINT is 12 Mpx).
+     */
     internal fun shifted(sel: Selection, d: Int, width: Int, height: Int): Selection {
-        val bytes = BitmapUtils.alpha8ToBytes(sel.mask)
-        val out = ByteArray(width * height)
-        val b = sel.bounds
-        for (y in b.top until b.bottom) {
-            val ty = y + d
-            if (ty !in 0 until height) continue
-            val from = y * width + b.left
-            val count = minOf(b.right, width - d) - b.left
-            if (count > 0) System.arraycopy(bytes, from, out, ty * width + b.left + d, count)
-        }
-        return Selection.fromBytes(out, width, height)
+        val out = Bitmap.createBitmap(width, height, Bitmap.Config.ALPHA_8)
+        val from = Rect(sel.bounds)
+        if (!from.intersect(0, 0, sel.width, sel.height)) return Selection.wrap(out, Rect())
+        val to = Rect(from).apply { offset(d, d) }
+        Canvas(out).drawBitmap(sel.mask, from, to, null)
+        // What is left of the copy may hold only clear pixels along the cut: found, not assumed.
+        val region = Rect(to)
+        val bounds = if (region.intersect(0, 0, width, height)) ContentBounds.of(out, region = region) else null
+        return Selection.wrap(out, bounds ?: Rect())
     }
 
     /** The objects of [layer] the selection touches, copied with the object bar's offset and selected. */
