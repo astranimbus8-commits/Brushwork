@@ -17,6 +17,9 @@ import kotlin.math.max
  *   ([trimUndo]) until the Java heap is under [HEAP_TARGET] of its maximum, and says
  *   `StabilityLabels19.UNDO_TRIMMED` when it dropped any.
  *
+ * [admit] (step 2) refuses a large allocation whose estimate exceeds the free Java heap less
+ * [ADMIT_MARGIN]; its callers then say `StabilityLabels19.NO_MEMORY_FOR` and change nothing.
+ *
  * Each entry frees what the pressure asks of it ([Trimmable.trim] gets the pressure); one that
  * throws is kept as a quiet report and the others are still trimmed.
  *
@@ -45,6 +48,9 @@ object GovernorPolicyV19 : GovernorPolicy {
     /** The newest undo steps CRITICAL always keeps. */
     const val KEEP_UNDO_STEPS = 1
 
+    /** [admit]'s margin: an admitted allocation leaves this much of the Java heap free (64 MB). */
+    const val ADMIT_MARGIN = 64L * 1024 * 1024
+
     /** The Java heap as the policy reads it ([heap]; a test seam). */
     interface Heap {
         /** Bytes in use: live objects and garbage not yet collected. */
@@ -66,7 +72,7 @@ object GovernorPolicyV19 : GovernorPolicy {
         override fun collect() = Runtime.getRuntime().gc()
     }
 
-    /** The heap [trimUndo] (and step 2's [admit]) read; tests put a fake one here and restore it. */
+    /** The heap [trimUndo] and [admit] read; tests put a fake one here and restore it. */
     @Volatile
     internal var heap: Heap = RuntimeHeap
 
@@ -88,7 +94,21 @@ object GovernorPolicyV19 : GovernorPolicy {
         }
     }
 
-    override fun admit(bytes: Long, purpose: String): Boolean = true
+    /**
+     * Admits an allocation of [bytes] (a flatten, filter apply, export or merge, for [purpose]) when
+     * it fits in the free Java heap ([Heap.max] minus [Heap.used]) less [ADMIT_MARGIN]. What is in
+     * use may still be garbage: before refusing, one collection ([Heap.collect]) and a new reading.
+     * Nothing asked (0 or less) is always admitted. Any thread.
+     */
+    override fun admit(bytes: Long, purpose: String): Boolean {
+        if (bytes <= 0L) return true
+        val h = heap
+        if (fits(h, bytes)) return true
+        h.collect()
+        return fits(h, bytes)
+    }
+
+    private fun fits(h: Heap, bytes: Long): Boolean = bytes <= h.max() - h.used() - ADMIT_MARGIN
 
     /** What [trimUndo] did: the steps dropped and the heap bytes that went (0 when unknown). */
     class UndoTrim(val steps: Int, val bytes: Long)
