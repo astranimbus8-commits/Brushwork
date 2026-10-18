@@ -897,14 +897,16 @@ after F3, and only A6 changes `CanvasView.kt`.
   in one JVM; `-PsoakOnly` runs `SoakHarnessTest` alone (`.github/workflows/soak.yml`, nightly and
   on dispatch). On CI (`CI` set) the other runs leave out the `Timing` category and use two JVMs.
   `CiShardFilterTest` checks that every class falls in exactly one shard.
-- `.github/workflows/android.yml`: `unit` (a matrix of shards 0 and 1, 45 min), `timing` (30 min),
-  `test-count` (10 min; it sums the `tests` attributes of both shards' JUnit XML and fails below
-  the floor in `app/src/test/test-count.txt`, when a shard uploaded no XML or log, or when a log
-  shows `testDebugUnitTest NO-SOURCE`), and the release APK (`needs` all three; the `v*` tag
-  publishes it).
-- The floor is the non-Timing count of both shards: 3970 at v1.8, 4024 after F0, 4072 after F1a,
-  4154 after F1b, 4169 after F2 and 4177 after F3 (shard 0 2192 + shard 1 1985); the Timing run
-  has 325. Only the lead changes the file (rule O): it raises the floor at each merge to the
+- `.github/workflows/android.yml`: `unit` (a matrix of shards 0, 1 and 2 with `-PtestShards=3`,
+  45 min), `timing` (30 min), `test-count` (10 min; it sums the `tests` attributes of every shard's
+  JUnit XML and fails below the floor in `app/src/test/test-count.txt`, when a shard uploaded no
+  XML or log, or when a log shows `testDebugUnitTest NO-SOURCE`), and the release APK (`needs` all
+  three; the `v*` tag publishes it). CI ran two shards until Gate 2, when a two-shard test step
+  took 27.5 min and passed the 26-minute fallback of design 5.5; `CiShardFilterTest` checks the
+  balance for both two and three shards.
+- The floor is the non-Timing count of all shards: 3970 at v1.8, 4024 after F0, 4072 after F1a,
+  4154 after F1b, 4169 after F2 and 4177 after F3 (shard 0 2192 + shard 1 1985), and 4764 after
+  the ten areas; the Timing run has 325 at F3. Only the lead changes the file (rule O): it raises the floor at each merge to the
   merged branch's count, and lowers it only in the commit that deletes tests on purpose. The file
   has no trailing newline.
 - Test kits of the foundation: `qa19/Qa19Ui.kt` (frozen: `uiTest` sections, the editor and

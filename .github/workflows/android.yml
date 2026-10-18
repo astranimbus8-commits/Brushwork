@@ -16,10 +16,11 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# v1.9 (LA3, design 2.2 and 5.5): the non-timing tests run in two shards in parallel
-# (app/build.gradle.kts, -PtestShard), the @Category(Timing) tests in a third job alone in one
-# JVM (-PtimingOnly), test-count checks that both shards together ran at least the floor of
-# app/src/test/test-count.txt, and the release APK is built once all three are green.
+# v1.9 (LA3, design 2.2 and 5.5): the non-timing tests run in three shards in parallel
+# (app/build.gradle.kts, -PtestShard; three since Gate 2, when a two-shard test step passed the
+# 26-minute fallback of design 5.5), the @Category(Timing) tests in their own job alone in one
+# JVM (-PtimingOnly), test-count checks that the shards together ran at least the floor of
+# app/src/test/test-count.txt, and the release APK is built once all of them are green.
 jobs:
   unit:
     name: Unit tests (shard ${{ matrix.testShard }})
@@ -28,7 +29,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        testShard: [ 0, 1 ]
+        testShard: [ 0, 1, 2 ]
     env:
       CI: 'true'
     steps:
@@ -47,7 +48,7 @@ jobs:
       - name: Unit tests
         run: |
           set -o pipefail
-          ./gradlew --no-daemon --console=plain testDebugUnitTest -PtestShard=${{ matrix.testShard }} -PtestShards=2 2>&1 | tee "$RUNNER_TEMP/gradle.log"
+          ./gradlew --no-daemon --console=plain testDebugUnitTest -PtestShard=${{ matrix.testShard }} -PtestShards=3 2>&1 | tee "$RUNNER_TEMP/gradle.log"
 
       - name: Collect the test results
         if: always()
@@ -94,7 +95,7 @@ jobs:
           path: app/build/test-results/testDebugUnitTest/*.xml
           if-no-files-found: ignore
 
-  # The JUnit XML of both shards, cached or not, must count at least the floor of
+  # The JUnit XML of every shard, cached or not, must count at least the floor of
   # app/src/test/test-count.txt (raised at each merge, lowered only with a deliberate deletion).
   test-count:
     name: Test count
@@ -118,7 +119,7 @@ jobs:
           pattern: test-results-[0-9]
           path: shards
 
-      - name: Count the tests of both shards
+      - name: Count the tests of every shard
         run: |
           python3 - <<'EOF'
           import glob, os, sys
@@ -127,7 +128,7 @@ jobs:
           floor = int(open('app/src/test/test-count.txt', encoding='utf-8').read().split()[0])
           errors = []
           total = 0
-          for shard in ('0', '1'):
+          for shard in ('0', '1', '2'):
               folder = os.path.join('shards', 'test-results-' + shard)
               xmls = sorted(glob.glob(os.path.join(folder, 'TEST-*.xml')))
               if not xmls:
@@ -144,7 +145,7 @@ jobs:
               count = sum(int(ET.parse(f).getroot().get('tests', '0')) for f in xmls)
               print('shard %s: %d tests in %d classes' % (shard, count, len(xmls)))
               total += count
-          print('both shards: %d tests; floor %d' % (total, floor))
+          print('all shards: %d tests; floor %d' % (total, floor))
           if total < floor:
               errors.append('%d tests, below the floor %d of app/src/test/test-count.txt' % (total, floor))
           for e in errors:
