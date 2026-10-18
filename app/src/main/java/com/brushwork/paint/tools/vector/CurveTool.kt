@@ -4100,6 +4100,13 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
             CurveKind.PATH -> EraseLabels19.ERASING_PATH
         }
 
+    /** The layer the pending path (or the next one) paints or erases: where it began, else the active layer (follows the layers in Compose). */
+    val eraseTarget: Layer
+        get() {
+            controller.layersVersion
+            return targetLayer ?: controller.doc.activeLayer
+        }
+
     private val eraseSource: EraseSource
         get() = when (kind) {
             CurveKind.CURVE -> EraseSource.CURVE
@@ -4163,12 +4170,12 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
     private fun eraseSessionOn(layer: Layer): ToolEraseSession? {
         eraseSession?.let { if (eraseLayer === layer) return it }
         endErase()
-        val version = controller.layersVersion
+        val stamp = controller.layersVersion
         val refused = eraseRefused
-        if (refused != null && refused.first === layer && refused.second == version) return null
+        if (refused != null && refused.first === layer && refused.second == stamp) return null
         val s = ToolErase.begin(controller, layer, eraseSource)
         if (s == null) {
-            eraseRefused = layer to version
+            eraseRefused = layer to stamp
             return null
         }
         eraseRefused = null

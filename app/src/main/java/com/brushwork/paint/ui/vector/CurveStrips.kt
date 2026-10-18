@@ -74,6 +74,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.core.Units
+import com.brushwork.paint.engine.EditTarget
+import com.brushwork.paint.model.Layer
 import com.brushwork.paint.tools.points.Mixed
 import com.brushwork.paint.tools.vector.CurveKind
 import com.brushwork.paint.tools.vector.CurvePaint
@@ -92,11 +94,14 @@ import com.brushwork.paint.ui.editor.EditorIcons
 import com.brushwork.paint.ui.theme.BrushworkColors
 import com.brushwork.paint.ui.theme.IbisColors
 import com.brushwork.paint.ui.tools.strip.LocalStripContext
+import com.brushwork.paint.ui.tools.strip.StripContext
 import com.brushwork.paint.ui.tools.strip.StripItem
 import com.brushwork.paint.ui.tools.strip.StripKeysV19
 import com.brushwork.paint.ui.tools.strip.StripRow
 import com.brushwork.paint.ui.tools.strip.StripSpec
 import com.brushwork.paint.vector.CurveGenKind
+import com.brushwork.paint.vector.draw.VectorEraseMode
+import com.brushwork.paint.vector.draw.VectorEraserModes
 
 /*
  * The Curve, Polyline and Path strips (v1.8, design §3.9 and §3.7, area E): [curveStrip] builds
@@ -124,6 +129,8 @@ internal sealed interface CurveTyping {
 internal class CurveStripUi(sheetState: MutableState<CurveSheet> = mutableStateOf(CurveSheet.NONE)) {
     var sheet by sheetState
     var typing by mutableStateOf<CurveTyping?>(null)
+    /** v1.9 (R11 a): the layer the mode cell's [EraseLabels19.TURN_INTO_PIXELS] asks about ([ErasePixelsDialog]), else null. */
+    var pixels by mutableStateOf<Layer?>(null)
 }
 
 /** The selected points' corner state, as the sharp item offers it. */
@@ -175,7 +182,25 @@ internal data class CurveStripFacts(
     val order: Int = 4,
     /** Path: one smooth middle point selected ([PATH_WIDTH_CAPTION] applies). */
     val caption: Boolean = false,
+    /**
+     * v1.9 (R11 a): the Eraser's mode while the tool erases a vector or legacy shape layer's
+     * content: row 1 shows the mode cell ([eraseCellMode]); null otherwise.
+     */
+    val eraseCell: VectorEraseMode? = null,
 )
+
+/**
+ * v1.9 (R11 a): the mode [tool]'s row-1 mode cell shows ([VectorEraseChooser.modeCell]): the
+ * Eraser's, while the tool erases ([CurveTool.eraseOn]) the objects of a vector or legacy shape
+ * layer (its content, not its mask); else null (Compose state).
+ */
+internal fun eraseCellMode(tool: CurveTool): VectorEraseMode? {
+    if (!tool.eraseOn) return null
+    val c = tool.controller
+    val layer = tool.eraseTarget
+    if (!VectorEraseChooser.holdsObjects(layer) || c.editTargetOf(layer) != EditTarget.CONTENT) return null
+    return VectorEraserModes.mode(c)
+}
 
 /** The strip facts of [tool] now (read in a `derivedStateOf`). */
 internal fun curveFacts(tool: CurveTool): CurveStripFacts {
@@ -213,6 +238,7 @@ internal fun curveFacts(tool: CurveTool): CurveStripFacts {
         reopened = tool.isReopened,
         order = tool.pathOrder,
         caption = pathCaptionApplies(tool),
+        eraseCell = eraseCellMode(tool),
     )
 }
 
@@ -283,10 +309,16 @@ internal fun curveSpec(tool: CurveTool, f: CurveStripFacts, ui: CurveStripUi): S
     val items = ArrayList<StripItem>()
     val open = f.points > 0
     val kind = f.kind
+    // v1.9 (R11 a): erasing a vector or shape layer, the mode cell follows the stroke kind in row 1
+    // (it never leaves it); room is made where row 1 is full: the stroke kind may go to the More
+    // row first (Curve and Polyline with a path open, Path), and a generated curve's item moves there.
+    val cell = eraseCellItem(tool, f, ui)
+    val kindRank = if (cell != null) 1 else 0
     when (kind) {
         CurveKind.CURVE -> if (!open) {
             items += curvesItem(tool)
             items += strokeKindItem(tool, f, StripRow.ROW1, 0)
+            if (cell != null) items += cell
             if (f.stroke == CurveStroke.PLAIN) items += lineWidthItem(tool, ui, StripRow.ROW1, 1)
             items += closedItem(tool, StripRow.MORE)
             items += brushOrTaper(tool, f)
@@ -295,8 +327,9 @@ internal fun curveSpec(tool: CurveTool, f: CurveStripFacts, ui: CurveStripUi): S
             items += addItem(tool)
             items += deleteItem(tool, f)
             items += closedItem(tool, StripRow.ROW1)
-            items += strokeKindItem(tool, f, StripRow.ROW1, 0)
-            if (f.generated != null) items += generatorItem(tool, f.generated, ui, StripRow.ROW1, 1)
+            items += strokeKindItem(tool, f, StripRow.ROW1, kindRank)
+            if (cell != null) items += cell
+            if (f.generated != null) items += generatorItem(tool, f.generated, ui, if (cell != null) StripRow.MORE else StripRow.ROW1, if (cell != null) 0 else 1)
             if (f.sharp != SharpState.NONE) items += sharpItem(tool, f)
             // The host composes items by position: an item that a control's use brings in comes
             // after that control, so the control (an open Handles popup, a slider being dragged)
@@ -318,6 +351,7 @@ internal fun curveSpec(tool: CurveTool, f: CurveStripFacts, ui: CurveStripUi): S
         }
         CurveKind.POLYLINE -> if (!open) {
             items += strokeKindItem(tool, f, StripRow.ROW1, 0)
+            if (cell != null) items += cell
             if (f.stroke == CurveStroke.PLAIN) items += lineWidthItem(tool, ui, StripRow.ROW1, 0)
             items += closedItem(tool, StripRow.MORE)
             items += brushOrTaper(tool, f)
@@ -326,7 +360,8 @@ internal fun curveSpec(tool: CurveTool, f: CurveStripFacts, ui: CurveStripUi): S
             items += addItem(tool)
             items += deleteItem(tool, f)
             items += closedItem(tool, StripRow.ROW1)
-            items += strokeKindItem(tool, f, StripRow.ROW1, 0)
+            items += strokeKindItem(tool, f, StripRow.ROW1, kindRank)
+            if (cell != null) items += cell
             thicknessItem(tool, f, ui)?.let { items += it }
             if (f.anyThickness) items += all100Item(tool)
             items += selectAllItem(tool, f)
@@ -340,7 +375,8 @@ internal fun curveSpec(tool: CurveTool, f: CurveStripFacts, ui: CurveStripUi): S
         CurveKind.PATH -> if (!open) {
             items += curvesItem(tool)
             items += shapesItem(tool)
-            items += strokeKindItem(tool, f, StripRow.ROW1, 0)
+            items += strokeKindItem(tool, f, StripRow.ROW1, kindRank)
+            if (cell != null) items += cell
             items += orderItem(tool, f, StripRow.MORE)
             items += endpointItem(tool)
             items += closedItem(tool, StripRow.MORE)
@@ -350,8 +386,10 @@ internal fun curveSpec(tool: CurveTool, f: CurveStripFacts, ui: CurveStripUi): S
             items += addItem(tool)
             items += deleteItem(tool, f)
             items += closedItem(tool, StripRow.ROW1)
-            items += orderItem(tool, f, StripRow.ROW1)
+            // (Erasing: the order goes to the More row before the stroke kind.)
+            items += orderItem(tool, f, StripRow.ROW1, if (cell != null) 2 else 0)
             items += strokeKindItem(tool, f, StripRow.ROW1, 1)
+            if (cell != null) items += cell
             items += endpointItem(tool)
             if (f.sharp != SharpState.NONE) items += sharpItem(tool, f)
             if (f.anyThickness) items += all100Item(tool)
@@ -406,6 +444,8 @@ private fun CurveOverlays(tool: CurveTool, ui: CurveStripUi) {
     }
     // v1.9 (R18): Polyline's bevel popup, More row open or closed.
     if (tool.polyline) CurveBevelPopupHost(tool)
+    // v1.9 (R11 a): the mode cell's "Turn into pixels" (the erase then takes the layer's pixels).
+    ui.pixels?.let { layer -> ErasePixelsDialog(tool.controller, layer) { ui.pixels = null } }
 }
 
 // ====================================================================== items
@@ -501,6 +541,21 @@ private fun strokeKindItem(tool: CurveTool, f: CurveStripFacts, row: StripRow, r
         }
     }
 
+/**
+ * v1.9 (R11 a): the row-1 mode cell while the tool erases a vector or shape layer
+ * ([CurveStripFacts.eraseCell]; StripKeysV19.ERASE_MODE_CELL, A5's [VectorEraseChooser.modeCell]):
+ * a mode changes the Eraser's (the pending erase follows it); "Turn into pixels" asks first.
+ */
+private fun eraseCellItem(tool: CurveTool, f: CurveStripFacts, ui: CurveStripUi): StripItem? {
+    val mode = f.eraseCell ?: return null
+    val c = tool.controller
+    val layer = tool.eraseTarget
+    // (The cell uses no strip context.)
+    return VectorEraseChooser.modeCell(StripContext(selectionBarShown = false, vectorMode = true), layer, mode, onMode = { VectorEraserModes.setMode(c, it) }) {
+        ui.pixels = layer
+    }
+}
+
 /** One paint mode of the Stroke kind dropdown: [text] shown, known by [description] alone (I10). */
 @Composable
 private fun PaintModeEntry(text: String, description: String, selected: Boolean, available: Boolean, onClick: () -> Unit) {
@@ -587,7 +642,7 @@ private fun closedItem(tool: CurveTool, row: StripRow): StripItem {
 internal fun orderLabel(order: Int): String = "Order $order"
 
 /** Path: "Order 4" (its value); its popup holds v1.7's stepper ("Lower order", "Higher order"). */
-private fun orderItem(tool: CurveTool, f: CurveStripFacts, row: StripRow) = item(CurveKeys.ORDER, orderLabel(f.order), CURVE_ORDER_DP, row) {
+private fun orderItem(tool: CurveTool, f: CurveStripFacts, row: StripRow, rank: Int = 0) = item(CurveKeys.ORDER, orderLabel(f.order), CURVE_ORDER_DP, row, rank) {
     val order = tool.pathOrder
     DropCell(orderLabel(order), CURVE_ORDER_DP, longPress = false, arrow = false, face = { CellText(orderLabel(order)) }) { _ ->
         OrderStepper(tool, tool.pathOrder)
