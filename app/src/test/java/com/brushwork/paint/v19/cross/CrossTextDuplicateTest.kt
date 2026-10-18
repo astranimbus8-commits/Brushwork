@@ -11,6 +11,9 @@ import com.brushwork.paint.tools.text.TextCodec
 import com.brushwork.paint.tools.text.TextItem
 import com.brushwork.paint.tools.text.TextTool
 import com.brushwork.paint.ui.common.LayerLabels19
+import com.brushwork.paint.ui.placement.TextStripFacts
+import com.brushwork.paint.ui.placement.textSpec
+import com.brushwork.paint.ui.tools.strip.StripRow
 import com.brushwork.paint.v19.a4.A4Kit
 import com.brushwork.paint.v19.cross.CrossUndoSnap.oneExactStep
 import com.brushwork.paint.vector.select.ObjectActions
@@ -82,6 +85,9 @@ class CrossTextDuplicateTest {
         val start = items(lower)
         assertTrue(tool.editLayer(lower, index = 1))
         assertTrue(tool.canDuplicate)
+        val more = textSpec(tool, TextStripFacts.of(tool, activeText = true, barShown = false)).items
+            .filter { it.row == StripRow.MORE && it.shown }.map { it.label }
+        assertTrue("the More row offers Duplicate: $more", LayerLabels19.DUPLICATE in more)
         oneExactStep("More row", c, LayerLabels19.DUPLICATE_STEP) {
             assertTrue(tool.duplicateOpen())
             assertEquals("the copy opens", 2, tool.openIndex)

@@ -10,9 +10,15 @@ import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.text.TextCodec
 import com.brushwork.paint.tools.text.TextItem
 import com.brushwork.paint.tools.text.TextTool
+import com.brushwork.paint.ui.placement.TextStripFacts
+import com.brushwork.paint.ui.placement.textSpec
+import com.brushwork.paint.ui.tools.strip.StripRow
 import com.brushwork.paint.v19.a4.A4Kit
+import com.brushwork.paint.v19.cross.CrossUndoSnap.Snap
+import com.brushwork.paint.v19.cross.CrossUndoSnap.assertSameDoc
 import com.brushwork.paint.v19.cross.CrossUndoSnap.oneExactStep
 import com.brushwork.paint.v19.cross.CrossUndoSnap.px
+import com.brushwork.paint.v19.cross.CrossUndoSnap.snap
 import com.brushwork.paint.vector.select.ObjectEdits
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -64,6 +70,11 @@ class CrossTextMergeEditArrangeTest {
         return c.tools.getValue(ToolId.TEXT) as TextTool
     }
 
+    /** The labels the Text strip's More row shows now, with no bar beside the strip. */
+    private fun moreRow(tool: TextTool): List<String> =
+        textSpec(tool, TextStripFacts.of(tool, activeText = true, barShown = false)).items
+            .filter { it.row == StripRow.MORE && it.shown }.map { it.label }
+
     /** Every text of [layer] opens in [tool] as itself, at its place; opening records nothing. */
     private fun assertEveryTextOpens(what: String, c: EditorController, tool: TextTool, layer: Layer) {
         val all = items(layer)
@@ -81,19 +92,21 @@ class CrossTextMergeEditArrangeTest {
     /**
      * "Lower" holds "Arrange" with "Over" on it (overlapping); "Upper" holds "Three" and "Four",
      * apart from each other and from them. Merged down: one text layer of the four, bottom first.
+     * Returns it, and the document before the merge when [exact].
      */
-    private fun merged(c: EditorController, exact: Boolean): Layer {
+    private fun merged(c: EditorController, exact: Boolean): Pair<Layer, Snap?> {
         val lower = kit.textLayer(c, kit.text("Arrange", 110f, 70f), kit.text("Over", 140f, 82f, red), name = "Lower")
         val upper = kit.textLayer(c, kit.text("Three", 80f, 180f, green), kit.text("Four", 240f, 180f), name = "Upper")
         assertEquals(MergeKind.TEXT_ITEMS, c.layerMerge.kindOf(upper, lower))
-        if (exact) oneExactStep("the merge", c, "Merge down") { c.mergeDown(upper) } else c.mergeDown(upper)
+        val start = if (exact) oneExactStep("the merge", c, "Merge down") { c.mergeDown(upper) }.first else null
+        if (!exact) c.mergeDown(upper)
         kit.settle(c)
         assertTrue("the upper layer went", c.doc.indexOf(upper) < 0)
         assertTrue("the merge keeps a text layer", lower.isTextLayer)
         assertEquals(listOf("Arrange", "Over", "Three", "Four"), texts(lower))
         assertEquals("each text has its own id", 4, items(lower).map { it.id }.toSet().size)
         assertRendered("merged", lower)
-        return lower
+        return lower to start
     }
 
     /** The edit of "Over" and the two arranges, each checked as one exact step when [exact]. */
@@ -123,6 +136,9 @@ class CrossTextMergeEditArrangeTest {
         // Bring forward "Arrange": past "Over it", which it overlaps (pixels change where they meet).
         assertTrue(tool.editLayer(layer, index = 0))
         assertTrue(tool.arrangeShown)
+        val more = moreRow(tool)
+        assertTrue("the More row offers Bring forward: $more", ObjectEdits.Arrange.FORWARD.label in more)
+        assertTrue("the More row offers Send backward: $more", ObjectEdits.Arrange.BACKWARD.label in more)
         assertTrue(tool.canBringForward)
         assertFalse(tool.canSendBackward)
         val under = kit.pixels(layer.bitmap)
@@ -151,29 +167,33 @@ class CrossTextMergeEditArrangeTest {
     @Test
     fun aMergedLayerOfSeveralTextsEditsAndArrangesOneExactStepEach() {
         val c = kit.controller()
-        val layer = merged(c, exact = true)
+        val (layer, start) = merged(c, exact = true)
         val tool = textTool(c)
         assertEveryTextOpens("after the merge", c, tool, layer)
         editAndArrange(c, tool, layer, exact = true)
         assertEveryTextOpens("after the arranges", c, tool, layer)
 
-        // Undo walks the four steps back to the two layers, and Redo forward to the end.
+        // Undo walks the four steps back to the two layers exactly (data and pixels), and Redo
+        // forward to the end exactly: nothing between the steps (texts opened and closed) moved.
         val end = items(layer)
+        val endDoc = snap(c)
         repeat(4) { c.undo() }
         assertEquals(listOf("Background", "Lower", "Upper"), c.doc.layers.map { it.name })
         assertEquals(listOf("Arrange", "Over"), texts(layer))
         assertRendered("back at the start", layer)
+        assertSameDoc("four Undos", start!!, snap(c))
         repeat(4) { c.redo() }
         kit.settle(c)
         assertEquals(listOf("Background", "Lower"), c.doc.layers.map { it.name })
         assertEquals(end, items(layer))
         assertRendered("forward at the end", layer)
+        assertSameDoc("four Redos", endDoc, snap(c))
     }
 
     @Test
     fun saveAndReopenKeepEveryTextItsOrderAndItsPixels() {
         val c = kit.controller()
-        val layer = merged(c, exact = false)
+        val (layer, _) = merged(c, exact = false)
         val tool = textTool(c)
         editAndArrange(c, tool, layer, exact = false)
         kit.settle(c)
