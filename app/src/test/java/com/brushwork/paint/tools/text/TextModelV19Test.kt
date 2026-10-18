@@ -77,11 +77,11 @@ class TextModelV19Test {
         val list = TextListSpec(type = TextListType.BULLETS)
         val vertical = TextItem("v", TextSpec(vertical = true, list = list, justify = TextJustify.ON)).sanitized()
         assertEquals(TextListSpec(), vertical.spec.list)
-        assertEquals("justify is kept (the layout ignores it, C23)", TextJustify.ON, vertical.spec.justify)
+        assertEquals("justify is kept (vertical columns justify, A3 step 12)", TextJustify.ON, vertical.spec.justify)
         val circle = TextPathSpec(type = TextPathType.CIRCLE, cx = 50f, cy = 50f, radius = 40f)
         val onPath = TextItem("p", TextSpec(list = list, justify = TextJustify.ALL), path = circle).sanitized()
         assertEquals(TextListSpec(), onPath.spec.list)
-        assertEquals(TextJustify.ALL, onPath.spec.justify)
+        assertEquals("justify is kept on a path (the layout ignores it, C23)", TextJustify.ALL, onPath.spec.justify)
         // A path switched off (NONE) is no path: the list stays.
         val off = TextItem("n", TextSpec(list = list), path = TextPathSpec(nodes = VSpline(listOf(VSplinePoint(0f, 0f), VSplinePoint(9f, 9f))))).sanitized()
         assertEquals(list, off.spec.list)
