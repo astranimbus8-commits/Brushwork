@@ -188,7 +188,7 @@ internal class LayerMerge(private val c: EditorController) {
         if (upper.array != null || lower.array != null) return LayerLabels19.WHY_COPIES
         if (above.any { it.threaded || it.wrap.isOn } || below.any { it.threaded || it.wrap.isOn }) return LayerLabels19.WHY_FRAMES
         if (above.size + below.size > TextCodec.MAX_ITEMS) return LayerLabels19.WHY_TOO_MANY
-        if (upper.opacity.compareTo(lower.opacity) != 0) return WHY_OPACITY
+        if (upper.opacity.compareTo(lower.opacity) != 0) return LayerLabels19.WHY_OPACITY
         if (lower.opacity < 1f) {
             val tops = textPixelRects(above)
             val bottoms = textPixelRects(below)
@@ -531,12 +531,6 @@ internal class LayerMerge(private val c: EditorController) {
 
         /** At most this many objects are drawn piece by piece ([paintParts]); more take their one bounding box. */
         const val MAX_PARTS = 64
-
-        /**
-         * Stand-in for a `LayerLabels19.WHY_OPACITY` entry (LeadRequest): R19 names no reason for two
-         * text layers of different opacities, which can't merge as texts (one layer, one opacity).
-         */
-        const val WHY_OPACITY = "the layers have different opacities"
 
         /** [textWhyOf] of a text layer whose data does not decode: pixels, with no reason to show. */
         const val UNREADABLE = ""

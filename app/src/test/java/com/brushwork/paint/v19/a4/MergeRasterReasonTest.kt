@@ -62,6 +62,7 @@ class MergeRasterReasonTest {
             Triple("texts, upper with copies", pair(::lowerText, ::upperText).also { (_, u, _) -> u.array = LayerArray(ArraySpec(count = 3)) }, LayerLabels19.WHY_COPIES),
             Triple("texts, lower a frame", pair(::lowerText, ::upperText).also { (_, _, l) -> l.textData = TextCodec.encodeAll(TextCodec.decodeAll(l.textData).map { it.copy(spec = it.spec.copy(box = TextBoxSpec(width = 120f, minHeight = 40f)), thread = TextThreadSpec(storyId = 9L, story = "One", end = 3)) }) }, LayerLabels19.WHY_FRAMES),
             Triple("texts, 65 in all", pair({ c -> kit.textLayer(c, *Array(64) { kit.text("t$it", 20f + (it % 8) * 26f, 20f + (it / 8) * 20f) }, name = "Lower") }, ::upperText), LayerLabels19.WHY_TOO_MANY),
+            Triple("texts at 50 % onto texts at 100 %", pair(::lowerText, ::upperText).also { (c, u, _) -> opacity(c, u, 0.5f) }, LayerLabels19.WHY_OPACITY),
             Triple("texts that meet, both at 60 %", pair(::lowerText, { c -> kit.textLayer(c, kit.text("Two", 70f, 48f), name = "Upper") }).also { (c, u, l) -> opacity(c, u, 0.6f); opacity(c, l, 0.6f) }, LayerLabels19.WHY_OVERLAP),
             Triple("text onto shape", pair(::lowerShape, ::upperText), LayerLabels19.WHY_KINDS),
             Triple("vector onto text", pair(::lowerText, { c -> kit.vectorLayer(c, listOf(kit.box(120f, 100f, 200f, 160f)), "Upper") }), LayerLabels19.WHY_KINDS),

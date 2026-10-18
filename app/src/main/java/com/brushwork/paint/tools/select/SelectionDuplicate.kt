@@ -89,7 +89,7 @@ object SelectionDuplicate {
         val d = offset(c)
         val dest = Rect(src).apply { offset(d, d) }
         if (src.isEmpty || !src.intersect(0, 0, doc.width, doc.height) || !dest.intersect(0, 0, doc.width, doc.height)) {
-            c.toast(NOTHING_HERE.format(layer.name)); return false
+            c.toast(LayerLabels19.NOTHING_TO_DUPLICATE.format(layer.name)); return false
         }
         val copy: Bitmap
         val moved: Selection
@@ -146,7 +146,7 @@ object SelectionDuplicate {
         c.vectors.flushPending()
         val content = layer.vector ?: return false
         val ids = c.vectors.touching(layer, sel)
-        if (ids.isEmpty()) { c.toast(NOTHING_HERE.format(layer.name)); return false }
+        if (ids.isEmpty()) { c.toast(LayerLabels19.NOTHING_TO_DUPLICATE.format(layer.name)); return false }
         val d = offset(c).toFloat()
         val (after, copies) = ObjectEdits.duplicate(content, ids, d, d) ?: return false
         c.vectors.update(layer, after, LayerLabels19.DUPLICATE_STEP) { applied ->
@@ -163,7 +163,7 @@ object SelectionDuplicate {
         val before = TextCodec.decodeAll(layer.textData).size
         val steps = c.undoManager.undoCount
         val action = TextItemOps.duplicateItems(c, layer, RectF(sel.bounds)) ?: run {
-            c.toast(NOTHING_HERE.format(layer.name)); return false
+            c.toast(LayerLabels19.NOTHING_TO_DUPLICATE.format(layer.name)); return false
         }
         // (The step is ours to record when duplicateItems left it out.)
         if (c.undoManager.undoCount == steps) c.pushUndo(action)
@@ -171,9 +171,6 @@ object SelectionDuplicate {
         c.toast(String.format(LayerLabels19.DUPLICATED, made))
         return true
     }
-
-    /** Stand-in until a v1.9 label (LeadRequest): the selection holds nothing of the layer. */
-    internal const val NOTHING_HERE = "The selection holds nothing of \"%s\" to duplicate"
 
     private const val NO_MEMORY = "Not enough memory to duplicate this"
 }

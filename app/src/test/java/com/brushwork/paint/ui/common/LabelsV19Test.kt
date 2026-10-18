@@ -362,7 +362,7 @@ class LabelsV19Test {
             "merge dialog over the layers",
             v19 = pick(
                 "LayerLabels19", "MERGE_TITLE", "MERGE_BODY", "MERGE_CONFIRM", "KEEP_EDITABLE", "KEEP_EDITABLE_NOTE", "MERGED_AS_PIXELS",
-                "WHY_MASK", "WHY_BLEND", "WHY_CLIP", "WHY_COPIES", "WHY_KINDS", "WHY_FRAMES", "WHY_OVERLAP", "WHY_TOO_MANY",
+                "WHY_MASK", "WHY_BLEND", "WHY_CLIP", "WHY_COPIES", "WHY_KINDS", "WHY_FRAMES", "WHY_OVERLAP", "WHY_TOO_MANY", "WHY_OPACITY",
             ),
             older = listOf("Cancel", "Merge down", "Merge visible"),
         )
@@ -370,7 +370,7 @@ class LabelsV19Test {
         // and the button shows it with its own description).
         assertNoSubstrings(
             "selection bar",
-            v19 = pick("LayerLabels19", "DUPLICATE_DESC", "DUPLICATED"),
+            v19 = pick("LayerLabels19", "DUPLICATE_DESC", "DUPLICATED", "NOTHING_TO_DUPLICATE"),
             older = visible("ui/editor/SelectionBar.kt"),
         )
         assertNoSubstrings(

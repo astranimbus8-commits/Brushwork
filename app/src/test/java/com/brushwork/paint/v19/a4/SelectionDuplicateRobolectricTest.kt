@@ -174,7 +174,7 @@ class SelectionDuplicateRobolectricTest {
         kit.settle(c)
         assertEquals(steps, c.undoManager.undoCount)
         assertEquals(1, layer.vector!!.objects.size)
-        assertEquals(String.format(SelectionDuplicate.NOTHING_HERE, layer.name), c.message)
+        assertEquals(String.format(LayerLabels19.NOTHING_TO_DUPLICATE, layer.name), c.message)
     }
 
     @Test
