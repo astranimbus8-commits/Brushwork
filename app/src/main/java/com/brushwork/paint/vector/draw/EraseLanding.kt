@@ -13,11 +13,11 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 
 /**
  * v1.9 (A5): what an erase on a vector layer erases with: the Eraser's swept path, or a tool's
@@ -45,6 +45,15 @@ internal interface EraseFootprint {
  * thread for at most [syncTargets] targets, inside another step, under another busy operation,
  * while a pending step is flushed, after [MAX_RERUNS] reruns, and under a test's render policy
  * without a cut dispatcher ([VectorDrawState.cutsInBackground]).
+ *
+ * v1.9 (A7b step 5, R9; G2): a cut still running when another step lands it ([Cutting.flush])
+ * is waited for with the editor's bounded wait (`EditorController.awaitDeferredJob`, 1.5 s; it
+ * waited for good before). When the cut is not done by then it is cancelled ([timedOut]): the
+ * layer keeps its data and pixels, no step is recorded, and the editor says "… took too long and
+ * was cancelled"; or, when it must land (`EditorController.mustLandDeferredWork`: closing,
+ * leaving, an export...), it is cut again here at once, as one step. While a cut is pending,
+ * Undo and Redo reach the editor's wait guard ([VectorDrawState.hasPendingCut]): an Undo whose
+ * wait cancelled the cut is that Undo.
  *
  * [onDone] is called once: true when the step was recorded. The owner's preview goes then.
  */
@@ -120,14 +129,21 @@ internal class EraseLanding(
         var done = false
         val completion = CompletableDeferred<Unit>()
 
+        /** The cut's own busy overlay was asked for (it is not another operation's, [mustLand]). */
+        var overlay = false
+
         override fun flush() {
             if (done) return
-            val cuts = try {
-                runBlocking { job?.await() }
-            } catch (e: CancellationException) {
-                null
-            } catch (e: Exception) {
-                EraseCut.Cuts.FAILED
+            val job = job
+            var cuts: EraseCut.Cuts? = null
+            if (job != null) {
+                if (!c.awaitDeferredJob(job)) {
+                    if (!mustLand(this)) { timedOut(this); return }
+                    // It must land: the cut runs again here (null: the erase runs again, on this thread).
+                    job.cancel()
+                } else {
+                    cuts = resultOf(job)
+                }
             }
             // Whatever lands (or runs again) now does it on this thread, as one step.
             state.cutsNow++
@@ -139,10 +155,48 @@ internal class EraseLanding(
         }
     }
 
+    /** A finished cut's pieces: null when it was cancelled, [EraseCut.Cuts.FAILED] when it failed. */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private fun resultOf(job: Deferred<EraseCut.Cuts>): EraseCut.Cuts? = try {
+        job.getCompleted()
+    } catch (e: CancellationException) {
+        null
+    } catch (e: Exception) {
+        EraseCut.Cuts.FAILED
+    }
+
+    /**
+     * A wait for [p] that hit the limit lands it on the spot instead of cancelling it while the
+     * editor must land its work (`EditorController.mustLandDeferredWork`); the cut's own busy
+     * overlay is not another operation (as "Rendering vectors…" is not for the renders).
+     */
+    private fun mustLand(p: Cutting): Boolean =
+        c.leavingDeferred || (c.mustLandDeferredWork() && !(p.overlay && c.busyMessage == label))
+
+    /**
+     * v1.9 (A7b step 5, G2): [p]'s wait hit the limit: the cut is cancelled and never lands. The
+     * layer keeps the data and pixels it had (I1), no step is recorded, the owner hears
+     * `onDone(false)` (its preview goes) and the controller says so (`StabilityLabels19.TOO_SLOW`).
+     */
+    private fun timedOut(p: Cutting) {
+        if (p.done) return
+        p.done = true
+        p.job?.cancel()
+        settled(p)
+        try {
+            done(false, p.finish)
+        } finally {
+            p.completion.complete(Unit)
+        }
+        c.onDeferredWaitTimedOut(label)
+    }
+
     private fun cutInBackground(p: Cutting, targets: List<VObject>, region: Path) {
         val job = c.scope.async(state.cutDispatcher ?: Dispatchers.Default) { PerfTrace.span(PerfTrace.CUT) { EraseCut.cutAll(targets, region) } }
         p.job = job
         c.addDeferredStep(p)
+        state.cutsPending++
+        c.refreshDeferredWaitGuard()
         // (Dispatchers.Main, not immediate, as VectorLayers' renders: it never lands inside another operation.)
         c.scope.launch(Dispatchers.Main) {
             val cuts = try {
@@ -156,8 +210,18 @@ internal class EraseLanding(
         }
         c.scope.launch {
             delay(CUT_BUSY_AFTER_MS)
-            if (!p.done && c.busyMessage == null) c.runBusy(label) { p.completion.await() }
+            if (!p.done && c.busyMessage == null) {
+                p.overlay = true
+                c.runBusy(label) { p.completion.await() }
+            }
         }
+    }
+
+    /** [p] is no longer pending: no longer a step to land first, nor Undo's and Redo's to wait for. */
+    private fun settled(p: Cutting) {
+        c.removeDeferredStep(p)
+        state.cutsPending--
+        c.refreshDeferredWaitGuard()
     }
 
     /**
@@ -167,7 +231,7 @@ internal class EraseLanding(
     private fun landed(p: Cutting, cuts: EraseCut.Cuts?) {
         if (p.done) return
         p.done = true
-        c.removeDeferredStep(p)
+        settled(p)
         p.completion.complete(Unit)
         val now = contentNow()
         val same = now != null && c.doc.indexOf(layer) >= 0 && (now === p.base || (layer.vector == null && now == p.base))
