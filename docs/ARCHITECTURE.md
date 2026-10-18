@@ -2120,8 +2120,10 @@ unbounded. A soak harness runs the whole loop for Q10 and Q11 every night.
   the last save; 200 strokes (brush, eraser, a layer mask), LOW every 50, CRITICAL every 100 with
   Undo and Redo after it; a blur in a selection and Invert; a Magnetic lasso round (Q10: 12
   anchors, a drag, one selection step); a Color select round (Q11: Reds, fuzziness drags,
-  samples, one selection step); a layer deleted with its folder while the smart guides scan
-  it, recycled by CRITICAL (H4: only a step with folders recycles what it removed); save;
+  samples, one selection step); a layer deleted with its folder just after the smart guides
+  start scanning a copy of it, recycled by CRITICAL (H4: only a step with folders recycles
+  what it removed; whether the scan still runs then depends on the threads: it did in 6 of 6
+  rounds on the desktop, and `LayerBoundsCacheCopyTest` holds it running for certain); save;
   close. It asserts no crash or handled report and no scope error, layers reopen as saved, no
   live bitmap is recycled, and closed editors' caches hold 0 bytes. The registry must not grow
   round by round. No main-thread call may reach a FREEZE report, and each tool activation's
@@ -2129,7 +2131,7 @@ unbounded. A soak harness runs the whole loop for Q10 and Q11 every night.
   (the job's JUnit XML keeps them). On the desktop JVM a run takes about 17 s; the longest call
   is a filter start (about 180 ms), the activations take under 5 ms.
 
-**At the merge (the lead).** `MemoryGovernorRegistryTest.theDefaultPolicyIsV18`,
+**For the merge (asked of the lead).** `MemoryGovernorRegistryTest.theDefaultPolicyIsV18`,
 `VectorAsyncBurstQaTest` (its 3 s gate is past the 1.5 s wait) and A6's
 `GovernorRegistrationTest` line 155 (an editor now also registers "undo history") still pin the
 behaviour before A7b. `EditorController.dispose` should close `undoMemoryRegistration`. The rest

@@ -8,6 +8,7 @@ import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.Shader
+import android.os.Looper
 import com.brushwork.paint.BrushworkApp
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.EditorSession
@@ -44,6 +45,7 @@ import org.junit.experimental.categories.Category
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.shadows.ShadowLog
 import kotlin.math.max
 import kotlin.random.Random
@@ -83,6 +85,9 @@ class SoakHarnessTest {
     /** Each activation's main-thread time (ms), per tool. */
     private val activations = LinkedHashMap<String, MutableList<Double>>()
 
+    /** The H4 rounds whose layer was recycled while the guides' scan of its copy still ran. */
+    private var scansInFlight = 0
+
     @Before
     fun setUp() {
         assumeTrue("the soak job only (-PsoakOnly)", System.getProperty("bw.testSet") == "soak")
@@ -118,6 +123,7 @@ class SoakHarnessTest {
         // The nightly job's log keeps the numbers (the JUnit XML's system-out).
         println("Soak, longest main-thread calls: $report")
         println("Soak, activations (ms): " + activations.entries.joinToString { (tool, t) -> "$tool " + t.joinToString("/") { "%.0f".format(it) } })
+        println("Soak, H4 rounds with the scan still running at the trim: $scansInFlight of ${2 * CYCLES}")
         for ((kind, ms) in longest) assertTrue("$kind held the main thread ${"%.0f".format(ms)} ms (a FREEZE report at $freeze): $report", ms < freeze)
         // An activation renders off the main thread: the best of the rounds (the first loads classes).
         for ((tool, times) in activations) {
@@ -382,13 +388,24 @@ class SoakHarnessTest {
      * and the guides end. The layer goes with a folder: a structural step with folders
      * (`LayerTreeAction`) recycles the layers it removed when it is dropped; v1.6's
      * `RemoveLayerAction` (no folder in the artwork) leaves them to the collector.
+     *
+     * A diagonal across the layer makes its content too large for its lines to be found on the
+     * spot, so they are scanned in the background; only this layer is asked for, and one turn of
+     * the main thread lets the worker copy it and start the scan before the trim recycles it.
+     * Whether the scan is still running then depends on the threads: `LayerBoundsCacheCopyTest`
+     * holds it running for certain.
      */
     private fun smartGuidesWhileTrimming(c: EditorController, rnd: Random, where: String) {
         c.selectTool(ToolId.BRUSH)
         val temp = c.addLayer("Soak temp") ?: throw AssertionError("$where: no room for a layer (${c.message})")
-        repeat(3) { stroke(c, rnd) }
+        diagonal(c)
+        repeat(2) { stroke(c, rnd) }
         val folder = c.putInNewFolder(temp) ?: throw AssertionError("$where: no folder (${c.message})")
-        c.snapping.prepare()
+        c.snapping.prepare(exclude = c.doc.layers.filter { it !== temp })
+        assertTrue("$where: the guides scan the layer", c.snapping.isBusy)
+        shadowOf(Looper.getMainLooper()).idle()
+        // Still busy: the copy's scan has not come back to the main thread yet.
+        if (c.snapping.isBusy) scansInFlight++
         c.deleteFolder(folder, keepChildren = false)
         assertTrue("$where: the folder and its layer went", c.doc.layers.none { it === temp || it === folder })
         c.selectLayer(c.doc.layers.indexOf(layer(c, PAINT)))
@@ -399,6 +416,16 @@ class SoakHarnessTest {
         c.snapping.prepare()
         assertTrue(Smoke.pumpUntil { !c.snapping.isBusy })
         Smoke.assertQuiet(c, "$where: smart guides")
+    }
+
+    /** One stroke from near the top left corner to near the bottom right one. */
+    private fun diagonal(c: EditorController) {
+        val w = c.doc.width
+        val h = c.doc.height
+        fun at(f: Float, k: Int) = ToolPoint(f * w, f * h, 1f, 8L * k)
+        c.pointerDown(at(0.1f, 0))
+        for (k in 1..20) c.pointerMove(at(0.1f + 0.04f * k, k))
+        c.pointerUp(at(0.9f, 21))
     }
 
     // ------------------------------------------------------------------ save, close, checks
