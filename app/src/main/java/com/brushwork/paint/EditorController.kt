@@ -351,6 +351,40 @@ class EditorController(
         um.onChanged = { canUndo = um.canUndo; canRedo = um.canRedo }
     }
 
+    /**
+     * v1.9 (A7b step 1, R9, design 2.4.3): the undo history as a `MemoryGovernor` entry
+     * ([com.brushwork.paint.engine.GovernorPolicyV19.UNDO_ENTRY], priority 50: trimmed last), held
+     * weakly (a closed editor's entry goes by itself). Under CRITICAL pressure it drops the oldest
+     * steps until the Java heap is under 70 % ([trimUndoForMemory]). `UndoManager` keeps its steps'
+     * sizes to itself, so the entry reports 0 bytes. [dispose] may close it.
+     */
+    internal val undoMemoryRegistration: MemoryGovernor.Registration =
+        com.brushwork.paint.engine.GovernorPolicyV19.registerWeakly(
+            com.brushwork.paint.engine.GovernorPolicyV19.UNDO_ENTRY,
+            com.brushwork.paint.engine.GovernorPolicyV19.PRIORITY_UNDO,
+            this,
+            bytes = { 0L },
+            trim = { c, pressure -> c.trimUndoForMemory(pressure) },
+        )
+
+    /**
+     * What the governor's undo entry frees: under [com.brushwork.paint.engine.MemoryPressure.CRITICAL]
+     * the oldest steps until the Java heap is under 70 % of its maximum (the newest step stays),
+     * then [StabilityLabels19.UNDO_TRIMMED] when any went; nothing under a lower pressure. Returns
+     * the heap bytes that went (as far as a collection shows them). Main thread (posted there
+     * when called from another).
+     */
+    internal fun trimUndoForMemory(pressure: com.brushwork.paint.engine.MemoryPressure): Long {
+        if (pressure != com.brushwork.paint.engine.MemoryPressure.CRITICAL) return 0L
+        if (android.os.Looper.myLooper() != android.os.Looper.getMainLooper()) {
+            scope.launch(Dispatchers.Main) { trimUndoForMemory(pressure) }
+            return 0L
+        }
+        val trimmed = com.brushwork.paint.engine.GovernorPolicyV19.trimUndo(undoManager)
+        if (trimmed.steps > 0) toast(StabilityLabels19.UNDO_TRIMMED)
+        return trimmed.bytes
+    }
+
     /** Maximum number of layers for this canvas size given the heap. */
     val maxLayers: Int
         get() {
