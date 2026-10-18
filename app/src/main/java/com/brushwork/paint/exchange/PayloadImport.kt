@@ -209,25 +209,28 @@ object PayloadImport {
      * The bottom layers of [layers] that fit in [room] free layer slots, by the editor's own
      * rules: any layer needs one free slot, an adjustment layer two (`canAddAdjustmentLayer`).
      * v1.7: a folder needs none (it has no pixels); a raster array takes two, its source pixels
-     * counting as a layer (`effectiveLayerCount`).
+     * counting as a layer (`effectiveLayerCount`). v1.9 (A7b step 6, the lead at A7b's merge): a
+     * layer mask takes one more, as it counts there too; an adjustment layer's two already hold
+     * its mask.
      */
     internal fun fitting(layers: List<PayloadLayer>, room: Int): List<PayloadLayer> {
         var left = room
         val out = ArrayList<PayloadLayer>()
         for (pl in layers) {
             val pixelArray = !pl.isFolder && pl.adjustment == null && pl.array != null && hasPixelSource(pl.array)
+            val mask = if (!pl.isFolder && pl.hasMask) 1 else 0
             val needed = when {
                 pl.isFolder -> 0
                 pl.kind == PayloadKind.ADJUSTMENT || pl.adjustment != null -> 2
-                pixelArray -> 2
-                else -> 1
+                pixelArray -> 2 + mask
+                else -> 1 + mask
             }
             if (needed > left) break
             out += pl
             left -= when {
                 needed == 0 -> 0
-                pixelArray -> 2
-                else -> 1
+                pixelArray -> 2 + mask
+                else -> 1 + mask
             }
         }
         return out

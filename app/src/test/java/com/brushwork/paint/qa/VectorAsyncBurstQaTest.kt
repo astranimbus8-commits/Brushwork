@@ -46,8 +46,10 @@ import kotlin.math.abs
  * bar's Clear while Transform is open, undo / redo of a Shape edit. Nothing may be lost, come
  * back, or leave pixels that are not the rendering of the objects; every action stays one step.
  *
- * The render worker is a gate: a job waits until the test opens it (or 3 s pass, so a flush that
- * waits for it never hangs), so the order of events is fixed.
+ * The render worker is a gate: a job waits until the test opens it (or 1 s passes, so a flush that
+ * waits for it never hangs), so the order of events is fixed. v1.9 (A7b step 5): a flush waits at
+ * most 1.5 s (`EditorController.deferredWaitLimitMs`), then cancels the render; the gate opens
+ * itself before that, so a flush still lands the render (the timeout is `DeferredWaitTimeoutTest`'s).
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = "w392dp-h857dp-xxhdpi")
@@ -58,7 +60,7 @@ class VectorAsyncBurstQaTest {
     private val ink = 0xFF1A2A6C.toInt()
     private val gate = GateWorker()
 
-    /** Jobs start when [open] (or after 3 s). */
+    /** Jobs start when [open] (or after 1 s: within A7b's 1.5 s wait). */
     private class GateWorker : CoroutineDispatcher() {
         private val ex = Executors.newSingleThreadExecutor { Thread(it, "gated-vector-worker").apply { isDaemon = true } }
         private val lock = Object()
@@ -67,7 +69,7 @@ class VectorAsyncBurstQaTest {
         override fun dispatch(context: CoroutineContext, block: Runnable) {
             ex.execute {
                 synchronized(lock) {
-                    val until = System.currentTimeMillis() + 3000
+                    val until = System.currentTimeMillis() + 1000
                     while (!opened && System.currentTimeMillis() < until) lock.wait(20)
                 }
                 block.run()

@@ -1,0 +1,6 @@
+layer_1_r1.bin
+layer_2_r1.bin
+layer_3_r1.bin
+layer_4_r1.bin
+mask_2_r1.bin
+project.json

@@ -10,8 +10,9 @@ import org.junit.Test
 
 /**
  * v1.9 F1b (V28, design 2.4.3): the [MemoryGovernor] registry: registering and closing entries,
- * their order, the trim levels' pressures, what the policy is handed, and the default policy and
- * `GovernorPolicies.current()`, which do what v1.8 did (nothing; every allocation admitted).
+ * their order, the trim levels' pressures, what the policy is handed, and the default policy,
+ * which does what v1.8 did (nothing; every allocation admitted). Since A7b step 1
+ * `GovernorPolicies.current()` is `GovernorPolicyV19`.
  */
 @Suppress("DEPRECATION") // the trim levels are what Android still delivers
 class MemoryGovernorRegistryTest {
@@ -99,8 +100,10 @@ class MemoryGovernorRegistryTest {
     }
 
     @Test
-    fun theDefaultPolicyIsV18() {
-        assertSame(MemoryGovernor.DefaultPolicy, GovernorPolicies.current())
+    fun theDefaultPolicyIsV18AndTheAppRunsV19() {
+        // v1.9 (A7b step 1, design 3.2 A7b, R9): the app runs GovernorPolicyV19 (GovernorPolicyTest
+        // pins its levels); MemoryGovernor's own default, until BrushworkApp.onCreate sets it, is v1.8's.
+        assertSame(GovernorPolicyV19, GovernorPolicies.current())
         assertSame(MemoryGovernor.DefaultPolicy, MemoryGovernor.policy)
         var trims = 0
         register("cache", 0, bytes = 1L shl 30, trim = { trims++; 1L })

@@ -28,6 +28,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.android.awaitFrame
 import kotlinx.coroutines.async
@@ -35,7 +36,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.abs
 
@@ -59,11 +59,11 @@ import kotlin.math.abs
  * - **Superseded**: a newer "Edit array" of the same layer ([supersede], first thing in
  *   `ArrayOps.edit`) drops the render still running: no step, its caller hears `onDone(false)`,
  *   and the new edit is made from the layer's data, which the dropped one never changed.
- * - **Anything else first lands it** ([flush]: waits for the worker, then swaps): it is a
- *   [DeferredStep], so every other step (undo and redo too) records after it; a pixel edit that
- *   starts on the layer (`EditorController.beginEdit`), the Array tool stopping being current,
- *   and `EditorController.settleVectorWork` (closing and saving, canvas operations, export,
- *   filters) land it as well.
+ * - **Anything else first lands it** ([flush]: waits for the worker, 1.5 s at most since v1.9, then
+ *   swaps): it is a [DeferredStep], so every other step (undo and redo too) records after it; a
+ *   pixel edit that starts on the layer (`EditorController.beginEdit`), the Array tool stopping
+ *   being current, and `EditorController.settleVectorWork` (closing and saving, canvas
+ *   operations, export, filters) land it as well.
  * - **"Rendering array…"**: [isSlow] becomes true once a render has run for [SLOW_AFTER_MS]
  *   (the Array tool's options strip shows it).
  * - **Memory**: no extra document-size bitmap per render. The patch covers the changed area only
@@ -148,7 +148,15 @@ internal class ArrayRenders(private val c: EditorController) {
         val completion = CompletableDeferred<Unit>()
     }
 
+    /** v1.9 (A7b step 5): Undo and Redo reach the controller's wait guard while one is pending. */
     private var pending: Pending? = null
+        set(value) {
+            field = value
+            c.refreshDeferredWaitGuard()
+        }
+
+    /** v1.9 (A7b step 5): the pending render's worker job, if any (`EditorSession.saveOnLeaving` waits for it). */
+    internal val pendingJob: Job? get() = pending?.job
 
     /** The last render's job: the patch is not let go before it ends. */
     private var lastJob: Job? = null
@@ -251,6 +259,11 @@ internal class ArrayRenders(private val c: EditorController) {
     /** Drops the render of [layer] still running when it is an "Edit array" (no step; its caller hears false). */
     fun supersede(layer: Layer) {
         val p = pending?.takeIf { it.layer === layer && it.supersedable && !it.finished } ?: return
+        drop(p)
+    }
+
+    /** Drops [p] (no step; its caller hears false): superseded, or (v1.9) its wait hit the limit. */
+    private fun drop(p: Pending) {
         p.finished = true
         pending = null
         c.removeDeferredStep(deferredStep)
@@ -267,17 +280,37 @@ internal class ArrayRenders(private val c: EditorController) {
     /**
      * Lands the render still running now: waits for the worker and swaps the patch in with the
      * data (one step), or draws it here when the worker failed. Nothing when none runs.
+     *
+     * v1.9 (A7b step 5, R9): the wait is bounded (`EditorController.awaitDeferredJob`, 1.5 s; v1.8
+     * waited for good). When the worker is not done by then, the render is cancelled ([drop]: it
+     * never lands, the layer keeps its data and pixels, no step, "… took too long and was
+     * cancelled"), or, when it must land (`EditorController.mustLandDeferredWork`: closing,
+     * leaving, an export...), the worker is stopped and the cache drawn here at once (v1.8's
+     * synchronous path, the same step).
      */
     fun flush() {
         val p = pending ?: return
-        val ns = try {
-            runBlocking { p.job?.await() } ?: -1L
-        } catch (e: CancellationException) {
-            -1L
-        } catch (e: Throwable) {
-            -1L
+        val job = p.job
+        if (job != null && !c.awaitDeferredJob(job)) {
+            job.cancel()
+            if (c.mustLandDeferredWork()) {
+                // The stopped worker may still read the inputs until it notices: let go after it.
+                finish(p, -1L, releaseAfterJob = true)
+            } else {
+                drop(p)
+                c.onDeferredWaitTimedOut(p.label)
+            }
+            return
         }
-        finish(p, ns)
+        finish(p, job?.let { workerNs(it) } ?: -1L)
+    }
+
+    /** A finished job's drawing time (ns; -1 when it failed or was cancelled). */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private fun workerNs(job: Deferred<Long>): Long = try {
+        job.getCompleted()
+    } catch (e: Throwable) {
+        -1L
     }
 
     /** The editor closes: a running render is dropped (its caller hears false) and the patch let go. */
@@ -377,8 +410,12 @@ internal class ArrayRenders(private val c: EditorController) {
         }
     }
 
-    /** Swaps [p]'s patch in (or draws it here when there is none, the worker failed, [ns] < 0, or the layer changed). */
-    private fun finish(p: Pending, ns: Long) {
+    /**
+     * Swaps [p]'s patch in (or draws it here when there is none, the worker failed, [ns] < 0, or the
+     * layer changed).
+     * v1.9 (A7b step 5): [releaseAfterJob] when its worker was stopped and may still read the inputs.
+     */
+    private fun finish(p: Pending, ns: Long, releaseAfterJob: Boolean = false) {
         if (p.finished) return
         val t0 = System.nanoTime()
         p.finished = true
@@ -412,7 +449,7 @@ internal class ArrayRenders(private val c: EditorController) {
             }
         } finally {
             flushing = wasFlushing
-            p.release?.invoke()
+            if (releaseAfterJob) afterJob(p) { p.release?.invoke() } else p.release?.invoke()
             p.completion.complete(Unit)
             idleRelease()
             p.stats.workerNs = ns

@@ -3,9 +3,11 @@ package com.brushwork.paint.qa19
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.LinearGradient
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.Shader
 import android.net.Uri
 import android.os.Looper
 import com.brushwork.paint.AppSettings
@@ -53,6 +55,7 @@ import com.brushwork.paint.model.Selection
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.storage.CanvasStart
 import com.brushwork.paint.storage.LayerCodec
+import com.brushwork.paint.storage.LayerEntries
 import com.brushwork.paint.storage.NewCanvasSpec
 import com.brushwork.paint.storage.ProjectRepository
 import com.brushwork.paint.tools.ToolId
@@ -124,6 +127,7 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import java.io.File
 import kotlin.math.hypot
+import kotlin.random.Random
 
 /**
  * v1.9 (design 2.2 and 5.2, modelled on `qa18/Qa18CompatBackFromV17RobolectricTest`): what v1.8
@@ -603,13 +607,22 @@ class Qa19CompatBackFromV18RobolectricTest {
         sameShapesAsV19("shape-r17", vec.vectorFile!!, objects)
     }
 
-    @Ignore("5.2 row 13, banded save (byte-identical files): owner A7b, un-ignored by the lead")
+    /**
+     * 5.2 row 13, banded save (byte-identical files): owner A7b, un-ignored by the lead at A7b's
+     * merge; fixture by [writeBanded]. The same project saved with v1.8's whole-layer buffer
+     * (`whole/`) and in bands (`banded/`) is the same files, byte for byte, so v1.8 opens a banded
+     * save as its own.
+     */
     @Test
     fun row13BandedSave() {
-        v18Reads("banded/whole")
+        val dto = v18Reads("banded/whole")
+        assertEquals(BANDED_LAYERS, dto.layers.map { it.name })
+        assertEquals("one layer has a mask", listOf(BANDED_LAYERS[1]), dto.layers.filter { it.hasMask && it.maskFile != null }.map { it.name })
         val whole = text("banded/whole/files.txt").lines().filter { it.isNotBlank() }
+        assertTrue("pixel files and a mask file: $whole", whole.count { it.startsWith("layer_") } >= 3 && whole.any { it.startsWith("mask_") })
         assertEquals("the same files", whole, text("banded/banded/files.txt").lines().filter { it.isNotBlank() })
         for (f in whole) assertArrayEquals("$f: byte for byte", resource("banded/whole/$f"), resource("banded/banded/$f"))
+        v18Reads("banded/banded")
     }
 
     /** 5.2 row 14, prefs and tool settings: owner lead (F1a, AppSettings.kt, UiPrefs.kt), fixture by [writePrefs]. */
@@ -721,6 +734,7 @@ class Qa19CompatBackFromV18RobolectricTest {
         "text-transform" to ::writeTextTransform,
         "text-array-lift" to ::writeTextArrayLift,
         "text-arrange" to ::writeTextArrange,
+        "banded" to ::writeBanded,
     )
 
     /** `project.json` of the gallery's project [id], copied into [dir]. */
@@ -1237,6 +1251,55 @@ class Qa19CompatBackFromV18RobolectricTest {
         saveProject(doc, dir)
     }
 
+    /**
+     * Row 13 (A7b, the lead at A7b's merge): [bandedDocument] saved by v1.9's repository twice,
+     * into `whole/` with v1.8's whole-layer buffer ([LayerEntries.bandedSave] false) and into
+     * `banded/` in bands of 7 rows (the last one shorter), each with its `files.txt`.
+     */
+    private fun writeBanded(dir: File) {
+        for ((folder, banded) in listOf("whole" to false, "banded" to true)) {
+            val doc = bandedDocument()
+            val out = File(dir, folder).apply { mkdirs() }
+            File(app.filesDir, "projects/${doc.id}").deleteRecursively()
+            try {
+                LayerEntries.bandedSave = banded
+                LayerEntries.bandBytes = doc.width * 4 * 7 + 5
+                saveProject(doc, out)
+            } finally {
+                LayerEntries.bandedSave = true
+                LayerEntries.bandBytes = LayerEntries.BAND_BYTES
+                doc.layers.forEach { it.recycleBitmaps() }
+            }
+            val files = snapshot(out).keys.sorted()
+            File(out, "files.txt").writeText(files.joinToString("\n", postfix = "\n"))
+        }
+    }
+
+    /**
+     * Row 13's 240 x 160 document, built afresh for each save (as `v19/a7b/BandedSaveByteIdenticalTest`'s):
+     * [BANDED_LAYERS], a translucent layer, an opaque one with a mask, an empty and a uniform one.
+     */
+    private fun bandedDocument(): Document {
+        val doc = Document("qa19-banded", "banded", 240, 160, dpi = 144f)
+        doc.createdAt = BANDED_TIME
+        doc.modifiedAt = BANDED_TIME
+        val w = doc.width; val h = doc.height
+        fun layer(name: String, fill: (Bitmap) -> Unit): Layer =
+            Layer(doc.newLayerId(), name, BitmapUtils.createLayerBitmap(w, h).also(fill)).also { doc.layers += it }
+        val rnd = Random(13)
+        layer(BANDED_LAYERS[0]) { it.setPixels(IntArray(w * h) { i -> if (i % 13 == 0) 0 else rnd.nextInt() }, 0, w, 0, 0, w, h) }
+        layer(BANDED_LAYERS[1]) {
+            Canvas(it).drawRect(0f, 0f, w.toFloat(), h.toFloat(), Paint().apply {
+                shader = LinearGradient(0f, 0f, w.toFloat(), h.toFloat(), 0xFF102030.toInt(), 0xFFF0C080.toInt(), Shader.TileMode.CLAMP)
+            })
+        }.mask = BitmapUtils.createMaskBitmap(w, h).also { m ->
+            Canvas(m).drawCircle(w / 2f, h / 2f, h / 3f, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF000000.toInt() })
+        }
+        layer(BANDED_LAYERS[2]) {}
+        layer(BANDED_LAYERS[3]) { it.eraseColor(0x80336699.toInt()) }
+        return doc
+    }
+
     /** A 240 x 160 document of one text layer per [texts] (name to text, its pixels drawn by v1.9), saved into [dir]. */
     private fun saveTexts(dir: File, vararg texts: Pair<String, TextItem>) =
         saveTextLayers(dir, *texts.map { (name, item) -> name to listOf(item) }.toTypedArray())
@@ -1292,6 +1355,10 @@ class Qa19CompatBackFromV18RobolectricTest {
 
         /** AppSettings' preference file (v1.0 on). */
         const val SETTINGS_FILE = "brushwork_settings"
+
+        /** Row 13 ([writeBanded]): the layers, bottom first, and the fixed times of both saves. */
+        val BANDED_LAYERS = listOf("Translucent", "Opaque with a mask", "Empty", "Uniform")
+        const val BANDED_TIME = 1_760_000_000_000L
 
         /** Row 10 (cut pieces): the layers [writeCutPieces] cuts. */
         const val CUT_VECTOR_LAYER = "Vector 1"

@@ -102,7 +102,6 @@ import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.max
@@ -351,6 +350,45 @@ class EditorController(
         um.onChanged = { canUndo = um.canUndo; canRedo = um.canRedo }
     }
 
+    /**
+     * v1.9 (A7b step 1, R9, design 2.4.3): the undo history as a `MemoryGovernor` entry
+     * ([com.brushwork.paint.engine.GovernorPolicyV19.UNDO_ENTRY], priority 50: trimmed last), held
+     * weakly (a closed editor's entry goes by itself). Under CRITICAL pressure it drops the oldest
+     * steps until the memory in use (Java and native heap: bitmap pixels are native) is under 70 %
+     * of `maxMemory` ([trimUndoForMemory]). `UndoManager` keeps its steps'
+     * sizes to itself, so the entry reports 0 bytes.
+     *
+     * The entry is closed with the editor's [scope] (`EditorSession.close` cancels it after
+     * [dispose]), so a closed editor leaves no entry behind whether or not it is collected yet; the
+     * handler holds the registration only, never the editor.
+     */
+    internal val undoMemoryRegistration: MemoryGovernor.Registration =
+        com.brushwork.paint.engine.GovernorPolicyV19.registerWeakly(
+            com.brushwork.paint.engine.GovernorPolicyV19.UNDO_ENTRY,
+            com.brushwork.paint.engine.GovernorPolicyV19.PRIORITY_UNDO,
+            this,
+            bytes = { 0L },
+            trim = { c, pressure -> c.trimUndoForMemory(pressure) },
+        ).also { r -> scope.coroutineContext[kotlinx.coroutines.Job]?.invokeOnCompletion { r.close() } }
+
+    /**
+     * What the governor's undo entry frees: under [com.brushwork.paint.engine.MemoryPressure.CRITICAL]
+     * the oldest steps until the memory in use (Java and native heap) is under 70 % of `maxMemory`
+     * (the newest step stays), then [StabilityLabels19.UNDO_TRIMMED] when any went; nothing under a
+     * lower pressure. Returns the bytes the dropped steps held. Main thread (posted there when
+     * called from another).
+     */
+    internal fun trimUndoForMemory(pressure: com.brushwork.paint.engine.MemoryPressure): Long {
+        if (pressure != com.brushwork.paint.engine.MemoryPressure.CRITICAL) return 0L
+        if (android.os.Looper.myLooper() != android.os.Looper.getMainLooper()) {
+            scope.launch(Dispatchers.Main) { trimUndoForMemory(pressure) }
+            return 0L
+        }
+        val trimmed = com.brushwork.paint.engine.GovernorPolicyV19.trimUndo(undoManager)
+        if (trimmed.steps > 0) toast(StabilityLabels19.UNDO_TRIMMED)
+        return trimmed.bytes
+    }
+
     /** Maximum number of layers for this canvas size given the heap. */
     val maxLayers: Int
         get() {
@@ -366,12 +404,18 @@ class EditorController(
      * sources, `pixelLayerCount + ceil(sum of ArrayPixels bytes / layerBytes)`. [canAddLayer],
      * [canAddAdjustmentLayer], `ImportLayers`' room check, `ArrayOps` and the layer window's
      * "n / max" all read it. Without folders and arrays it is `doc.layers.size` (v1.6).
+     *
+     * v1.9 (A7b step 6, design 3.2 A7b, R9): plus one per layer mask (turned off or not: a mask is a
+     * full-size ARGB bitmap, a layer's bytes), so a mask needs room like a layer ([addMask]
+     * checks it) and the layer window's "n / max" counts masks. An artwork already over the
+     * limit still opens; only adding stops.
      */
     val effectiveLayerCount: Int
         get() {
             val per = max(1L, doc.layerBytes)
             val arrayBytes = doc.layers.sumOf { it.array?.pixels?.bytes ?: 0L }
-            return doc.pixelLayerCount + ((arrayBytes + per - 1) / per).toInt()
+            val masks = doc.layers.count { it.mask != null }
+            return doc.pixelLayerCount + masks + ((arrayBytes + per - 1) / per).toInt()
         }
 
     /** The message shown when a new layer would pass [maxLayers]. */
@@ -759,6 +803,150 @@ class EditorController(
      */
     internal fun settleQueuedVectorWork() {
         if (PendingRenders.hasWaiting(this)) settleVectorWork()
+    }
+
+    /**
+     * v1.9 (A7b step 5, R9, design 3.2 A7b): how long one wait for work still landing in the
+     * background (a vector render, an array render, a saved selection compressing) may hold the
+     * main thread, in ms. v1.8 waited for good (`runBlocking`): a slow render on the T606 froze
+     * the editor until Android offered to close it. Test seam.
+     */
+    internal var deferredWaitLimitMs = 1_500L
+
+    /** Test seam: the waits that hit [deferredWaitLimitMs] in this editor. */
+    internal var deferredWaitTimeouts = 0
+
+    /**
+     * True while `EditorSession.saveOnLeaving` runs (the app leaves the screen): work that lands
+     * meanwhile, or is still pending after its wait, lands on the spot (v1.8's synchronous way)
+     * without a wait on the main thread, and nothing is cancelled.
+     */
+    internal var leavingDeferred = false
+
+    /**
+     * v1.9 (A7b step 5): work that hits the wait limit must still land (on the spot, through the
+     * synchronous path) instead of being cancelled: while the app leaves the screen
+     * ([leavingDeferred]) and under another operation's busy overlay ("Saving…" on close, an
+     * export, a share: they wait for it so that what they write holds it). The user's own action
+     * (an Undo, a stroke, a layer switch) cancels it instead, with [StabilityLabels19.TOO_SLOW].
+     * "Rendering vectors…" is the render's own overlay, not another operation.
+     */
+    internal fun mustLandDeferredWork(): Boolean {
+        val busy = busyMessage
+        return leavingDeferred || (busy != null && busy != VectorLayers.BUSY_LABEL)
+    }
+
+    /**
+     * v1.9 (A7b step 5): waits on this (main) thread until [job] is done, [limitMs] at most: by
+     * default [deferredWaitLimitMs], and none while leaving ([leavingDeferred]: the leaving save waits
+     * off the main thread instead). True when it is done. The worker's own completion
+     * releases the wait, so no main-thread turn is needed for it (as `runBlocking` before).
+     */
+    internal fun awaitDeferredJob(job: kotlinx.coroutines.Job, limitMs: Long = if (leavingDeferred) 0L else deferredWaitLimitMs): Boolean {
+        if (job.isCompleted) return true
+        if (limitMs <= 0L) return false
+        val latch = java.util.concurrent.CountDownLatch(1)
+        val handle = job.invokeOnCompletion { latch.countDown() }
+        try {
+            if (limitMs == Long.MAX_VALUE) latch.await() else latch.await(limitMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+        } finally {
+            handle.dispose()
+        }
+        return job.isCompleted
+    }
+
+    /**
+     * v1.9 (A7b step 5): a wait for [label]'s work hit the limit and the work was cancelled: it
+     * never lands later, its layer keeps what it had (I1) and no step is recorded. Says so. When
+     * this was not an Undo or Redo waiting ([deferredWaitGuard] runs those), an Undo or Redo that
+     * follows in this main-thread turn (`HistoryLabels.performUndo` lands the saved selections
+     * first, then undoes) is that cancellation too: the one-shot guard is armed.
+     */
+    internal fun onDeferredWaitTimedOut(label: String) {
+        deferredWaitTimeouts++
+        toast(StabilityLabels19.TOO_SLOW.format(label))
+        if (!inDeferredWaitGuard && scope.coroutineContext[kotlinx.coroutines.Job]?.isActive != false) {
+            deferredWaitArmed = true
+            refreshDeferredWaitGuard()
+            scope.launch(Dispatchers.Main) {
+                deferredWaitArmed = false
+                refreshDeferredWaitGuard()
+            }
+        }
+    }
+
+    /** A wait timed out outside an Undo or Redo in this main-thread turn ([onDeferredWaitTimedOut]). */
+    private var deferredWaitArmed = false
+
+    /** True while [deferredWaitGuard] lands the pending work for an Undo or Redo. */
+    private var inDeferredWaitGuard = false
+
+    /**
+     * v1.9 (A7b step 5, design 3.2 A7b): "an Undo that waited is that Undo". [undo] and [redo]
+     * land the pending work before taking a step back (or forward); when its wait hits the limit
+     * the work is cancelled, and that cancellation is what the Undo did: the step before it must
+     * not also be undone. Undo and Redo reach [inToolHistory] first, so while a vector or array
+     * render is pending (and no session owns Undo and Redo) this owner is set there: it lands the
+     * work with the bounded waits, in [undo]'s order, and says it took the step when one timed
+     * out. Otherwise it lets go and v1.8's undo or redo runs. It has no steps or labels of its own.
+     */
+    private val deferredWaitGuard = object : InToolHistoryOwner {
+        override val canUndo: Boolean get() = false
+        override val canRedo: Boolean get() = false
+        override val undoLabel: String? get() = null
+        override val redoLabel: String? get() = null
+        override fun undoStep(): Boolean = deferredWaitHistoryStep()
+        override fun redoStep(): Boolean = deferredWaitHistoryStep()
+    }
+
+    private fun deferredWaitHistoryStep(): Boolean {
+        if (deferredWaitArmed) {
+            deferredWaitArmed = false
+            refreshDeferredWaitGuard()
+            return true
+        }
+        val before = deferredWaitTimeouts
+        inDeferredWaitGuard = true
+        try {
+            flushDeferredSteps()
+            landSavedSelections()
+            settleVectorWork()
+        } finally {
+            inDeferredWaitGuard = false
+        }
+        refreshDeferredWaitGuard()
+        return deferredWaitTimeouts != before
+    }
+
+    /**
+     * Sets [deferredWaitGuard] as [inToolHistory] while a vector or array render is pending (or the
+     * one-shot is armed) and nothing else owns Undo and Redo; takes it away again after. Called by
+     * the renders whenever their pending work changes. Main thread.
+     */
+    internal fun refreshDeferredWaitGuard() {
+        val want = deferredWaitArmed || vectors.hasPendingRender || arrayRenders.isPending
+        val owner = inToolHistory
+        if (want && owner == null) inToolHistory = deferredWaitGuard
+        else if (!want && owner === deferredWaitGuard) inToolHistory = null
+    }
+
+    /**
+     * v1.9 (A7b step 5, `EditorSession.saveOnLeaving`): suspends, without holding the main thread,
+     * until the vector and array renders still running are done ([deferredWaitLimitMs] at most)
+     * and the saved selections still compressing are done (they have no synchronous path to land
+     * by; never dropped on leaving).
+     */
+    internal suspend fun awaitDeferredWork() {
+        val renders = listOfNotNull(vectors.pendingJob, arrayRenders.pendingJob).filter { !it.isCompleted }
+        val saves = pendingSavedSelections.map { it.work }.filter { !it.isCompleted }
+        if (renders.isEmpty() && saves.isEmpty()) return
+        val limit = deferredWaitLimitMs
+        withContext(Dispatchers.Default) {
+            if (renders.isNotEmpty()) kotlinx.coroutines.withTimeoutOrNull(limit) { kotlinx.coroutines.joinAll(*renders.toTypedArray()) }
+            kotlinx.coroutines.joinAll(*saves.toTypedArray())
+        }
     }
     // endregion
 
@@ -2144,9 +2332,17 @@ class EditorController(
     // ------------------------------------------------------------------ masks
 
     // region v19-A7b addMask
+    /**
+     * Gives [layer] a mask (from the selection when [fromSelection]) and starts editing it.
+     *
+     * v1.9 (A7b step 6, design 3.2 A7b, R9): a mask is a full-size bitmap, as much memory as a layer,
+     * and [effectiveLayerCount] counts it: at [maxLayers] none is added, [layerLimitMessage]
+     * says so (nothing changes).
+     */
     fun addMask(layer: Layer = activeLayer, fromSelection: Boolean = selection != null) {
         if (layer.isFolder) { toast(FolderLabels.NO_MASK); return }
         if (layer.mask != null) return
+        if (!canAddLayer) { toast(layerLimitMessage()); return }
         val mask = BitmapUtils.createMaskBitmap(doc.width, doc.height, if (fromSelection) 0xFF000000.toInt() else -1)
         val sel = selection
         if (fromSelection && sel != null) Canvas(mask).drawBitmap(sel.mask, 0f, 0f, Paint().apply { color = -1 })
@@ -2437,21 +2633,56 @@ class EditorController(
      * closing the editor and the other saved-selection actions, so what they do comes after the
      * saves the user asked for before them. Not inside another step, during undo / redo or while
      * edit listeners are told. Main thread.
+     *
+     * v1.9 (A7b step 5, R9): the waits share one limit, [deferredWaitLimitMs] for the whole call
+     * (v1.8 waited for good). A save still compressing when the limit runs out is cancelled: it
+     * never lands, no step, and [StabilityLabels19.TOO_SLOW] names the first one cancelled
+     * ([onDeferredWaitTimedOut]); the saves already compressed land. Unless the work must land
+     * ([mustLandDeferredWork]): under
+     * another operation's overlay (closing: "Saving…") a save has no synchronous path, so that
+     * waits until it is compressed; while leaving ([leavingDeferred]) it stays pending, and the
+     * leaving save lands it once compressed.
      */
     internal fun landSavedSelections() {
         if (editDepth != 0 || inHistory || delivering) return
+        val mustLand = mustLandDeferredWork()
+        val deadline = System.nanoTime() + deferredWaitLimitMs * 1_000_000L
+        var cancelled: PendingSavedSelection? = null
         for (p in pendingSavedSelections) {
-            val saved = if (p.ready) {
-                p.result
-            } else {
-                try {
-                    runBlocking { p.work.await() }
-                } catch (e: CancellationException) {
-                    null
-                }
+            if (p.ready) {
+                landSavedSelection(p, p.result)
+                continue
             }
-            landSavedSelection(p, saved)
+            val limit = when {
+                leavingDeferred -> 0L
+                mustLand -> Long.MAX_VALUE
+                else -> (deadline - System.nanoTime()) / 1_000_000L
+            }
+            if (!awaitDeferredJob(p.work, limit)) {
+                // Leaving: the leaving save lands it (and the ones after it) once compressed.
+                if (leavingDeferred) break
+                cancelSavedSelection(p)
+                if (cancelled == null) cancelled = p
+                continue
+            }
+            landSavedSelection(p, completedSavedSelection(p))
         }
+        cancelled?.let { onDeferredWaitTimedOut(if (it.update) UPDATE_SAVED_SELECTION_LABEL else SavedSelectionLabels.SAVE) }
+    }
+
+    /** [p]'s compressed selection once its work is done (null: empty, out of memory, failed or cancelled). */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private fun completedSavedSelection(p: PendingSavedSelection): SavedSelection? = try {
+        p.work.getCompleted()
+    } catch (e: Throwable) {
+        null
+    }
+
+    /** v1.9 (A7b step 5): [p] hit the wait limit: its work stops and it never lands (no step). */
+    private fun cancelSavedSelection(p: PendingSavedSelection) {
+        p.work.cancel()
+        if (!p.landed.compareAndSet(false, true)) return
+        synchronized(pendingSavedLock) { pendingSavedSelections = pendingSavedSelections.filter { it !== p } }
     }
 
     /**

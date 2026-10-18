@@ -45,13 +45,13 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlin.coroutines.coroutineContext
 import kotlin.math.abs
 import kotlin.math.ceil
@@ -830,7 +830,18 @@ class VectorLayers internal constructor(private val c: EditorController) {
         val completion = CompletableDeferred<Unit>()
     }
 
+    /** v1.9 (A7b step 5): Undo and Redo reach the controller's wait guard while one is pending. */
     private var pending: Pending? = null
+        set(value) {
+            field = value
+            c.refreshDeferredWaitGuard()
+        }
+
+    /** v1.9 (A7b step 5): a render is pending (its step not recorded yet). */
+    internal val hasPendingRender: Boolean get() = pending != null
+
+    /** v1.9 (A7b step 5): the pending render's worker job, if any (`EditorSession.saveOnLeaving` waits for it). */
+    internal val pendingJob: Job? get() = pending?.job
 
     /** Completes a pending render when anything else records a step (undo, redo, other edits). */
     private val deferredStep = DeferredStep { flushPending() }
@@ -839,16 +850,21 @@ class VectorLayers internal constructor(private val c: EditorController) {
      * Completes a render that is still running in the background now: waits for the worker and
      * applies its step (or re-renders when the layer changed meanwhile). Called before any other
      * edit (it is the service's [DeferredStep]), by canvas operations, and by tests.
+     *
+     * v1.9 (A7b step 5, R9): the wait is bounded (`EditorController.awaitDeferredJob`, 1.5 s; v1.8
+     * waited for good). When the worker is not done by then, the render is cancelled ([dropTimedOut]:
+     * it never lands, the layer keeps its data and pixels, no step, "… took too long and was
+     * cancelled"), or, when it must land (`EditorController.mustLandDeferredWork`: closing,
+     * leaving, an export...), drawn here at once ([landNow]).
      */
     fun flushPending() {
         val p = pending ?: return
-        val pieces = try {
-            runBlocking { p.job?.await() }
-        } catch (e: CancellationException) {
-            null
-        } catch (e: Throwable) {
-            null
+        val job = p.job
+        if (job != null && !c.awaitDeferredJob(job)) {
+            if (c.mustLandDeferredWork()) landNow(p) else dropTimedOut(p)
+            return
         }
+        val pieces = job?.let { resultOf(it) }
         // Whatever this completion re-runs happens now, on this thread.
         flushing = true
         try {
@@ -856,6 +872,61 @@ class VectorLayers internal constructor(private val c: EditorController) {
         } finally {
             flushing = false
         }
+    }
+
+    /** A finished job's pieces (null when it failed or was cancelled). */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private fun resultOf(job: Deferred<List<Bitmap>>): List<Bitmap>? = try {
+        job.getCompleted()
+    } catch (e: Throwable) {
+        null
+    }
+
+    /**
+     * v1.9 (A7b step 5): [p]'s worker hit the wait limit while its work must land: the worker is
+     * stopped and the render is drawn here, synchronously, as without a worker (the same step;
+     * re-based like any landing when the layer changed meanwhile).
+     */
+    private fun landNow(p: Pending) {
+        p.job?.cancel()
+        val added = p.added?.let { VectorContent(objects = it) }
+        val paint = if (added != null) renderOver(added, p.pieces) else renderInto(p.render, p.pieces)
+        flushing = true
+        try {
+            land(p, null, paint)
+        } finally {
+            flushing = false
+        }
+    }
+
+    /**
+     * v1.9 (A7b step 5): [p]'s worker hit the wait limit: the render is cancelled and never lands.
+     * The layer keeps the data and pixels it had (I1), no step is recorded, its caller hears
+     * `onDone(false)` (as when memory runs out), and the controller says so.
+     */
+    private fun dropTimedOut(p: Pending) {
+        if (p.finished) return
+        p.finished = true
+        if (pending === p) pending = null
+        p.job?.cancel()
+        recycleCopiesAfterJob(p)
+        c.removeDeferredStep(deferredStep)
+        updateRendering()
+        try {
+            p.beforeApply?.invoke()
+            p.onDone(false)
+        } finally {
+            p.completion.complete(Unit)
+        }
+        c.onDeferredWaitTimedOut(p.label)
+    }
+
+    /** [p]'s copies of the cache go once its worker, which may still draw into them, has stopped. */
+    private fun recycleCopiesAfterJob(p: Pending) {
+        val copies = p.copies ?: return
+        val drop = { copies.forEach { if (!it.isRecycled) it.recycle() } }
+        val j = p.job
+        if (j == null || j.isCompleted) drop() else j.invokeOnCompletion { drop() }
     }
 
     /** True while [flushPending] applies: re-runs are synchronous then. */
@@ -979,14 +1050,20 @@ class VectorLayers internal constructor(private val c: EditorController) {
     }
 
     /** Applies (or re-runs) the pending render [p] on the main thread; [pieces] null = failed. */
-    private fun finish(p: Pending, pieces: List<Bitmap>?) {
+    private fun finish(p: Pending, pieces: List<Bitmap>?) = land(p, pieces, null)
+
+    /**
+     * [finish], or, with [paint] (v1.9, [landNow]), the render drawn by [paint] instead of the
+     * worker's [pieces] (none then); its copies go once the stopped worker has let go of them.
+     */
+    private fun land(p: Pending, pieces: List<Bitmap>?, paint: ((Canvas) -> Unit)?) {
         if (p.finished) return
         p.finished = true
         if (pending === p) pending = null
         c.removeDeferredStep(deferredStep)
         updateRendering()
         try {
-            if (pieces == null || pieces.size != p.pieces.size) {
+            if (paint == null && (pieces == null || pieces.size != p.pieces.size)) {
                 c.toast("Not enough memory for \"${p.label}\"")
                 p.beforeApply?.invoke()
                 p.onDone(false)
@@ -1004,14 +1081,19 @@ class VectorLayers internal constructor(private val c: EditorController) {
                 return
             }
             p.beforeApply?.invoke()
-            val src = Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC) }
-            val ok = applyRender(layer, p.after, p.label, p.pieces, p.newArray) { canvas ->
-                for ((k, r) in p.pieces.withIndex()) canvas.drawBitmap(pieces[k], r.left.toFloat(), r.top.toFloat(), src)
+            val draw = paint ?: run {
+                val done = pieces!!
+                val src = Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC) }
+                val swap: (Canvas) -> Unit = { canvas ->
+                    for ((k, r) in p.pieces.withIndex()) canvas.drawBitmap(done[k], r.left.toFloat(), r.top.toFloat(), src)
+                }
+                swap
             }
+            val ok = applyRender(layer, p.after, p.label, p.pieces, p.newArray, draw)
             p.onDone(ok && layer.vector === p.after && (p.newArray == null || layer.array == p.newArray.array))
         } finally {
             pieces?.forEach { if (!it.isRecycled) it.recycle() }
-            p.copies?.forEach { if (!it.isRecycled) it.recycle() }
+            if (paint == null) p.copies?.forEach { if (!it.isRecycled) it.recycle() } else recycleCopiesAfterJob(p)
             p.completion.complete(Unit)
         }
     }
@@ -1042,6 +1124,16 @@ class VectorLayers internal constructor(private val c: EditorController) {
             canvas.save()
             canvas.clipRect(r)
             canvas.drawColor(0, PorterDuff.Mode.CLEAR)
+            VectorLayerRenderer.renderWith(canvas, content, r, emptySet(), tips, docBounds(), renderCache, null)
+            canvas.restore()
+        }
+    }
+
+    /** v1.9 (A7b step 5): renders [content] over what each of [rects] holds (as addObjects draws new objects). */
+    private fun renderOver(content: VectorContent, rects: List<Rect>): (Canvas) -> Unit = { canvas ->
+        for (r in rects) {
+            canvas.save()
+            canvas.clipRect(r)
             VectorLayerRenderer.renderWith(canvas, content, r, emptySet(), tips, docBounds(), renderCache, null)
             canvas.restore()
         }
