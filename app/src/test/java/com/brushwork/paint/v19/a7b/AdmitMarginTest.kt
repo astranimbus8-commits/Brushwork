@@ -6,6 +6,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.brushwork.paint.engine.GovernorPolicyV19
 import com.brushwork.paint.engine.MemoryGovernor
 import com.brushwork.paint.filters.FilterRegistry
+import com.brushwork.paint.filters.FilterTiling
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.ui.common.StabilityLabels19
 import org.junit.After
@@ -87,8 +88,9 @@ class AdmitMarginTest {
         layer.bitmap.eraseColor(Color.RED)
         c.startFilter(FilterRegistry.byId("adjust.invert")!!)
         val s = c.filterSession!!
-        // The source and the result buffers: 8 bytes a pixel.
-        val need = 64L * 48 * 8
+        // A local filter (step 3): its region's result and two bands.
+        val need = FilterTiling.estimate(64, 48, null, selection = false)
+        assertEquals(64L * 48 * 4 + 64L * 48 * 9, need)
         val max = 1024L * mb
         GovernorPolicyV19.heap = FakeHeap(max, max - 64L * mb - need + 1)
         c.message = null
@@ -107,6 +109,28 @@ class AdmitMarginTest {
         assertNull(c.message)
         assertEquals(1, c.undoManager.undoCount)
         assertEquals(Color.CYAN, layer.bitmap.getPixel(10, 10))
+    }
+
+    @Test
+    fun aWholeImageFilterAsksForTheSourceAndTheResult() {
+        val c = Smoke.controller(app, Smoke.document(64, 48, layers = 1))
+        c.activeLayer.bitmap.eraseColor(Color.RED)
+        c.startFilter(FilterRegistry.byId("blur.gaussian")!!)
+        val s = c.filterSession!!
+        Smoke.pumpUntil { !s.isRendering }
+        // The blur needs its neighbours: v1.8's two whole-layer buffers, 8 bytes a pixel.
+        val need = 64L * 48 * 8
+        val max = 1024L * mb
+        GovernorPolicyV19.heap = FakeHeap(max, max - 64L * mb - need + 1)
+        c.message = null
+        s.apply()
+        assertEquals(String.format(StabilityLabels19.NO_MEMORY_FOR, s.filter.name), c.message)
+        assertFalse(s.isClosed)
+        GovernorPolicyV19.heap = FakeHeap(max, max - 64L * mb - need)
+        c.message = null
+        s.apply()
+        assertTrue(Smoke.pumpUntil { !s.isApplying && c.busyMessage == null })
+        assertTrue("admitted: ${c.message}", c.message == null || !c.message!!.startsWith("Not enough memory"))
     }
 
     @Test

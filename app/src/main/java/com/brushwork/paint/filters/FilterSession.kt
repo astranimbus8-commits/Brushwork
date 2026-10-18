@@ -686,17 +686,22 @@ class FilterSession(val controller: EditorController, val filter: Filter) : InTo
         if (!checkTarget()) return
         if (!controller.checkEditable(layer)) return
         Breadcrumbs.add("filter:${filter.id}:apply")
-        // v1.9 (design 2.4.13): the source and result buffers must fit (A7b's policy; DefaultPolicy
-        // admits everything).
-        if (!MemoryGovernor.admit(targetBitmap.width.toLong() * targetBitmap.height * 8, filter.name)) {
+        val vals = values
+        val sel = controller.selection
+        // v1.9 (A7b step 3): a local filter runs in bands of its region (FilterTiling), the others
+        // on the whole image as in v1.8; the same pixels either way.
+        val mapper = FilterTiling.mapperFor(filter, vals)
+        val region = sel?.let { regionOf(it) }
+        // v1.9 (design 2.4.13, A7b step 2): the buffers must fit in the free heap less 64 MB.
+        val estimate = if (mapper != null) FilterTiling.estimate(targetBitmap.width, targetBitmap.height, region, sel != null)
+        else targetBitmap.width.toLong() * targetBitmap.height * 8
+        if (!MemoryGovernor.admit(estimate, filter.name)) {
             controller.toast(String.format(StabilityLabels19.NO_MEMORY_FOR, filter.name))
             return
         }
         // A pending preview is dropped (CPU goes to the apply); it's re-run if the apply stops.
         val droppedPreview = previewJob?.isActive == true
         previewJob?.cancel()
-        val vals = values
-        val sel = controller.selection
         val alphaLocked = layer.alphaLocked
         val mask = target == EditTarget.MASK
         val colorMode = if (mask) ColorMode.RGB else controller.doc.colorMode
@@ -730,9 +735,19 @@ class FilterSession(val controller: EditorController, val filter: Filter) : InTo
                                 cancelled = { !job.isActive },
                                 progressSink = { rawApplyProgress = it * 0.9f },
                             )
-                            val src = BitmapUtils.toPixelBuffer(bmp)
                             val selBytes = sel?.let { BitmapUtils.alpha8ToBytes(it.mask) }
-                            runFilter(src, vals, ctx, selBytes, alphaLocked, mask, colorMode, sel?.let { regionOf(it) }, findChanges = true)
+                            if (mapper != null) {
+                                FilterTiling.run(
+                                    bmp.width, bmp.height,
+                                    { dst, x, y, cols, rows -> bmp.getPixels(dst, 0, cols, x, y, cols, rows) },
+                                    mapper, selBytes, alphaLocked, mask, colorMode, region,
+                                    checkCancelled = ctx::checkCancelled, progress = ctx::progress,
+                                )
+                            } else {
+                                val src = BitmapUtils.toPixelBuffer(bmp)
+                                val whole = runFilter(src, vals, ctx, selBytes, alphaLocked, mask, colorMode, region, findChanges = true)
+                                FilterTiling.Result.whole(whole.out, whole.changed)
+                            }
                         }
                     } finally {
                         ticker.cancel()
@@ -767,7 +782,7 @@ class FilterSession(val controller: EditorController, val filter: Filter) : InTo
         applyJob?.cancel()
     }
 
-    private fun commitResult(outcome: RunResult, version: Long) {
+    private fun commitResult(outcome: FilterTiling.Result, version: Long) {
         if (isClosed || !checkTarget()) return
         if (layer.contentVersion != version) {
             controller.toast("\"${layer.name}\" changed while ${filter.name} was running, so it wasn't applied")
@@ -782,8 +797,7 @@ class FilterSession(val controller: EditorController, val filter: Filter) : InTo
         val rect = Rect(changed.left, changed.top, changed.right, changed.bottom)
         val rec = controller.beginEdit(layer, target)
         rec.touch(rect)
-        val w = targetBitmap.width
-        targetBitmap.setPixels(outcome.out.pixels, rect.top * w + rect.left, w, rect.left, rect.top, rect.width(), rect.height())
+        targetBitmap.setPixels(outcome.pixels, outcome.offsetOf(rect.left, rect.top), outcome.region.width, rect.left, rect.top, rect.width(), rect.height())
         clearOverride()
         controller.commitEdit(rec, filter.name)
         close()
