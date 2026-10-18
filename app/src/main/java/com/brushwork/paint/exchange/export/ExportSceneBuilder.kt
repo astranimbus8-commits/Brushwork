@@ -472,7 +472,7 @@ class ExportSceneBuilder(
                 val runs = text.lines(item)
                 if (!runs.isNullOrEmpty()) {
                     val box = partItems(parts.filter { it.kind == TextOutlinePart.Kind.BOX_FILL || it.kind == TextOutlinePart.Kind.BOX_BORDER })
-                    return box + realText(spec, runs)
+                    return box + realText(runs)
                 }
             }
             if (emoji) return null
@@ -483,7 +483,7 @@ class ExportSceneBuilder(
         if (straight && spec.box.hasFrame && frame == null) return null
         if (options.format == VectorFormat.SVG && options.text == TextExportMode.EDITABLE && straight && !spec.vertical && spec.fontId == null) {
             val runs = text.lines(item)
-            if (!runs.isNullOrEmpty()) return frame.orEmpty() + realText(spec, runs)
+            if (!runs.isNullOrEmpty()) return frame.orEmpty() + realText(runs)
         }
         if (emoji) return null
         val outline = outlines() ?: return null
@@ -556,7 +556,14 @@ class ExportSceneBuilder(
         return out
     }
 
-    /** One `<text>` of [runs] (the letters; their outline stroke is drawn behind the fill). */
+    /**
+     * One `<text>` of [runs] (the letters; their outline stroke is drawn behind the fill). v1.9
+     * (R7): runs of another look (a list's markers, [TextRunPaint.spec]) get a `<text>` each, in
+     * the order they first come (markers first, as they are drawn); a text without a list is one.
+     */
+    private fun realText(runs: List<TextLineRun>): List<SceneItem.Text> =
+        runs.groupBy { it.paintSpec.spec }.map { (spec, own) -> realText(spec, own) }
+
     private fun realText(spec: TextSpec, runs: List<TextLineRun>): SceneItem.Text {
         val style = SceneTextStyle(
             family = familyOf(spec.font),

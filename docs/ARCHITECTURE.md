@@ -1782,7 +1782,108 @@ options on them) and R14 ("a button to duplicate the selection in the same layer
 ### Text (A3)
 
 <!-- v19-A3 -->
+All 13 steps are built, including the cuttable steps 12 (vertical justify) and 13 (tap the guide
+to insert a point).
 
+- **Placeholder (R6).** `PlaceholderAmount.WORDS` ("3 words") is first in `CHIP_ORDER`; the
+  amount chips wrap in a `FlowRow` (`TextFlowChips.kt`).
+- **Justify (R4).** `Justify.kt` spreads the lines that `WrapLayout` broke and never changes a
+  break, so wrap, frame and overset passes are untouched. `TextJustify.ON` spreads every line
+  except a paragraph's last line, which keeps `align` ("Last line:" in `TextAlignSection.kt`).
+  `ALL` spreads that line too. The space goes into word gaps, or between clusters for CJK lines.
+  Export writes a justified line as one run per word (`TextExport`, `ExportSceneBuilder`).
+  Vertical text (step 12) justifies its columns in `VerticalTextLayout.layout(justify)`, with the
+  same rules: no break changes, and `ON` spares the last column of each line. A spread column
+  starts at the top and ends at the block height (the box height, or the tallest column for
+  point text). The space goes into word gaps after the first letter. Opening spaces stay an
+  indent, and trailing spaces hang. A column without gaps spreads between cells when it holds
+  CJK letters, or under `ALL`; a one-word Latin column keeps `align` under `ON`. The sheet shows
+  "Justify columns", "Justify the last column too" and the caption "Last column:"
+  (`TextAlignSection`). Vertical text exports as outlines from the same glyphs.
+- **Kerning (R5).** `KerningModes.kt` turns a mode into extra advances on top of the font's
+  kerning, as the v1.7 manual kerns do (`TextKerns.advancesPx`). Every route that draws kerned
+  text therefore draws the modes, and a mode that moves nothing keeps v1.8's pixels. Auto is the
+  font's pairs. Off turns them off and is synced with the switch. Metrics keeps pairs only inside
+  Latin, Greek or Cyrillic runs (`ScriptRuns`). Optical (`OpticalKerning`) sets each pair from
+  banded letter profiles to the font's "nn" gap and takes back the font's own pair. Its profiles
+  live in a governed cache of about 850 KB.
+- **Lists (R7).** `ListMarkers.kt` gives each non-blank paragraph of horizontal text a bullet or
+  a number (`format`). Numbering counts per text: a story counts over its frames, and two texts
+  of one layer never continue each other (C22). Every line keeps the marker column's indent, for
+  every alignment. The marker size, weight and font come from `TextListSpec`
+  (`TextListSection.kt`: No list / Bullets / Numbering, then "List settings"). Vertical text and
+  text on a path draw no list and lose it (`ListMarkers.applies`); the sheet says why. SVG writes
+  the markers as separate `<text>`.
+- **Several texts per layer (R14).** With a text layer active, a tap on empty canvas places the
+  new text in that layer (`TextTool.joinTarget`). Exceptions: "New layer each time" is on, a
+  selection is active, or the layer cannot join (a linked frame, a wrap text, a live array, mask
+  editing, or `TextCodec.MAX_ITEMS` texts, which toasts `LAYER_FULL`). A tap edits one text
+  (`editLayer` with its index); a second tap cycles to the text under it (`cycleBelow`). While a
+  text is open, the layer previews in place (`TextTool.LayerPreview`). Each tile draws the open
+  text and only the other texts whose ink meets that tile. ✓ re-renders only where the open text
+  was and is. `TextLayerDraw` draws neighbours in picture order. A pixel edit of a layer of
+  several texts toasts `RASTERIZED_TEXTS` with the count (C13, region `v19-A3 rasterizeMessage`).
+  A text frame links only a layer of one text. For a layer of several, `TextFrameTool.join`
+  refuses with `ALONE_ONLY`. A text among others cannot start to wrap around a picture
+  (`WRAP_ALONE_ONLY`; one that already wraps can only turn it off).
+- **Text items (R14).** `TextItemOps.duplicateItems(c, layer, area, ids)` returns one
+  `UndoAction` for A4's Duplicate; the arrange items use `ArrangeOrder.step`. Duplicate and
+  Arrange commit the open text's pending changes first. Duplicate of the open text is refused,
+  before anything is committed, in a full layer (`LAYER_FULL_NO_COPY`: a copy never starts a new
+  layer) and for a text that wraps around a picture (`WRAP_ALONE_ONLY`). In the Text More row,
+  "New layer each time" (no text open) or Duplicate, Bring forward and Send backward (a text
+  open) stand before Snap; Snap, then Numbers, end the row as in v1.8. The v1.8 pins in
+  `Qa18PolishChromeVerifyTest` require this order. `StripKeysV19`'s ranks (50-98: after v1.8's
+  More items) would put the v1.9 items after Snap, as A9's Shape More row has them. The lead
+  kept this order at the merge; Gate 2's strip inventory tests, with every area merged, settle
+  it against the ranks. The More row leaves out only what a bar
+  beside the strip shows itself (I10). While the object bar shows, Duplicate, Bring forward and
+  Send backward leave it. While the selection bar shows a Duplicate (a selection that
+  `SelectionDuplicate.kindOf` can copy), only Duplicate leaves. The paste bar (a clipboard, no
+  selection) carries none of them, so they stay. `TextStripFacts.of` reads which bar shows from
+  the controller under `StripContext.selectionBarShown`. A9's `ShapeObjectItems` still hides its
+  items under any bar, the paste bar included (design 2.3.5's wording); the lead left the same
+  narrowing there to Gate 2's I10 cross test. The strip is a pure `textSpec(tool, TextStripFacts)`, and the composable
+  only reads the facts.
+- **Merged texts and the label scan (step 11).** `MergedNumberedTextsTest` (C22, after A4's merge):
+  "Merge down" and "Merge folder" keep each text's own numbers and pixels (I1). A text edited
+  after the merge renumbers only itself. A frame of a story merges as pixels (`WHY_FRAMES`).
+  `TextStripLabelScanTest` checks the Text strip in all 300 states (no bar, the selection bar,
+  the object bar). Each state keeps `StripInventory.rules` at 360 and 392 dp. No label repeats
+  or holds another, within the strip and hint or against the bars, the node bar and the sheets'
+  labels. One configuration is left out, and the test pins it: a two-line hint at 360 dp with
+  the VECTOR cell, where an open text of a layer of several would take 388 dp (344 dp beside
+  the selection bar). It cannot occur, because that text's text layer is active, so
+  `isVectorMode` is false and the cell does not show.
+- **Path nodes (R12).** `TextPathSpec.nodes` (frozen) holds a `VSpline`; `TextPathNodes` converts
+  a guide. `asPath` gives a curve's 4 control points, a circle's 8 nodes, or a rectangle's exact
+  arcs. `asPolyline` gives `CUBIC_POLYLINE_SEGMENTS + 1` points. The edits are
+  `withAddedPoints`, `withPointAfter`, `withoutPoint` (at least 2 stay) and `withSharpToggled`,
+  all capped at `TextPathSpec.MAX_NODES`. `TextPathGeometry` and `TextOnPath` lay text out along
+  the nodes. A closed guide's text starts at its point nearest node 0 and stands by its winding.
+  v1.8 reads the CURVE or LINE fallback (compat row 4).
+- **Node editor (R12, I22).** The path sheet's "Add points", "Edit as path" and "Edit as
+  polyline" (`TextPathNodeEntry`) close the sheet and call `TextTool.startNodes`. Node editing
+  then starts with the `NODES_STARTED` toast, and `TextPathNodeEditor` becomes
+  `EditorController.inToolHistory`. Each edit is one in-tool step of a
+  `ToolHistory<TextPathSpec>`: Add point, Delete point, Sharp corner, or a node dragged (picked
+  within 24 dp; the step `MOVE_POINT`). `TextPathNodeBar` sits where the selection bar does: 44 dp high, tag
+  `V19Tags.TEXT_PATH_NODES`, placed by `TextPathNodeBar.topDp` from the `IbisDims`. Its ✓
+  (`DONE_POINTS`) and the floating ✓ return to the sheet; the next ✓ commits one document step.
+  While nodes are edited, two fingers zoom the view and node drags do not snap. A tap that
+  picks no node (step 13) adds one where it meets the guide within 24 dp, when the finger
+  lifts (`TextPathNodeEditor.tapGuide`, `TextPathNodes.pointOnGuide`). This is one Add point
+  step, and the new node is selected. A drag adds nothing, and neither does the first finger of
+  a two-finger gesture. The node goes on the line between two nodes, strictly between them, and
+  the closing segment of a closed guide counts. On a polyline it lands exactly at the tap. For a
+  tap on the curve of path nodes, it lands at the line's point nearest the tapped curve point,
+  as "Add point" places nodes on the lines. At 200 points the tap toasts `NODES_MAX`.
+- **The lead at the merge.** `LAYER_FULL_NO_COPY`, `WRAP_ALONE_ONLY`, `ALONE_ONLY` and
+  `MOVE_POINT` are `TextLabels19` entries; they replaced A3's stand-ins in `TextTool`,
+  `TextFrameTool` and `TextPathNodeEditor`, and `LabelsV19Test` checks them on the Text strip,
+  the Text frames tool and the node bar. `TextItem.sanitized`'s KDoc says vertical columns
+  justify. `NODES_HINT` does not mention the tap on the guide: the caption has no line limit
+  and covers the canvas under the node bar, so a longer hint waits for the device check.
 <!-- /v19-A3 -->
 
 ### Drawing and mask preview (A6)

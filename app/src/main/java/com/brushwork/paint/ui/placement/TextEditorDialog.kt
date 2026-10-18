@@ -7,15 +7,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.FormatAlignLeft
-import androidx.compose.material.icons.automirrored.filled.FormatAlignRight
-import androidx.compose.material.icons.filled.FormatAlignCenter
 import androidx.compose.material.icons.filled.FormatBold
 import androidx.compose.material.icons.filled.FormatItalic
 import androidx.compose.material.icons.filled.TextRotateVertical
-import androidx.compose.material.icons.filled.VerticalAlignBottom
-import androidx.compose.material.icons.filled.VerticalAlignCenter
-import androidx.compose.material.icons.filled.VerticalAlignTop
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -46,11 +40,12 @@ import com.brushwork.paint.tools.text.KerningEditor
 import com.brushwork.paint.tools.text.PlaceholderAmount
 import com.brushwork.paint.tools.text.PlaceholderFit
 import com.brushwork.paint.tools.text.PlaceholderKind
-import com.brushwork.paint.tools.text.TextAlign
 import com.brushwork.paint.tools.text.TextBoxPreset
 import com.brushwork.paint.tools.text.TextRenderer
 import com.brushwork.paint.tools.text.TextSpec
 import com.brushwork.paint.tools.text.TextEditorHost
+import com.brushwork.paint.tools.text.TextPathNodeEntry
+import com.brushwork.paint.tools.text.TextTool
 import com.brushwork.paint.tools.text.VerticalStyle
 import com.brushwork.paint.ui.color.ColorPickerDialog
 import com.brushwork.paint.ui.fonts.FontField
@@ -95,6 +90,7 @@ fun TextEditorDialog(host: TextEditorHost) {
     val onPath = item.path.isActive
     var colorTarget by remember { mutableStateOf<ColorTarget?>(null) }
     var fontPickerOpen by remember { mutableStateOf(false) }
+    var markerFontPickerOpen by remember { mutableStateOf(false) }
     val focus = remember { FocusRequester() }
     fun style(transform: (TextSpec) -> TextSpec) = tool.updateSpec(transform)
     // Recomputed when fonts are imported or deleted (the picker reports it).
@@ -206,7 +202,9 @@ fun TextEditorDialog(host: TextEditorHost) {
         if (tool.supportsPath) {
             SectionHeader("Shape / path")
             Note("Make the text follow a line, a circle, a square or a curve. Drag the dots on the canvas to shape it.")
-            TextPathControls(item.path, doc.dpi) { tool.setPath(it) }
+            // v1.9 (R12): the Text tool also edits the guide's points on the canvas.
+            val nodeTool = tool as? TextTool
+            TextPathControls(item.path, doc.dpi, onNodes = if (nodeTool == null) null else { e: TextPathNodeEntry -> nodeTool.startNodes(e) }) { tool.setPath(it) }
         }
 
         if (tool.supportsVertical && spec.vertical && !onPath) {
@@ -219,19 +217,8 @@ fun TextEditorDialog(host: TextEditorHost) {
             ChoiceChips(listOf("Columns right to left", "Left to right"), if (spec.columnsLeftToRight) 1 else 0, { i -> style { it.copy(columnsLeftToRight = i == 1) } })
         }
 
-        if (!onPath) {
-            SectionHeader(if (spec.vertical) "Column alignment" else "Alignment")
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                TextAlign.entries.forEach { a ->
-                    val icon = when (a) {
-                        TextAlign.START -> if (spec.vertical) Icons.Filled.VerticalAlignTop else Icons.AutoMirrored.Filled.FormatAlignLeft
-                        TextAlign.CENTER -> if (spec.vertical) Icons.Filled.VerticalAlignCenter else Icons.Filled.FormatAlignCenter
-                        TextAlign.END -> if (spec.vertical) Icons.Filled.VerticalAlignBottom else Icons.AutoMirrored.Filled.FormatAlignRight
-                    }
-                    ToolIconButton(icon, if (spec.vertical) a.verticalLabel else a.horizontalLabel, onClick = { style { it.copy(align = a) } }, selected = spec.align == a)
-                }
-            }
-        }
+        // v1.9 (R4): the three buttons plus “Justify lines” / “Justify the last line too”.
+        if (!onPath) TextAlignSection(spec) { style(it) }
 
         SectionHeader("Spacing")
         LabeledSlider(
@@ -254,6 +241,9 @@ fun TextEditorDialog(host: TextEditorHost) {
                 typing = SliderTyping(decimals = 2, suffix = "×"),
             )
         }
+
+        // v1.9 (R7): bullets and numbering (horizontal text only; the section says so otherwise).
+        TextListSection(tool, onPickMarkerFont = { markerFontPickerOpen = true })
 
         // v1.6 §3.5: letters scaled one by one (also on the options strip's "Letters" chip).
         SectionHeader("Letter scaling")
@@ -296,6 +286,7 @@ fun TextEditorDialog(host: TextEditorHost) {
             onDismiss = { fontPickerOpen = false },
         )
     }
+    if (markerFontPickerOpen) MarkerFontPicker(tool, fontSample(item.text)) { markerFontPickerOpen = false }
 
     when (colorTarget) {
         ColorTarget.FILL -> ColorPickerDialog(
@@ -467,11 +458,13 @@ private fun PlaceholderSection(tool: TextEditorHost, onPath: Boolean) {
     }
     val shownNote = note?.takeIf { it.first.first == item.text && it.first.second == spec }?.second
     val canFill = !onPath && spec.box.wrapFor(spec.vertical) > 0f
-    val amounts = PlaceholderAmount.entries.filter { canFill || it != PlaceholderAmount.FILL }
+    // v1.9 (R6): shortest first, "Fill the box" (only with a fixed box) last; the amounts wrap
+    // onto a second line at 360 dp instead of hiding behind a scroll edge.
+    val amounts = PlaceholderAmount.CHIP_ORDER.filter { canFill || it != PlaceholderAmount.FILL }
     val amount = tool.placeholderAmount.takeIf { it in amounts } ?: PlaceholderAmount.PARAGRAPH
     SectionHeader("Placeholder text")
     ChoiceChips(PlaceholderKind.entries.map { it.label }, tool.placeholderKind.ordinal, { tool.placeholderKind = PlaceholderKind.entries[it] })
-    ChoiceChips(amounts.map { it.label }, amounts.indexOf(amount), { tool.placeholderAmount = amounts[it] }, Modifier.padding(top = 2.dp))
+    TextFlowChips(amounts.map { it.label }, amounts.indexOf(amount), { tool.placeholderAmount = amounts[it] }, Modifier.padding(top = 2.dp))
     Row(verticalAlignment = Alignment.CenterVertically) {
         ChoiceChips(listOf("Replace text", "Add after"), if (tool.placeholderReplace) 0 else 1, { tool.placeholderReplace = it == 0 }, Modifier.weight(1f))
         Spacer(Modifier.width(8.dp))

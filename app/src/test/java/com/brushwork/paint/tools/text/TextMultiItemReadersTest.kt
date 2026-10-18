@@ -27,6 +27,7 @@ import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
 import com.brushwork.paint.tools.text.frames.FrameFixtures
 import com.brushwork.paint.tools.transform.DataRender
+import com.brushwork.paint.ui.common.TextLabels19
 import com.brushwork.paint.ui.editor.HistoryLabels
 import com.brushwork.paint.ui.layers.FrameInfoCache
 import com.brushwork.paint.vector.VPaint
@@ -230,6 +231,8 @@ class TextMultiItemReadersTest {
         assertEquals(before, TextCodec.decodeAll(layer.textData))
         assertRendered(layer, "after undo")
         // A layer of one text is deleted whole, as in v1.8.
+        // v1.9 (R14): the switch keeps the new text out of the open text layer.
+        c.settings.textNewLayerEachTime = true
         tool.startTextAt(150f, 120f)
         tool.setText("Solo")
         tool.confirmEditor()
@@ -432,6 +435,7 @@ class TextMultiItemReadersTest {
         assertNotNull(target)
         val steps = s.c.undoManager.undoCount
         assertFalse(s.tool.join(frame, target!!))
+        assertEquals("v1.9 review: the refusal says why", TextLabels19.ALONE_ONLY, s.c.message)
         assertEquals(json, target.textData)
         assertEquals(steps, s.c.undoManager.undoCount)
         assertEquals("A short story", s.c.textThreads.frameOf(frame)!!.thread.story)

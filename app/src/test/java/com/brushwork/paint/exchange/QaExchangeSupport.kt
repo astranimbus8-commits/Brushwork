@@ -145,25 +145,33 @@ internal object QaExchange {
         // Text layers.
         c.selectTool(ToolId.TEXT)
         val text = c.tools.getValue(ToolId.TEXT) as TextTool
-        fun newText(x: Float, y: Float, s: String, edit: TextTool.() -> Unit = {}): Layer {
-            text.startTextAt(x, y)
-            text.setText(s)
-            // New texts take the last text's style (a vertical one stays vertical).
-            text.updateSpec { it.copy(sizePx = 22f, color = 0xFF202020.toInt(), vertical = false) }
-            text.confirmEditor()
-            text.edit()
-            assertTrue("text \"$s\" committed", text.commitItem())
-            return c.activeLayer.also { assertTrue(it.isTextLayer) }
+        // v1.9 (R14): a new text joins the active text layer; these checks want a layer per text,
+        // as v1.8 made them, so "New layer each time" is on while they are placed.
+        val eachTime = text.newLayerEachTime
+        text.newLayerEachTime = true
+        try {
+            fun newText(x: Float, y: Float, s: String, edit: TextTool.() -> Unit = {}): Layer {
+                text.startTextAt(x, y)
+                text.setText(s)
+                // New texts take the last text's style (a vertical one stays vertical).
+                text.updateSpec { it.copy(sizePx = 22f, color = 0xFF202020.toInt(), vertical = false) }
+                text.confirmEditor()
+                text.edit()
+                assertTrue("text \"$s\" committed", text.commitItem())
+                return c.activeLayer.also { assertTrue(it.isTextLayer) }
+            }
+            out["text"] = newText(120f, 30f, "Hello export")
+            out["vertical"] = newText(460f, 120f, "Tate") { toggleVertical() }
+            out["onPath"] = newText(380f, 100f, "Around and around") { setPath(TextPathSpec(type = TextPathType.CIRCLE, cx = 380f, cy = 100f, radius = 50f)) }
+            out["wrapped"] = newText(130f, 140f, "Words flow around the red picture on this layer and keep going for a while.") {
+                updateSpec { it.copy(sizePx = 14f, box = it.box.copy(width = 220f)) }
+                setWrapSource(raster)
+                setWrapSides(WrapSides.BOTH)
+            }
+            assertTrue("wrap is on", com.brushwork.paint.tools.text.TextCodec.decode(out["wrapped"]!!.textData)!!.wrapActive)
+        } finally {
+            text.newLayerEachTime = eachTime
         }
-        out["text"] = newText(120f, 30f, "Hello export")
-        out["vertical"] = newText(460f, 120f, "Tate") { toggleVertical() }
-        out["onPath"] = newText(380f, 100f, "Around and around") { setPath(TextPathSpec(type = TextPathType.CIRCLE, cx = 380f, cy = 100f, radius = 50f)) }
-        out["wrapped"] = newText(130f, 140f, "Words flow around the red picture on this layer and keep going for a while.") {
-            updateSpec { it.copy(sizePx = 14f, box = it.box.copy(width = 220f)) }
-            setWrapSource(raster)
-            setWrapSides(WrapSides.BOTH)
-        }
-        assertTrue("wrap is on", com.brushwork.paint.tools.text.TextCodec.decode(out["wrapped"]!!.textData)!!.wrapActive)
         // Tone adjustment layer right above the background (Masks tool, + Linear).
         c.selectLayer(bg)
         c.selectTool(ToolId.MASK)

@@ -215,6 +215,14 @@ object VerticalTextLayout {
      * v1.6 letter scaling: [factors] (per character of [text], see `LetterRamp`) scale each cell
      * along the column, its letter spacing with it; the cell stays centred on the column axis
      * (the column pitch keeps the full size). Null = unscaled (the v1.5 layout exactly).
+     *
+     * v1.9 (R4, A3 step 12): [justify] spreads columns to the block height as `Justify` spreads
+     * lines to the box width: never a different break; [TextJustify.ON] every column but the last
+     * of its line (paragraph), which keeps [align]; [TextJustify.ALL] that one too. The free space
+     * goes into the column's word gaps (space cells after its first letter, before its last one);
+     * a column without one spreads between its cells when it holds Chinese, Japanese or Korean
+     * letters, or under [TextJustify.ALL]; a one-word Latin column under ON keeps [align]. A
+     * spread column starts at the top. [TextJustify.OFF] (the default) is the v1.8 layout exactly.
      */
     fun layout(
         text: String,
@@ -227,12 +235,15 @@ object VerticalTextLayout {
         wrapLength: Float = 0f,
         leftToRight: Boolean = false,
         factors: FloatArray? = null,
+        justify: TextJustify = TextJustify.OFF,
     ): VerticalLayoutResult {
         val lines = text.split('\n')
         val pitch = em * lineSpacing
         val spacing = letterSpacingEm * em
         val wrap = if (wrapLength.isFinite() && wrapLength > 0f) wrapLength else 0f
         val columns = ArrayList<Column>()
+        // The index of each line's last column (the last of its paragraph).
+        val lastOfLine = HashSet<Int>()
         var lineStart = 0
         for (line in lines) {
             val cs = clusters(line.trimEnd('\r'), style)
@@ -247,6 +258,7 @@ object VerticalTextLayout {
             }
             val gap = FloatArray(cs.size) { i -> if (scale == null) spacing else spacing * scale[i] }
             columns += columnsOf(cs, adv, gap, scale, wrap)
+            lastOfLine += columns.lastIndex
             lineStart += line.length + 1
         }
         val n = columns.size
@@ -256,17 +268,49 @@ object VerticalTextLayout {
         val glyphs = ArrayList<VerticalGlyph>()
         columns.forEachIndexed { col, c ->
             val cx = if (leftToRight) em / 2f + col * pitch else width - em / 2f - col * pitch
-            var y = when (align) {
-                TextAlign.START -> 0f
-                TextAlign.CENTER -> (height - c.length) / 2f
-                TextAlign.END -> height - c.length
+            val spread = if (justify == TextJustify.OFF || (justify == TextJustify.ON && col in lastOfLine)) null else spreadOf(c, height, justify)
+            var y = when {
+                spread != null -> 0f
+                align == TextAlign.START -> 0f
+                align == TextAlign.CENTER -> (height - c.length) / 2f
+                else -> height - c.length
             }
             for (i in c.from until c.to) {
                 if (i > c.from) y += c.gap[i]
                 glyphs += VerticalGlyph(c.cs[i].text, c.cs[i].kind, cx, y + c.adv[i] / 2f, c.adv[i], col, c.scale?.get(i) ?: 1f)
                 y += c.adv[i]
+                if (spread != null && spread.after(i)) y += spread.extra
             }
         }
         return VerticalLayoutResult(glyphs, width, height, n)
+    }
+
+    /** Slack below this (px) leaves a column as it is (float sums of advances), as in `Justify`. */
+    private const val EPS = 1e-3f
+
+    /** How a justified column spreads: [extra] after each cell [after] says. */
+    private class Spread(val extra: Float, private val first: Int, private val last: Int, private val words: Boolean, private val cs: List<Cluster>) {
+        fun after(i: Int): Boolean = i in first until last && (!words || isSpace(cs[i].text))
+    }
+
+    /**
+     * How column [c] spreads to [height] under [justify] (see [layout]), or null when it keeps
+     * its alignment: no free space, a single letter, or a one-word Latin column under
+     * [TextJustify.ON]. Spaces opening a paragraph stay as they are (an indent); spaces after the
+     * last letter hang past the end, so that letter ends at [height].
+     */
+    private fun spreadOf(c: Column, height: Float, justify: TextJustify): Spread? {
+        var first = c.from
+        while (first < c.to && isSpace(c.cs[first].text)) first++
+        var last = c.to - 1
+        while (last > first && isSpace(c.cs[last].text)) last--
+        if (last <= first) return null
+        val slack = height - lengthOf(c.adv, c.gap, c.from, last + 1)
+        if (!(slack > EPS) || !slack.isFinite()) return null
+        var gaps = 0
+        for (i in first until last) if (isSpace(c.cs[i].text)) gaps++
+        if (gaps > 0) return Spread(slack / gaps, first, last, words = true, cs = c.cs)
+        if (justify != TextJustify.ALL && (first..last).none { Justify.hasCjk(c.cs[it].text, 0, c.cs[it].text.length) }) return null
+        return Spread(slack / (last - first), first, last, words = false, cs = c.cs)
     }
 }

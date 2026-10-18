@@ -439,6 +439,8 @@ class TextLayerEditRobolectricTest {
     @Test
     fun tappingEmptyCanvasStillAddsTextAndTheActiveLayerWins() {
         val (c, tool) = newController()
+        // Two one-text layers, as v1.8 made them (v1.9, R14: the switch on).
+        c.settings.textNewLayerEachTime = true
         val a = addText(c, tool, "AAAA", 150f, 100f)
         val b = addText(c, tool, "BBBB", 150f, 100f) // on top, same place
         // Empty canvas: a new text.
@@ -446,6 +448,13 @@ class TextLayerEditRobolectricTest {
         assertNull(tool.editingLayer)
         assertTrue(tool.editingNew && tool.editorOpen)
         tool.cancelEditor()
+        // With the switch off, it joins the active text layer (v1.9, R14).
+        c.settings.textNewLayerEachTime = false
+        tap(c, 20f, 20f)
+        assertSame(b, tool.editingLayer)
+        assertTrue(tool.joining && tool.editingNew && tool.editorOpen)
+        tool.cancelEditor()
+        assertNull("a cancelled new text leaves the layer", tool.editingLayer)
         // Over both: the topmost...
         tap(c, 150f, 100f)
         assertSame(b, tool.editingLayer)
@@ -467,6 +476,8 @@ class TextLayerEditRobolectricTest {
     @Test
     fun tappingAwayFromAnEditedTextAppliesItAndLoadsTheTappedOne() {
         val (c, tool) = newController(400, 200)
+        // Two one-text layers, as v1.8 made them (v1.9, R14: the switch on).
+        c.settings.textNewLayerEachTime = true
         val left = addText(c, tool, "Left", 90f, 100f)
         val right = addText(c, tool, "Right", 300f, 100f)
         assertTrue(tool.editLayer(left))

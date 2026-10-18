@@ -122,6 +122,15 @@ object TextKerns {
      */
     fun applies(text: String, gap: Int): Boolean = GapRule(text).check(gap) == GapRule.APPLIES
 
+    /**
+     * v1.9 (R5): [applies] for many gaps of one [text], looking at each paragraph once (a
+     * pair-kerning mode, [KerningModes], asks every gap in order).
+     */
+    internal fun applyRule(text: String): (Int) -> Boolean {
+        val rule = GapRule(text)
+        return { gap -> rule.check(gap) == GapRule.APPLIES }
+    }
+
     /** The gaps of [gaps] a kern applies to in [text] ([applies]), in their order. */
     fun applying(text: String, gaps: Iterable<Int>): List<Int> {
         val rule = GapRule(text)

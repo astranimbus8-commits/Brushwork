@@ -726,8 +726,8 @@ data class TextItem(
      *
      * v1.9: a negative [id] becomes 0; the path's flat fields hold the v1.8 fallback of its nodes
      * ([TextPathSpec.withNodeFallback]); vertical text and text on a path have no list (R7:
-     * `spec.list` back to its default). `spec.justify` is kept on vertical text and on path text,
-     * where the layout ignores it (C23).
+     * `spec.list` back to its default). `spec.justify` is kept on vertical text (its columns
+     * justify, A3 step 12) and on path text, where the layout ignores it (C23).
      */
     fun sanitized(): TextItem {
         val base = sanitizedNumbers()

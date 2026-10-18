@@ -252,7 +252,7 @@ class LabelsV19Test {
             "text path sheet and its node bar",
             v19 = pick(
                 "TextLabels19", "ADD_POINTS", "EDIT_AS_PATH", "EDIT_AS_POLYLINE", "DONE_POINTS", "NODES_STARTED", "POINT_COUNT", "NODES_HINT",
-                "NODES_MAX",
+                "NODES_MAX", "MOVE_POINT",
             ),
             older = visible("ui/placement/TextPathSheet.kt") + listOf("Add point", "Delete point", "Sharp corner"),
         )
@@ -263,8 +263,15 @@ class LabelsV19Test {
         if (labelsV19 == null) return
         assertNoSubstrings(
             "Text strip, More row",
-            v19 = pick("PlaceLabels19", "NEW_LAYER_EACH_TIME", "NEW_LAYER_EACH_TIME_DESC") + pick("TextLabels19", "LAYER_FULL", "RASTERIZED_TEXTS"),
+            v19 = pick("PlaceLabels19", "NEW_LAYER_EACH_TIME", "NEW_LAYER_EACH_TIME_DESC") +
+                pick("TextLabels19", "LAYER_FULL", "RASTERIZED_TEXTS", "LAYER_FULL_NO_COPY", "WRAP_ALONE_ONLY"),
             older = visible("ui/placement/TextStripItems.kt") + values(StripLabels18) + listOf("Bring forward", "Send backward"),
+        )
+        // A3 (lead, at its merge): the Text frames tool's refusal for a text among others, beside its own messages.
+        assertNoSubstrings(
+            "Text frames tool",
+            v19 = pick("TextLabels19", "ALONE_ONLY"),
+            older = visible("tools/text/frames/TextFrameTool.kt"),
         )
     }
 

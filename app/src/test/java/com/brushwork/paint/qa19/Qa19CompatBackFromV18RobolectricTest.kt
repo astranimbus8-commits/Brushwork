@@ -2,6 +2,7 @@ package com.brushwork.paint.qa19
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
@@ -22,7 +23,9 @@ import com.brushwork.paint.compat18.ShapeLayerDataV18
 import com.brushwork.paint.compat18.ShapeObjectV18
 import com.brushwork.paint.compat18.ShapeSettingsV18
 import com.brushwork.paint.compat18.ShapeTypeV18
+import com.brushwork.paint.compat18.TextAlignV18
 import com.brushwork.paint.compat18.TextCodecV18
+import com.brushwork.paint.compat18.TextPathTypeV18
 import com.brushwork.paint.compat18.TextTransformsV18
 import com.brushwork.paint.compat18.ToolSettingsV18
 import com.brushwork.paint.compat18.VObjectV18
@@ -56,6 +59,22 @@ import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
 import com.brushwork.paint.tools.points.PointSelection
 import com.brushwork.paint.tools.select.SelectionDuplicate
+import com.brushwork.paint.tools.text.TextAlign
+import com.brushwork.paint.tools.text.TextBoxSpec
+import com.brushwork.paint.tools.text.TextCodec
+import com.brushwork.paint.tools.text.TextFont
+import com.brushwork.paint.tools.text.TextItem
+import com.brushwork.paint.tools.text.TextJustify
+import com.brushwork.paint.tools.text.TextKerningMode
+import com.brushwork.paint.tools.text.TextListSpec
+import com.brushwork.paint.tools.text.TextListType
+import com.brushwork.paint.tools.text.TextNumbering
+import com.brushwork.paint.tools.text.TextPathNodes
+import com.brushwork.paint.tools.text.TextPathSpec
+import com.brushwork.paint.tools.text.TextPathType
+import com.brushwork.paint.tools.text.TextRenderer
+import com.brushwork.paint.tools.text.TextSpec
+import com.brushwork.paint.tools.text.TextTool
 import com.brushwork.paint.tools.vector.CornerStyle
 import com.brushwork.paint.tools.vector.CurveSettings
 import com.brushwork.paint.tools.vector.ShapeCodec
@@ -73,6 +92,8 @@ import com.brushwork.paint.vector.VAnchor
 import com.brushwork.paint.vector.VPaint
 import com.brushwork.paint.vector.VPath
 import com.brushwork.paint.vector.VShape
+import com.brushwork.paint.vector.VSpline
+import com.brushwork.paint.vector.VSplinePoint
 import com.brushwork.paint.vector.VStroke
 import com.brushwork.paint.vector.VStrokeStyle
 import com.brushwork.paint.vector.VSubpath
@@ -102,6 +123,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import java.io.File
+import kotlin.math.hypot
 
 /**
  * v1.9 (design 2.2 and 5.2, modelled on `qa18/Qa18CompatBackFromV17RobolectricTest`): what v1.8
@@ -162,6 +184,8 @@ class Qa19CompatBackFromV18RobolectricTest {
                 val item = TextCodecV18.decode(d)
                 assertNotNull("$row ${l.name}: v1.8 reads the text", item)
                 written += TextCodecV18.encode(item!!)
+                // A3: the text data is a string in project.json (its quotes escaped): look for the keys in it as read.
+                inLayers.append(d)
             }
             l.shapeData?.let { d ->
                 val s = ShapeCodecV18.decode(d)
@@ -238,58 +262,113 @@ class Qa19CompatBackFromV18RobolectricTest {
 
     // ------------------------------------------------------------------ the rows (5.2)
 
-    @Ignore("5.2 row 1, TextSpec.justify (NEVER): owner A3")
     @Test
     fun row01TextJustify() {
         v18Reads("text-justify", listOf("justify"))
         // A3: v1.8 shows the saved pixels; an edit lays out with `align` (ragged) and drops the field.
+        val item = requireNotNull(TextCodecV18.decode(firstText("text-justify", "Justified"))) { "v1.8 reads the justified text" }
+        assertEquals(TEXT_PARAGRAPH, item.text)
+        assertEquals("the last line's alignment is v1.8's align", TextAlignV18.END, item.spec.align)
+        assertTrue("the box width is kept", item.spec.box.width > 0f)
     }
 
-    @Ignore("5.2 row 2, TextSpec.kerningMode (NEVER; sanitized sets fontKerning = true): owner A3")
     @Test
     fun row02TextKerningMode() {
         v18Reads("text-kerning", listOf("kerningMode"))
-        // A3: v1.8 shows the saved pixels; an edit kerns as "Auto" (fontKerning is true in the data).
+        // A3: v1.8 shows the saved pixels; an edit kerns as "Auto" while "Font kerning" is on in the
+        // data, and not at all while it is off ("Off" keeps the mode in v1.9 and turns the switch off).
+        val metrics = requireNotNull(TextCodecV18.decode(firstText("text-kerning", "Metrics"))) { "v1.8 reads Metrics" }
+        assertTrue("Metrics: Font kerning on, so v1.8 kerns as Auto", metrics.spec.fontKerning)
+        val off = requireNotNull(TextCodecV18.decode(firstText("text-kerning", "Off"))) { "v1.8 reads Off" }
+        assertFalse("Off: Font kerning off, so v1.8 doesn't kern", off.spec.fontKerning)
     }
 
-    @Ignore("5.2 row 3, TextSpec.list (NEVER): owner A3")
     @Test
     fun row03TextList() {
         v18Reads("text-list", listOf("list"))
         // A3: v1.8 shows the saved pixels; an edit drops markers and indent and keeps the text.
+        for (name in listOf("Numbered", "Bullets")) {
+            val item = requireNotNull(TextCodecV18.decode(firstText("text-list", name))) { "v1.8 reads $name" }
+            assertEquals(name, TEXT_LIST, item.text)
+            assertTrue("$name: the box width is kept", item.spec.box.width > 0f)
+            // v1.9 reads its list back.
+            assertTrue(name, TextCodec.decode(firstText("text-list", name))!!.spec.list.isOn)
+        }
     }
 
-    @Ignore("5.2 row 4, TextPathSpec.nodes (NEVER; sanitized writes the CURVE or LINE fallback): owner A3")
     @Test
     fun row04TextPathNodes() {
         v18Reads("text-path-nodes", listOf("nodes"))
         // A3: v1.8 reads the CURVE or LINE fallback (a closed guide becomes an open curve); the nodes are dropped.
+        for ((name, type) in listOf("Path nodes" to TextPathTypeV18.CURVE, "Closed" to TextPathTypeV18.CURVE, "Two points" to TextPathTypeV18.LINE)) {
+            val data = firstText("text-path-nodes", name)
+            val old = requireNotNull(TextCodecV18.decode(data)) { "v1.8 reads $name" }
+            assertEquals(name, type, old.path.type)
+            // v1.9 reads its nodes back. An open guide's fallback runs between its end nodes.
+            val nodes = requireNotNull(TextPathNodes.of(TextCodec.decode(data)!!.path)) { "v1.9 reads the nodes of $name" }
+            if (TextPathNodes.isClosed(nodes)) continue
+            assertEquals("$name: the fallback starts at the first node", nodes.points.first().x, old.path.x1, 0.05f)
+            assertEquals("$name: the fallback starts at the first node", nodes.points.first().y, old.path.y1, 0.05f)
+            assertEquals("$name: the fallback ends at the last node", nodes.points.last().x, old.path.x2, 0.05f)
+            assertEquals("$name: the fallback ends at the last node", nodes.points.last().y, old.path.y2, 0.05f)
+        }
+        // A closed guide's fallback runs once around its curve (through, not on, its nodes): it
+        // starts and ends at one point of the circle.
+        val closed = requireNotNull(TextCodecV18.decode(firstText("text-path-nodes", "Closed"))).path
+        assertTrue("the circle's nodes are closed", TextPathNodes.isClosed(TextPathNodes.of(TextCodec.decode(firstText("text-path-nodes", "Closed"))!!.path)!!))
+        assertEquals("Closed: the fallback ends where it starts", closed.x1, closed.x2, 0.05f)
+        assertEquals("Closed: the fallback ends where it starts", closed.y1, closed.y2, 0.05f)
+        assertEquals("Closed: it starts on the circle", 40f, hypot(closed.x1 - 120f, closed.y1 - 100f), 0.5f)
     }
 
-    @Ignore("5.2 row 5, TextLayerData.more and TextItem.id (NEVER): owner A3")
     @Test
     fun row05SeveralTextsInALayer() {
-        v18Reads("text-several", listOf("more"))
+        val dto = v18Reads("text-several", listOf("more"))
         // A3: v1.8 shows the saved pixels with every text; it edits only the first text; its
         // re-encode drops `more`; an untouched layer's JSON survives a v1.8 save.
+        val data = firstText("text-several", "Two texts")
+        assertEquals("v1.9 wrote both texts", SEVERAL.map { it.text }, TextCodec.decodeAll(data).map { it.text })
+        val first = requireNotNull(TextCodecV18.decode(data)) { "v1.8 reads the layer" }
+        assertEquals("v1.8 edits the first text", SEVERAL[0].text, first.text)
+        val edited = TextCodecV18.encode(first.copy(text = "Edited in v1.8"))
+        assertFalse("v1.8's re-encode drops the others", edited.contains("\"more\""))
+        assertEquals("v1.9 reads v1.8's edit as one text", listOf("Edited in v1.8"), TextCodec.decodeAll(edited).map { it.text })
+        // Untouched: the layer's text data goes through v1.8's save as it was.
+        val saved = ProjectFormatV18.decode(ProjectFormatV18.encode(dto))
+        assertEquals("v1.8 saves the untouched layer's data as it was", data, saved.layers.single { it.name == "Two texts" }.textData)
+        // A one-text layer is v1.8's format, byte for byte.
+        val one = firstText("text-several", "One text")
+        assertEquals(one, TextCodecV18.encode(TextCodecV18.decode(one)!!))
     }
 
-    @Ignore("5.2 row 6, v1.8 Transform (move, rotate, scale) of a several-text layer (TextTransforms.mapped): owner A3")
     @Test
     fun row06V18TransformOfASeveralTextLayer() {
+        v18Reads("text-transform", listOf("more"))
         val data = firstText("text-transform", "Three texts")
+        assertEquals(3, TextCodec.decodeAll(data).size)
         val moved = TextTransformsV18.mapped(data, floatArrayOf(0.8f, -0.6f, 40f, 0.6f, 0.8f, -12f, 0f, 0f, 1f))
         assertNotNull("v1.8 transforms the layer's text", moved)
         assertFalse("v1.8 keeps only the first text", moved!!.contains("\"more\""))
         // A3: v1.9 reopens the v1.8-transformed layer with one editable text, the pixels of the
         // others moved with it (I1 for the first text only).
+        val reopened = TextCodec.decodeAll(moved).single()
+        val src = TextCodec.decodeAll(data)[0]
+        assertEquals(src.text, reopened.text)
+        assertEquals("moved as v1.8 maps it", 0.8f * src.cx - 0.6f * src.cy + 40f, reopened.cx, 0.01f)
+        assertEquals(0.6f * src.cx + 0.8f * src.cy - 12f, reopened.cy, 0.01f)
+        assertEquals("turned with it", src.rotationDeg + 36.87f, reopened.rotationDeg, 0.01f)
     }
 
-    @Ignore("5.2 row 7, v1.8 array source and data lift of a several-text layer (ArraySources, DataLift): owner A3")
     @Test
     fun row07V18ArraySourceAndLiftOfASeveralTextLayer() {
         v18Reads("text-array-lift", listOf("more"))
         // A3: v1.8's copy or lift carries the first text only; the others are pixels.
+        val data = firstText("text-array-lift", "Array source")
+        assertEquals(SEVERAL.size, TextCodec.decodeAll(data).size)
+        // v1.8's ArraySources and DataLift read a text layer with its TextCodec and write the copy with it.
+        val copy = TextCodecV18.encode(requireNotNull(TextCodecV18.decode(data)) { "v1.8 reads the source" })
+        assertFalse(copy.contains("\"more\""))
+        assertEquals("the copy holds the first text", listOf(SEVERAL[0].text), TextCodec.decodeAll(copy).map { it.text })
     }
 
     // Row 8, v1.8's wrap re-flow (TextWrapReflow): not reachable, no section (a wrapping or
@@ -490,11 +569,17 @@ class Qa19CompatBackFromV18RobolectricTest {
         }
     }
 
-    @Ignore("5.2 row 12 (text arrange order), existing fields: owner A3")
     @Test
     fun row12TextArrangeOrder() {
-        v18Reads("text-arrange")
-        // A3: identical in v1.8.
+        v18Reads("text-arrange", listOf("more"))
+        // A3: v1.9's Bring forward stores the new picture order in the existing fields (`item`
+        // and `more`, bottom first); v1.8 shows the saved pixels, drawn in that order, and edits
+        // the bottom text, which is the one the arrange put there.
+        val data = firstText("text-arrange", "Arranged")
+        assertEquals("arranged by Bring forward", ARRANGED_ORDER, TextCodec.decodeAll(data).map { it.text })
+        val first = requireNotNull(TextCodecV18.decode(data)) { "v1.8 reads the layer" }
+        assertEquals("v1.8 edits the new bottom text", ARRANGED_ORDER[0], first.text)
+        assertEquals(ARRANGE[1].cx, first.cx, 0.01f)
     }
 
     /** 5.2 row 12 (R17 edits), existing fields: owner A9, fixture by [writeShapeR17] (the tool driven below the UI). */
@@ -628,6 +713,14 @@ class Qa19CompatBackFromV18RobolectricTest {
         "shape-r17" to ::writeShapeR17,
         "layers-merged" to ::writeMergedLayers,
         "duplicates" to ::writeDuplicates,
+        "text-justify" to ::writeTextJustify,
+        "text-kerning" to ::writeTextKerning,
+        "text-list" to ::writeTextList,
+        "text-path-nodes" to ::writeTextPathNodes,
+        "text-several" to ::writeTextSeveral,
+        "text-transform" to ::writeTextTransform,
+        "text-array-lift" to ::writeTextArrayLift,
+        "text-arrange" to ::writeTextArrange,
     )
 
     /** `project.json` of the gallery's project [id], copied into [dir]. */
@@ -1060,6 +1153,106 @@ class Qa19CompatBackFromV18RobolectricTest {
         assertEquals(listOf("Layer 1", ShapeType.RECTANGLE.label, VECTOR_LAYER), c.doc.layers.map { it.name })
     }
 
+    /** Row 1 (A3): a justified paragraph in a 200 px box, its last line on the right. */
+    private fun writeTextJustify(dir: File) {
+        val spec = TextSpec(sizePx = 24f, align = TextAlign.END, justify = TextJustify.ON, box = TextBoxSpec(width = 200f))
+        saveTexts(dir, "Justified" to TextItem(TEXT_PARAGRAPH, spec, cx = 120f, cy = 80f))
+    }
+
+    /**
+     * Row 2 (A3): "Metrics" (Font kerning on) on Latin and Japanese letters, and "Off" ("Font
+     * kerning" off, keeping "Optical" for when it is turned on again).
+     */
+    private fun writeTextKerning(dir: File) {
+        val metrics = TextSpec(sizePx = 28f, kerningMode = TextKerningMode.METRICS_LATIN)
+        val off = TextSpec(sizePx = 28f, fontKerning = false, kerningMode = TextKerningMode.OPTICAL)
+        saveTexts(dir, "Metrics" to TextItem("AVATAR テキスト", metrics, cx = 120f, cy = 50f), "Off" to TextItem("AVATAR", off, cx = 120f, cy = 110f))
+    }
+
+    /**
+     * Row 3 (A3): "Numbered" (Roman from III, larger and thicker markers in a serif font, a wide
+     * gap) and "Bullets" (stars), each three paragraphs in a 200 px box.
+     */
+    private fun writeTextList(dir: File) {
+        val numbered = TextListSpec(
+            type = TextListType.NUMBERS, numbering = TextNumbering.UPPER_ROMAN, start = 3,
+            markerScale = 1.2f, markerWeight = 0.5f, gapEm = 1f, markerFont = TextFont.SERIF,
+        )
+        val box = TextBoxSpec(width = 200f)
+        saveTexts(
+            dir,
+            "Numbered" to TextItem(TEXT_LIST, TextSpec(sizePx = 16f, box = box, list = numbered), cx = 120f, cy = 45f),
+            "Bullets" to TextItem(TEXT_LIST, TextSpec(sizePx = 16f, box = box, list = TextListSpec(type = TextListType.BULLETS, bullet = "★")), cx = 120f, cy = 115f),
+        )
+    }
+
+    /**
+     * Row 4 (A3): texts along edited points (R12): "Path nodes" (5 path nodes, the middle one a
+     * corner), "Closed" (a circle as 8 closed path nodes) and "Two points" (a polyline of 2).
+     */
+    private fun writeTextPathNodes(dir: File) {
+        val open = VSpline(
+            listOf(VSplinePoint(20f, 60f), VSplinePoint(70f, 20f), VSplinePoint(120f, 60f, sharp = true), VSplinePoint(170f, 20f), VSplinePoint(220f, 60f)),
+            order = 4,
+        )
+        val closed = requireNotNull(TextPathNodes.asPath(TextPathSpec(type = TextPathType.CIRCLE, cx = 120f, cy = 100f, radius = 40f, startAngleDeg = -90f)))
+        val two = VSpline(listOf(VSplinePoint(20f, 150f), VSplinePoint(220f, 140f)), order = 2)
+        fun along(text: String, nodes: VSpline) =
+            TextItem(text, TextSpec(sizePx = 16f), cx = 120f, cy = 80f, path = TextPathNodes.withNodes(TextPathSpec(type = TextPathType.CURVE), nodes))
+        saveTexts(dir, "Path nodes" to along("Along the path nodes", open), "Closed" to along("Round and round", closed), "Two points" to along("Two points", two))
+    }
+
+    /** Row 5 (A3): "Two texts" (one layer, two texts, R14) and "One text" (v1.8's format). */
+    private fun writeTextSeveral(dir: File) {
+        saveTextLayers(dir, "Two texts" to SEVERAL, "One text" to listOf(TextItem("Alone", TextSpec(sizePx = 20f), cx = 120f, cy = 140f)))
+    }
+
+    /** Row 6 (A3): "Three texts", for v1.8's Transform. */
+    private fun writeTextTransform(dir: File) {
+        saveTextLayers(dir, "Three texts" to SEVERAL + TextItem("Third", TextSpec(sizePx = 18f), cx = 180f, cy = 130f, rotationDeg = 10f))
+    }
+
+    /** Row 7 (A3): "Array source", two texts, for v1.8's array source and data lift. */
+    private fun writeTextArrayLift(dir: File) {
+        saveTextLayers(dir, "Array source" to SEVERAL)
+    }
+
+    /**
+     * Row 12 (A3): "Arranged", [ARRANGE] drawn and stored by v1.9, then its bottom text opened in
+     * the Text tool and moved up by Bring forward (past the text it overlaps): [ARRANGED_ORDER].
+     */
+    private fun writeTextArrange(dir: File) {
+        val doc = Document("qa19-${dir.name}", dir.name, 240, 160, dpi = 144f)
+        val layer = Layer(doc.newLayerId(), "Arranged", BitmapUtils.createLayerBitmap(doc.width, doc.height))
+        for (item in ARRANGE) TextRenderer.drawItem(Canvas(layer.bitmap), item, TextRenderer.prepare(item), null)
+        layer.textData = TextCodec.encodeAll(ARRANGE)
+        doc.layers += layer
+        val c = EditorController(app, doc, CoroutineScope(Dispatchers.Unconfined), AppSettings(app))
+        c.selectTool(ToolId.TEXT)
+        val tool = c.tools.getValue(ToolId.TEXT) as TextTool
+        assertTrue(tool.editLayer(layer, index = 0))
+        assertTrue("Bring forward", tool.arrangeOpen(1))
+        tool.discard()
+        assertEquals(ARRANGED_ORDER, TextCodec.decodeAll(layer.textData).map { it.text })
+        saveProject(doc, dir)
+    }
+
+    /** A 240 x 160 document of one text layer per [texts] (name to text, its pixels drawn by v1.9), saved into [dir]. */
+    private fun saveTexts(dir: File, vararg texts: Pair<String, TextItem>) =
+        saveTextLayers(dir, *texts.map { (name, item) -> name to listOf(item) }.toTypedArray())
+
+    /** A 240 x 160 document of one text layer per [layers] (name to its texts, bottom first, drawn by v1.9), saved into [dir]. */
+    private fun saveTextLayers(dir: File, vararg layers: Pair<String, List<TextItem>>) {
+        val doc = Document("qa19-${dir.name}", dir.name, 240, 160, dpi = 144f)
+        for ((name, items) in layers) {
+            val layer = Layer(doc.newLayerId(), name, BitmapUtils.createLayerBitmap(doc.width, doc.height))
+            for (item in items) TextRenderer.drawItem(Canvas(layer.bitmap), item, TextRenderer.prepare(item), null)
+            layer.textData = TextCodec.encodeAll(items)
+            doc.layers += layer
+        }
+        saveProject(doc, dir)
+    }
+
     /** Every file under [root] by its path relative to it ('/'-separated), with its bytes. */
     private fun snapshot(root: File): Map<String, ByteArray> =
         root.walkTopDown().filter { it.isFile }.associate { it.relativeTo(root).invariantSeparatorsPath to it.readBytes() }
@@ -1110,6 +1303,28 @@ class Qa19CompatBackFromV18RobolectricTest {
 
         /** v1.8's vector JSON read strictly: a key or a value v1.8 does not know fails. */
         val STRICT_V18 = Json { allowSpecialFloatingPointValues = true }
+
+        /** Row 1 (A3): the justified paragraph. */
+        const val TEXT_PARAGRAPH = "Justified lines reach both edges of the box while the last line keeps its alignment."
+
+        /** Row 3 (A3): three paragraphs and a blank one (neither marked nor counted). */
+        const val TEXT_LIST = "Brushes\n\nLayers and text\nExport"
+
+        /** Rows 5 to 7 (A3): two texts of one layer, bottom first. */
+        val SEVERAL = listOf(
+            TextItem("First text", TextSpec(sizePx = 22f), cx = 90f, cy = 40f),
+            TextItem("Second", TextSpec(sizePx = 26f, color = 0xFFCC2222.toInt()), cx = 140f, cy = 90f, rotationDeg = -8f),
+        )
+
+        /** Row 12 (A3): three texts, bottom first; the first two overlap, the third is apart. */
+        val ARRANGE = listOf(
+            TextItem("Bottom", TextSpec(sizePx = 36f), cx = 90f, cy = 60f),
+            TextItem("Middle", TextSpec(sizePx = 36f, color = 0xFF2266CC.toInt()), cx = 110f, cy = 72f),
+            TextItem("Top", TextSpec(sizePx = 20f), cx = 190f, cy = 135f),
+        )
+
+        /** Row 12 (A3): [ARRANGE] after Bring forward of its bottom text. */
+        val ARRANGED_ORDER = listOf("Middle", "Bottom", "Top")
 
         /** The keys v1.9 adds to [SETTINGS_FILE] (F1a, design 2.3.4). */
         val V19_SETTINGS_KEYS = listOf(

@@ -3,9 +3,11 @@ package com.brushwork.paint.ui.placement
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -15,6 +17,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -26,21 +29,26 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.brushwork.paint.core.LengthUnit
 import com.brushwork.paint.tools.text.TextPathAlign
 import com.brushwork.paint.tools.text.TextPathGeometry
 import com.brushwork.paint.tools.text.TextPathMode
+import com.brushwork.paint.tools.text.TextPathNodeEntry
+import com.brushwork.paint.tools.text.TextPathNodes
 import com.brushwork.paint.tools.text.TextPathSide
 import com.brushwork.paint.tools.text.TextPathSpec
 import com.brushwork.paint.tools.text.TextPathType
-import com.brushwork.paint.tools.text.isClosed
 import com.brushwork.paint.ui.common.LengthField
 import com.brushwork.paint.ui.common.NumberField
 import com.brushwork.paint.ui.common.SectionHeader
+import com.brushwork.paint.ui.common.TextLabels19
 import com.brushwork.paint.ui.common.ToggleRow
 import com.brushwork.paint.ui.common.UnitSelector
 import com.brushwork.paint.ui.theme.BrushworkColors
+import java.util.Locale
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
@@ -67,9 +75,27 @@ private val DIRECTIONS = listOf("Clockwise", "Counter-clockwise")
  *   `TextOnPath.defaultFor` whenever the type changes;
  * - switching the direction of a circle or rectangle also turns the text position by 180°, so the
  *   text stays upright: clockwise text reads upright at the top, counter-clockwise at the bottom.
+ *
+ * While the guide is edited points ([TextPathSpec.nodes], v1.9 R12) the shape's numbers give way
+ * to its point count ([TextLabels19.POINT_COUNT]); a closed guide keeps its side, and its
+ * direction is the order of its points.
  */
 @Composable
-fun TextPathControls(spec: TextPathSpec, dpi: Float, onChange: (TextPathSpec) -> Unit) {
+fun TextPathControls(spec: TextPathSpec, dpi: Float, onChange: (TextPathSpec) -> Unit) =
+    TextPathControls(spec, dpi, onNodes = null, onChange = onChange)
+
+/**
+ * [TextPathControls] with, when [onNodes] is set, the three ways into node editing (v1.9 R12)
+ * under the shapes of text on a path, TextLabels19.ADD_POINTS first ([TextPathNodeEntry]); the
+ * caller closes the sheet and starts the editing.
+ */
+@Composable
+fun TextPathControls(
+    spec: TextPathSpec,
+    dpi: Float,
+    onNodes: ((TextPathNodeEntry) -> Unit)?,
+    onChange: (TextPathSpec) -> Unit,
+) {
     var unit by remember { mutableStateOf(LengthUnit.PX) }
     val dpiD = dpi.toDouble().takeIf { it.isFinite() && it > 0.0 } ?: 72.0
     // Callbacks of fields and sliders may run between recompositions: they edit the newest spec.
@@ -85,12 +111,19 @@ fun TextPathControls(spec: TextPathSpec, dpi: Float, onChange: (TextPathSpec) ->
         WrapChips(TextPathType.entries.map { it.label }, spec.type.ordinal, { i -> edit { it.copy(type = TextPathType.entries[i]) } })
         // Straight text: only the shapes (the text editor explains them right above).
         if (!spec.isActive) return@Column
+        // v1.9 (R12): the guide's points, edited on the canvas.
+        val nodes = TextPathNodes.of(spec)
+        if (onNodes != null) NodeEntries(onNodes)
+        val closed = TextPathGeometry.isClosedGuide(spec)
         PathLabel("Letters")
         WrapChips(TextPathMode.entries.map { it.label }, spec.mode.ordinal, { i -> edit { it.copy(mode = TextPathMode.entries[i]) } })
 
-        if (spec.type.isClosed) {
+        if (closed) {
             PathLabel("Side of the shape")
             WrapChips(TextPathSide.entries.map { it.label }, spec.side.ordinal, { i -> edit { it.copy(side = TextPathSide.entries[i]) } })
+        }
+        // Edited points run in their own order: no direction to pick.
+        if (closed && nodes == null) {
             PathLabel("Direction")
             WrapChips(DIRECTIONS, if (spec.clockwise) 0 else 1, { i ->
                 edit {
@@ -102,11 +135,11 @@ fun TextPathControls(spec: TextPathSpec, dpi: Float, onChange: (TextPathSpec) ->
             PathHint(if (spec.clockwise) "Reads upright along the top of the shape." else "Reads upright along the bottom of the shape.")
         }
 
-        PathLabel(if (spec.type.isClosed) "Align to the text position" else "Align on the path")
+        PathLabel(if (closed) "Align to the text position" else "Align on the path")
         WrapChips(TextPathAlign.entries.map { it.label }, spec.align.ordinal, { i -> edit { it.copy(align = TextPathAlign.entries[i]) } })
 
         val length = remember(spec) { TextPathGeometry.pathLength(spec).toDouble() }
-        val offsetRange = max(1.0, if (spec.type.isClosed) length / 2.0 else length)
+        val offsetRange = max(1.0, if (closed) length / 2.0 else length)
         LengthField(
             label = "Offset",
             px = spec.offset.toDouble(),
@@ -136,6 +169,16 @@ fun TextPathControls(spec: TextPathSpec, dpi: Float, onChange: (TextPathSpec) ->
         )
         PathHint("Offset slides the text along the path; baseline shift moves it away from the path.")
 
+        if (nodes != null) {
+            // The shape is its points: they are moved on the canvas, not typed.
+            SectionHeader("Shape")
+            Text(
+                String.format(Locale.ROOT, TextLabels19.POINT_COUNT, nodes.points.size),
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+            return@Column
+        }
         Row(verticalAlignment = Alignment.CenterVertically) {
             SectionHeader("Shape", Modifier.weight(1f))
             UnitSelector(unit, { unit = it })
@@ -192,6 +235,37 @@ fun TextPathControls(spec: TextPathSpec, dpi: Float, onChange: (TextPathSpec) ->
                 ReverseButton {
                     edit { it.copy(x1 = it.x2, y1 = it.y2, cx1 = it.cx2, cy1 = it.cy2, cx2 = it.cx1, cy2 = it.cy1, x2 = it.x1, y2 = it.y1) }
                 }
+            }
+        }
+    }
+}
+
+/** v1.9 (R12): the tags of the three entries into node editing ([TextPathNodeEntry] names follow it). */
+const val TEXT_PATH_ENTRY_TAG_PREFIX = "v19a3.textpath.entry."
+
+/** v1.9 (R12): the entries' labels, in their order: TextLabels19.ADD_POINTS first. */
+private fun entryLabel(e: TextPathNodeEntry): String = when (e) {
+    TextPathNodeEntry.ADD_POINTS -> TextLabels19.ADD_POINTS
+    TextPathNodeEntry.EDIT_AS_PATH -> TextLabels19.EDIT_AS_PATH
+    TextPathNodeEntry.EDIT_AS_POLYLINE -> TextLabels19.EDIT_AS_POLYLINE
+}
+
+/**
+ * v1.9 (R12): the three entries of [TextPathNodeEntry] under the header "Path points" (tags
+ * [TEXT_PATH_ENTRY_TAG_PREFIX] + the entry's name), wrapping onto more lines on a narrow phone.
+ * Each one closes the sheet and starts node editing on the canvas ([onPick]).
+ */
+@Composable
+private fun NodeEntries(onPick: (TextPathNodeEntry) -> Unit) {
+    PathLabel("Path points")
+    FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        for (e in TextPathNodeEntry.entries) {
+            OutlinedButton(
+                onClick = { onPick(e) },
+                modifier = Modifier.testTag(TEXT_PATH_ENTRY_TAG_PREFIX + e.name).heightIn(min = 48.dp),
+                contentPadding = PaddingValues(horizontal = 12.dp),
+            ) {
+                Text(entryLabel(e), textAlign = TextAlign.Center)
             }
         }
     }

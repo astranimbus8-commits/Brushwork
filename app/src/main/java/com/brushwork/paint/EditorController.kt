@@ -1110,6 +1110,12 @@ class EditorController(
             before.vector != null && after.vector == null -> "vector objects"
             else -> null
         }
+        // v1.9 (C13): a text layer of several texts says how many texts became pixels.
+        val texts = if (kind == "text") com.brushwork.paint.tools.text.TextCodec.decodeAll(before.text).size else 0
+        if (texts > 1) {
+            toast(String.format(java.util.Locale.ROOT, com.brushwork.paint.ui.common.TextLabels19.RASTERIZED_TEXTS, layer.name, texts))
+            return "Rasterize text"
+        }
         if (kind != null) {
             toast("\"${layer.name}\" is now a regular layer (its $kind can no longer be edited; undo to get it back)")
             return when (kind) { "text" -> "Rasterize text"; "shape" -> "Rasterize shape"; else -> "Rasterize vector layer" }

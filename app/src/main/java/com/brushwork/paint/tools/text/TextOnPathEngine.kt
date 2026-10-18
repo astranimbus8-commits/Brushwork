@@ -205,8 +205,11 @@ internal object TextOnPathEngine {
         }
     }
 
-    /** v1.6: [letters] = the letter scaling the layout has (null = none). v1.7: [kerns] = its manual kerns. */
-    private data class LayoutKey(val text: String, val paint: PaintKey, val letters: LetterScaleSpec?, val kerns: List<TextKern>)
+    /**
+     * v1.6: [letters] = the letter scaling the layout has (null = none). v1.7: [kerns] = its manual
+     * kerns. v1.9: [mode] = its pair-kerning mode (null for Auto and Off).
+     */
+    private data class LayoutKey(val text: String, val paint: PaintKey, val letters: LetterScaleSpec?, val kerns: List<TextKern>, val mode: TextKerningMode?)
 
     /** [layout] is compared by identity (a new layout is a new text or font). */
     private data class ResultKey(val layout: PathTextLayout, val spec: TextPathSpec)
@@ -241,24 +244,25 @@ internal object TextOnPathEngine {
      * The layout of [text] with [paint] (cached), null when there is nothing to draw. [letters]
      * (v1.6): the letters are scaled (the caller has checked the script can be; null = plain).
      * [kerns] (v1.7, item 17): [text]'s manual kerns ([TextItem.kerns]; see [buildLayout]).
+     * [mode] (v1.9, R5): its “Pair kerning” mode ([KerningModes]; null for Auto and Off).
      */
     @Synchronized
-    fun layout(text: String, paint: Paint, letters: LetterScaleSpec? = null, kerns: List<TextKern> = emptyList()): PathTextLayout? {
+    fun layout(text: String, paint: Paint, letters: LetterScaleSpec? = null, kerns: List<TextKern> = emptyList(), mode: TextKerningMode? = null): PathTextLayout? {
         val scale = letters?.takeIf { it.isOn }
-        val key = LayoutKey(text, PaintKey.of(paint), scale, kerns)
+        val key = LayoutKey(text, PaintKey.of(paint), scale, kerns, mode)
         layouts[key]?.let { return it.layout }
         val line = oneLine(text)
-        val l = if (line.isBlank()) null else buildLayout(line, paint, scale, text, kerns)
+        val l = if (line.isBlank()) null else buildLayout(line, paint, scale, text, kerns, mode)
         layouts[key] = LayoutEntry(l)
         return l
     }
     /** Layout and placement of [text] along [spec] (cached for the last two inputs); null when nothing is drawn. */
     @Synchronized
-    fun result(text: String, paint: Paint, requested: TextPathSpec, letters: LetterScaleSpec? = null, kerns: List<TextKern> = emptyList()): Pair<PathTextLayout, PathTextResult>? {
+    fun result(text: String, paint: Paint, requested: TextPathSpec, letters: LetterScaleSpec? = null, kerns: List<TextKern> = emptyList(), mode: TextKerningMode? = null): Pair<PathTextLayout, PathTextResult>? {
         if (!requested.isActive) return null
         // Numbers out of any sensible range (a corrupt file, a runaway pinch) are fixed first.
         val spec = TextPathGeometry.sanitized(requested)
-        val layout = layout(text, paint, letters, kerns) ?: return null
+        val layout = layout(text, paint, letters, kerns, mode) ?: return null
         val key = ResultKey(layout, spec)
         results[key]?.let { return layout to it }
         val guide = guideFor(spec) ?: return null
@@ -364,8 +368,8 @@ internal object TextOnPathEngine {
     // ------------------------------------------------------------------ drawing
 
     /** Draws [text] along [spec]; returns the drawn bounds (empty when nothing was drawn). */
-    fun draw(canvas: Canvas, text: String, fill: Paint, stroke: Paint?, spec: TextPathSpec, letters: LetterScaleSpec? = null, kerns: List<TextKern> = emptyList()): RectF {
-        val (layout, res) = result(text, fill, spec, letters, kerns) ?: return RectF()
+    fun draw(canvas: Canvas, text: String, fill: Paint, stroke: Paint?, spec: TextPathSpec, letters: LetterScaleSpec? = null, kerns: List<TextKern> = emptyList(), mode: TextKerningMode? = null): RectF {
+        val (layout, res) = result(text, fill, spec, letters, kerns, mode) ?: return RectF()
         val fillAlign = fill.textAlign
         val strokeAlign = stroke?.textAlign
         fill.textAlign = Paint.Align.LEFT
@@ -424,8 +428,8 @@ internal object TextOnPathEngine {
      * [stroke], the area the outline stroke covers (second; null without one). Color emoji have
      * no outline. Null when nothing is drawn.
      */
-    fun outlines(text: String, fill: Paint, stroke: Paint?, spec: TextPathSpec, letters: LetterScaleSpec? = null, kerns: List<TextKern> = emptyList()): Pair<Path, Path?>? {
-        val (layout, res) = result(text, fill, spec, letters, kerns) ?: return null
+    fun outlines(text: String, fill: Paint, stroke: Paint?, spec: TextPathSpec, letters: LetterScaleSpec? = null, kerns: List<TextKern> = emptyList(), mode: TextKerningMode? = null): Pair<Path, Path?>? {
+        val (layout, res) = result(text, fill, spec, letters, kerns, mode) ?: return null
         val glyphs = Path()
         val outlined = Path()
         val tmp = Path()
@@ -461,8 +465,8 @@ internal object TextOnPathEngine {
     }
 
     /** Bounds of what [draw] paints. */
-    fun bounds(text: String, fill: Paint, stroke: Paint?, spec: TextPathSpec, letters: LetterScaleSpec? = null, kerns: List<TextKern> = emptyList()): RectF {
-        val (_, res) = result(text, fill, spec, letters, kerns) ?: return RectF()
+    fun bounds(text: String, fill: Paint, stroke: Paint?, spec: TextPathSpec, letters: LetterScaleSpec? = null, kerns: List<TextKern> = emptyList(), mode: TextKerningMode? = null): RectF {
+        val (_, res) = result(text, fill, spec, letters, kerns, mode) ?: return RectF()
         return bounds(res, spec, fill, stroke)
     }
 
@@ -508,7 +512,7 @@ internal object TextOnPathEngine {
      * right-to-left or shaped text keeps its shaping and ignores kerns, and so does a line whose
      * kerns all fall where none applies: it is laid out exactly as without them.
      */
-    private fun buildLayout(line: String, source: Paint, letters: LetterScaleSpec? = null, text: String = line, kerns: List<TextKern> = emptyList()): PathTextLayout {
+    private fun buildLayout(line: String, source: Paint, letters: LetterScaleSpec? = null, text: String = line, kerns: List<TextKern> = emptyList(), mode: TextKerningMode? = null): PathTextLayout {
         val p = Paint(source).apply {
             textAlign = Paint.Align.LEFT
             style = Paint.Style.FILL
@@ -546,8 +550,12 @@ internal object TextOnPathEngine {
             // v1.6 scaled letters (left-to-right text only: the caller checked the script).
             val ramp = letters?.let { LetterRamp.of(line, it) }
             // v1.7 manual kerns (the line's indices are the text's: line breaks became spaces).
-            val kernPx = if (kerns.isEmpty() || text.length != len || !LetterRamp.supports(line)) null
-            else TextKerns.advancesPx(text, kerns, 0, p.textSize, ramp?.factors)
+            // v1.9 (R5): plus the pair-kerning mode's, measured on the line as buildScaled measures it.
+            val kernPx = if ((kerns.isEmpty() && mode == null) || text.length != len || !LetterRamp.supports(line)) null
+            else KerningModes.sum(
+                if (kerns.isEmpty()) null else TextKerns.advancesPx(text, kerns, 0, p.textSize, ramp?.factors),
+                KerningModes.advancesPx(mode, line, 0, scaledMeasure(p), ramp?.factors),
+            )
             if (ramp != null || kernPx != null) return buildScaled(line, p, letters, ramp, kernPx, cuts, capHeight)
         }
 
@@ -604,7 +612,7 @@ internal object TextOnPathEngine {
         bounds += len
         // Measured as the letters are drawn, each on its own: no ligature ("fi" would give its
         // whole width to the f and draw the i over the next letter), kerning kept.
-        val measure = Paint(p).apply { fontFeatureSettings = TextRenderer.scaledFeatures(TextRenderer.usesFontKerning(p)) }
+        val measure = scaledMeasure(p)
         val adv = FloatArray(bounds.size) { i -> measure.getRunAdvance(line, 0, len, 0, len, false, bounds[i]) }
         val base = p.textSize
         val rect = Rect()
@@ -637,6 +645,13 @@ internal object TextOnPathEngine {
         }
         return PathTextLayout(line, x, capHeight, clusters, p, lettersScaled = ramp != null, kerned = kernPx != null)
     }
+
+    /**
+     * The paint clusters drawn one at a time are measured with ([buildScaled]): [p] without
+     * ligatures ("fi" would give its whole width to the f and draw the i over the next letter),
+     * its kerning kept.
+     */
+    private fun scaledMeasure(p: Paint): Paint = Paint(p).apply { fontFeatureSettings = TextRenderer.scaledFeatures(TextRenderer.usesFontKerning(p)) }
 
     private fun hasNonLatin(s: String, start: Int, end: Int): Boolean = (start until end).any { s[it].code >= 0x2000 }
 

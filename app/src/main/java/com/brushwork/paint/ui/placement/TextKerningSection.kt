@@ -3,7 +3,6 @@ package com.brushwork.paint.ui.placement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Remove
@@ -19,13 +18,17 @@ import androidx.compose.ui.unit.dp
 import com.brushwork.paint.tools.text.KerningEditor
 import com.brushwork.paint.tools.text.TextEditorHost
 import com.brushwork.paint.tools.text.TextKern
+import com.brushwork.paint.tools.text.TextKerningMode
 import com.brushwork.paint.tools.text.TextKerns
+import com.brushwork.paint.tools.text.TextSpec
+import com.brushwork.paint.ui.common.KernLabels19
 import com.brushwork.paint.ui.common.KerningLabels
 import com.brushwork.paint.ui.common.NumberAdjust
 import com.brushwork.paint.ui.common.NumberField
 import com.brushwork.paint.ui.common.PointLabels
 import com.brushwork.paint.ui.common.RepeatIconButton
 import com.brushwork.paint.ui.common.ToggleRow
+import com.brushwork.paint.ui.common.V19Tags
 import com.brushwork.paint.ui.theme.BrushworkColors
 import kotlin.math.roundToInt
 
@@ -53,11 +56,14 @@ internal const val KERNING_SCRIPT_REFUSAL = KerningLabels.SCRIPT_REFUSAL
 /** Test tag of the Kerning row. */
 const val KERNING_ROW_TAG = "textKerningRow"
 
-/** Width of the Kerning row's label (the −/+ buttons are 40 dp, the field between them 72 dp). */
-private val KerningLabelWidth = 96.dp
+/**
+ * v1.9 (R5): the least width of a “Pair kerning” chip, so "Off" and "Auto" are as easy to hit
+ * as “Optical” and “Metrics”.
+ */
+private val PairKerningChipWidth = 76.dp
 
-/** The −/+ buttons and the field between them. */
-private val KerningFieldWidth = 40.dp + 72.dp + 40.dp
+/** v1.9 (R5): the “Pair kerning” chips, in order: Off, then Auto (null) and the modes. */
+private val PairKerningModes: List<TextKerningMode?> = listOf(null, TextKerningMode.OPTICAL, TextKerningMode.METRICS_LATIN)
 
 /**
  * v1.7 manual kerning in the text editor dialog (item 17, area D), under "Letter spacing":
@@ -68,9 +74,16 @@ private val KerningFieldWidth = 40.dp + 72.dp + 40.dp
  *   "Mixed" (typing a number sets them all, −/+ move each by 10). Disabled, saying why, on
  *   vertical text, where no gap named can take a kern (beside a line break, in a right-to-left
  *   or shaped script) and where the cursor names no gap; text along a shape is kerned along it.
- *   Only for hosts that edit kerns ([KerningEditor]).
+ *   Only for hosts that edit kerns ([KerningEditor]). v1.9: the field fills the row (its own
+ *   floating label names it), so the label and the number fit at 360 dp and large font sizes.
  * - "Font kerning": the font's own pair kerning (on by default; off sets the letters by their
  *   plain advances, and the text exports as outlines).
+ * - v1.9 (R5) “Pair kerning”: "Off", "Auto", “Optical” and “Metrics” ([pairKerningIndex]), with
+ *   the chosen one's note under them. "Off" and the switch are one setting: Off turns the switch
+ *   off and keeps the mode, another chip turns it on with that mode, and the switch turned on
+ *   brings the last mode back ([TextSpec.kerningMode]: Auto at first). Manual kerns add to every
+ *   mode. Straight vertical text keeps the font's pairs (the note says the modes need horizontal
+ *   text).
  */
 @Composable
 internal fun TextKerningSection(host: TextEditorHost, selection: TextRange) {
@@ -86,7 +99,6 @@ internal fun TextKerningSection(host: TextEditorHost, selection: TextRange) {
         val active = row.active
         val mixed = active != null && row.common == null
         Row(Modifier.fillMaxWidth().testTag(KERNING_ROW_TAG), verticalAlignment = Alignment.CenterVertically) {
-            Text(KerningLabels.KERNING, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.width(KerningLabelWidth))
             // Mixed: the field is empty (typing sets every gap) and −/+ move each gap by a step.
             // One field call either way, so typing that ends "Mixed" keeps the field focused.
             if (mixed) {
@@ -96,7 +108,7 @@ internal fun TextKerningSection(host: TextEditorHost, selection: TextRange) {
                 label = KerningLabels.KERNING,
                 value = if (mixed) Double.NaN else (row.common ?: 0).toDouble(),
                 onValueChange = { v -> if (active != null) kerning.setKerns(active, v.roundToInt()) },
-                modifier = Modifier.width(if (mixed) 72.dp else KerningFieldWidth),
+                modifier = Modifier.weight(1f),
                 decimals = 0,
                 min = TextKern.MIN_VALUE.toDouble(),
                 max = TextKern.MAX_VALUE.toDouble(),
@@ -118,10 +130,50 @@ internal fun TextKerningSection(host: TextEditorHost, selection: TextRange) {
             row.caption,
             style = MaterialTheme.typography.bodySmall,
             color = BrushworkColors.OnChromeDim,
-            modifier = Modifier.padding(start = KerningLabelWidth, bottom = 4.dp),
+            modifier = Modifier.padding(bottom = 4.dp),
         )
     }
     ToggleRow(KerningLabels.FONT_KERNING, spec.fontKerning, { on -> host.updateSpec { it.copy(fontKerning = on) } }, description = FONT_KERNING_NOTE)
+    // v1.9 (R5): Off is the switch; the other chips turn it on with their mode.
+    Text(KernLabels19.PAIR_KERNING, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 4.dp, bottom = 2.dp))
+    val selected = pairKerningIndex(spec)
+    TextFlowChips(
+        options = listOf(KernLabels19.OFF, KernLabels19.AUTO, KernLabels19.OPTICAL, KernLabels19.METRICS),
+        selected = selected,
+        onSelect = { i -> host.updateSpec { pairKerningChosen(it, i) } },
+        chipMinWidth = PairKerningChipWidth,
+        tags = PAIR_KERNING_TAGS,
+    )
+    pairKerningNote(selected, spec.vertical && !item.path.isActive)?.let { note ->
+        Text(note, style = MaterialTheme.typography.bodySmall, color = BrushworkColors.OnChromeDim, modifier = Modifier.padding(bottom = 4.dp))
+    }
+}
+
+/** v1.9 (R5): the test tags of the “Pair kerning” chips, in their order ([V19Tags.KERN_PREFIX] + the mode's name). */
+internal val PAIR_KERNING_TAGS: List<String> = listOf("OFF", "AUTO", "OPTICAL", "METRICS_LATIN").map { V19Tags.KERN_PREFIX + it }
+
+/** v1.9 (R5): the “Pair kerning” chip [spec] shows: 0 Off ("Font kerning" off), 1 Auto, 2 Optical, 3 Metrics. */
+internal fun pairKerningIndex(spec: TextSpec): Int =
+    if (!spec.fontKerning) 0 else 1 + PairKerningModes.indexOf(spec.kerningMode).coerceAtLeast(0)
+
+/**
+ * v1.9 (R5): [spec] with “Pair kerning” chip [index] chosen: Off turns "Font kerning" off and
+ * keeps the mode (the switch brings it back), another chip turns it on with its mode.
+ */
+internal fun pairKerningChosen(spec: TextSpec, index: Int): TextSpec =
+    if (index <= 0) spec.copy(fontKerning = false)
+    else spec.copy(fontKerning = true, kerningMode = PairKerningModes[(index - 1).coerceAtMost(PairKerningModes.size - 1)])
+
+/**
+ * v1.9 (R5): the note under the “Pair kerning” chips for chip [index]: none for Off (the
+ * switch's own note says what it does); on straight [vertical] text, Optical and Metrics say
+ * they need horizontal text (the column keeps the font's pairs).
+ */
+internal fun pairKerningNote(index: Int, vertical: Boolean): String? = when (index) {
+    1 -> KernLabels19.AUTO_NOTE
+    2 -> if (vertical) KerningLabels.VERTICAL_REFUSAL else KernLabels19.OPTICAL_NOTE
+    3 -> if (vertical) KerningLabels.VERTICAL_REFUSAL else KernLabels19.METRICS_NOTE
+    else -> null
 }
 
 /**

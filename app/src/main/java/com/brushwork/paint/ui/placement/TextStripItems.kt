@@ -1,5 +1,6 @@
 package com.brushwork.paint.ui.placement
 
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.WrapText
@@ -14,21 +15,35 @@ import androidx.compose.material.icons.filled.TextRotateVertical
 import androidx.compose.material.icons.filled.TextRotationNone
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.outlined.ControlPointDuplicate
+import androidx.compose.material.icons.outlined.FlipToBack
+import androidx.compose.material.icons.outlined.FlipToFront
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
+import com.brushwork.paint.model.Layer
 import com.brushwork.paint.tools.frame.FrameDividerTool
+import com.brushwork.paint.tools.select.SelectionDuplicate
 import com.brushwork.paint.tools.text.TextTool
+import com.brushwork.paint.ui.common.LayerLabels19
+import com.brushwork.paint.ui.common.PlaceLabels19
+import com.brushwork.paint.ui.common.V19Tags
 import com.brushwork.paint.ui.common.LocalSheetHost
 import com.brushwork.paint.ui.common.ToolIconButton
 import com.brushwork.paint.ui.theme.BrushworkColors
 import com.brushwork.paint.ui.tools.strip.LocalStripContext
+import com.brushwork.paint.ui.tools.strip.StripKeysV19
 import com.brushwork.paint.ui.tools.strip.StripItem
 import com.brushwork.paint.ui.tools.strip.StripRow
 import com.brushwork.paint.ui.tools.strip.StripSpec
+import com.brushwork.paint.vector.select.ObjectEdits
 
 /**
  * The Text tool's strip (v1.8, design §3.9 "Text"; area G): row 1 "Edit text" (dimmed with no
@@ -36,26 +51,100 @@ import com.brushwork.paint.ui.tools.strip.StripSpec
  * wrap button (AUTO: the first to go to the More row); the More row "Snap to objects", then
  * "Numbers" while a text is open (no slot kept without one), under v1.7's hint. The editor
  * dialog and the Numbers, Wrap and Letter scaling sheets are its overlays, as v1.7 hosted them.
+ * v1.9 (R14) opens the More row with “New layer each time” while no text is open, and fades the
+ * wrap button for a text that shares its layer with others; with a text open the More row opens
+ * with Duplicate and, for a text of a layer of several, Bring forward and Send backward (R19).
+ * Snap, then Numbers, still end the row as in v1.8.
+ * While the path's points are edited (R12) row 1 keeps "Edit text", the switch and "Letters",
+ * and [TextPathNodeBar] shows where the selection bar does.
+ *
+ * v1.9 (A3 step 11, I10): the More row leaves out what a bar beside the strip shows itself:
+ * Duplicate while the object bar shows, or the selection bar with its Duplicate (a selection it
+ * can duplicate); Bring forward and Send backward while the object bar shows. The paste bar (a
+ * clipboard, no selection) carries none of them, so they stay. The items follow
+ * [TextStripFacts] through the pure [textSpec] below, which the label scan builds for every
+ * state without a composition.
  */
 @Composable
 internal fun textSpec(tool: TextTool): StripSpec {
-    val item = tool.item
     val c = tool.controller
-    // The active layer isn't Compose state: follow the counters that change with it.
+    // The active layer isn't Compose state: follow the counters that change with it (the facts'
+    // SelectionDuplicate.kindOf reads the active layer too).
     val activeText = remember(c.layersVersion, c.editCount) { c.activeLayer.takeIf { it.isTextLayer } }
-    val onPath = item?.path?.isActive == true
-    val T = TextStripItems
-    val hint = when {
-        // Wrap is set but the text can't wrap (vertical, on a path).
-        item != null && item.wrap.isOn && !item.canWrap -> TextTool.WRAP_HORIZONTAL_ONLY
-        onPath -> "Drag the dots to shape the path, two fingers to scale or turn"
-        item != null && item.spec.box.wrapFor(item.spec.vertical) > 0f ->
-            if (item.spec.vertical) "Bottom / side handles: box size" else "Side / bottom handles: box size"
-        item != null -> if (item.spec.vertical) "Bottom handle: box height" else "Side handle: box width"
-        activeText != null -> "or tap a text to edit it, empty canvas to add"
-        else -> "Tap the canvas to add text, or a text to edit it"
+    val facts = TextStripFacts.of(tool, activeText != null, LocalStripContext.current.selectionBarShown)
+    return textSpec(tool, facts, activeText)
+}
+
+/**
+ * What the Text strip shows, read from the tool ([of]) or set by a test: no composition needed.
+ * [vertical] is the switch's state ([TextTool.isVertical]: the open text's, or the next one's).
+ */
+internal data class TextStripFacts(
+    /** A text is open ([TextTool.item]). */
+    val open: Boolean = false,
+    /** The open text is set on a path. */
+    val onPath: Boolean = false,
+    /** The path's points are edited (R12; only on a path). */
+    val nodes: Boolean = false,
+    val vertical: Boolean = false,
+    /** The open text's wrap is set (it wraps unless it is vertical or on a path). */
+    val wrapOn: Boolean = false,
+    /** The open text's box wraps its lines (or columns). */
+    val boxed: Boolean = false,
+    /** Bring forward and Send backward apply ([TextTool.arrangeShown]: a text of a layer of several). */
+    val arrange: Boolean = false,
+    /** The active layer is a text layer: "Edit text" works with no text open. */
+    val activeText: Boolean = false,
+    /**
+     * A bar beside the strip shows [LayerLabels19.DUPLICATE]: the object bar, or the selection bar
+     * with a selection it can duplicate (`SelectionDuplicate.kindOf`); not the paste bar.
+     */
+    val barDuplicate: Boolean = false,
+    /** The object bar shows, with Bring forward and Send backward (and its Duplicate). */
+    val objectBar: Boolean = false,
+) {
+    /** The open text can't wrap (v1.7: vertical, or on a path). */
+    val wrapRefused: Boolean get() = open && (vertical || onPath)
+
+    companion object {
+        /**
+         * The facts of [tool] now. [barShown] is `StripContext.selectionBarShown` (the selection
+         * bar, the paste bar or the object bar shows): which of them it is, and what it carries,
+         * follows EditorScreen and SelectionActionBar (the object bar while objects are selected,
+         * the selection bar's Duplicate with a selection [SelectionDuplicate.kindOf] accepts).
+         */
+        fun of(tool: TextTool, activeText: Boolean, barShown: Boolean): TextStripFacts {
+            val item = tool.item
+            val onPath = item?.path?.isActive == true
+            val c = tool.controller
+            val objectBar = barShown && c.vectors.selectedIds.isNotEmpty()
+            return TextStripFacts(
+                open = item != null,
+                onPath = onPath,
+                nodes = onPath && tool.nodeEditor.active,
+                vertical = tool.isVertical,
+                wrapOn = item?.wrap?.isOn == true,
+                boxed = item != null && item.spec.box.wrapFor(item.spec.vertical) > 0f,
+                arrange = item != null && tool.arrangeShown,
+                activeText = activeText,
+                barDuplicate = objectBar || (barShown && SelectionDuplicate.kindOf(c) != null),
+                objectBar = objectBar,
+            )
+        }
     }
-    val items = listOf(
+}
+
+/**
+ * The Text strip for [f] (pure: the items' content is composed later). [activeText] is the
+ * active text layer "Edit text" opens when no text is open.
+ */
+internal fun textSpec(tool: TextTool, f: TextStripFacts, activeText: Layer? = null): StripSpec {
+    val T = TextStripItems
+    val hint = T.hint(f)
+    // I10: a bar that carries its own Duplicate (the object bar its arrange items too) takes them.
+    val duplicate = f.open && !f.barDuplicate
+    val arrange = f.open && f.arrange && !f.objectBar
+    val items = listOfNotNull(
         StripItem(T.EDIT, T.EDIT_LABEL, T.EDIT_DP.dp) {
             val strip = LocalStripContext.current
             StripTextButton(
@@ -64,29 +153,66 @@ internal fun textSpec(tool: TextTool): StripSpec {
                 onClick = {
                     // D25: the editor is a dialog (an overlay); the More row closes first.
                     strip.closeMore()
-                    if (item != null) tool.openEditor() else if (activeText != null) tool.editLayer(activeText, openEditor = true)
+                    if (tool.item != null) tool.openEditor() else if (activeText != null) tool.editLayer(activeText, openEditor = true)
                 },
-                enabled = item != null || activeText != null,
+                enabled = f.open || f.activeText,
                 icon = Icons.Filled.Edit,
             )
         },
-        StripItem(T.VERTICAL, T.verticalLabel(tool.isVertical), T.ICON_DP.dp) {
+        StripItem(T.VERTICAL, T.verticalLabel(f.vertical), T.ICON_DP.dp) {
             ToolIconButton(
-                icon = if (tool.isVertical) Icons.Filled.TextRotateVertical else Icons.Filled.TextRotationNone,
-                contentDescription = T.verticalLabel(tool.isVertical),
+                icon = if (f.vertical) Icons.Filled.TextRotateVertical else Icons.Filled.TextRotationNone,
+                contentDescription = T.verticalLabel(f.vertical),
                 onClick = { tool.toggleVertical() },
-                selected = tool.isVertical && !onPath,
-                enabled = !onPath,
+                selected = f.vertical && !f.onPath,
+                enabled = !f.onPath,
                 size = T.ICON_DP.dp,
             )
         },
         StripItem(T.LETTERS, T.LETTERS_LABEL, T.LETTERS_DP.dp) { LettersButton(tool) },
-        StripItem(T.WRAP, T.wrapLabel(tool), T.WRAP_DP.dp, overflowRank = 1) { WrapButton(tool) },
-        // Snap first, then the Numbers button only while a text is open: no empty slot without
-        // one, and Snap keeps its place whether a text is open or not (v1.8 polish).
-        snapItem(T.SNAP, on = { c.snapping.enabled }) { c.snapping.enabled = it },
+        StripItem(T.WRAP, T.wrapLabel(f), T.WRAP_DP.dp, overflowRank = 1) { WrapButton(tool) },
+        // v1.9 (R14, R19): the open text as an item of its layer. The v1.9 More items stand before
+        // Snap: Snap, then Numbers while a text is open, end the More row as in v1.8 (the v1.8
+        // pins Qa18PolishChromeVerifyTest keeps; StripKeysV19's ranks would put them after it,
+        // which the lead decides: a LeadRequest).
+        if (!duplicate) null else StripItem(T.DUPLICATE.key, LayerLabels19.DUPLICATE, T.DUPLICATE.widthDp.dp, row = StripRow.MORE) {
+            ToolIconButton(
+                icon = Icons.Outlined.ControlPointDuplicate,
+                contentDescription = LayerLabels19.DUPLICATE,
+                onClick = { tool.duplicateOpen() },
+                modifier = Modifier.testTag(V19Tags.TEXT_DUPLICATE),
+                enabled = tool.canDuplicate,
+                size = T.DUPLICATE.widthDp.dp,
+            )
+        },
+        if (!arrange) null else StripItem(T.FORWARD.key, ObjectEdits.Arrange.FORWARD.label, T.FORWARD.widthDp.dp, row = StripRow.MORE) {
+            ToolIconButton(
+                icon = Icons.Outlined.FlipToFront,
+                contentDescription = ObjectEdits.Arrange.FORWARD.label,
+                onClick = { tool.arrangeOpen(1) },
+                enabled = tool.canBringForward,
+                size = T.FORWARD.widthDp.dp,
+            )
+        },
+        if (!arrange) null else StripItem(T.BACKWARD.key, ObjectEdits.Arrange.BACKWARD.label, T.BACKWARD.widthDp.dp, row = StripRow.MORE) {
+            ToolIconButton(
+                icon = Icons.Outlined.FlipToBack,
+                contentDescription = ObjectEdits.Arrange.BACKWARD.label,
+                onClick = { tool.arrangeOpen(-1) },
+                enabled = tool.canSendBackward,
+                size = T.BACKWARD.widthDp.dp,
+            )
+        },
+        // v1.9 (R14): “New layer each time” while no text is open (off, a new text joins the
+        // active text layer).
+        if (f.open) null else StripItem(T.NEW_LAYER.key, PlaceLabels19.NEW_LAYER_EACH_TIME, T.NEW_LAYER.widthDp.dp, row = StripRow.MORE) {
+            NewLayerEachTimeButton(tool)
+        },
+        // Snap, then the Numbers button only while a text is open: no empty slot without one,
+        // and Snap keeps its line whether a text is open or not (v1.8 polish).
+        snapItem(T.SNAP, on = { tool.controller.snapping.enabled }) { tool.controller.snapping.enabled = it },
     ) + listOfNotNull(
-        if (item == null) null else StripItem(T.NUMBERS, T.NUMBERS_LABEL, T.NUMBERS_DP.dp, row = StripRow.MORE) {
+        if (!f.open) null else StripItem(T.NUMBERS, T.NUMBERS_LABEL, T.NUMBERS_DP.dp, row = StripRow.MORE) {
             val strip = LocalStripContext.current
             StripTextButton(T.NUMBERS_LABEL, T.NUMBERS_DP.dp, icon = Icons.Filled.Tune, onClick = {
                 strip.closeMore()
@@ -96,7 +222,40 @@ internal fun textSpec(tool: TextTool): StripSpec {
             })
         },
     )
+    // v1.9 (R12): while the path's points are edited the node bar (an overlay) sits where the
+    // selection bar does; row 1 keeps only what never leaves it, with no hint and no More row
+    // (which would move the X / Y pill and the bar under it).
+    if (f.nodes) {
+        return StripSpec(items.filter { it.row == StripRow.ROW1 && it.overflowRank == 0 }, hint = null, overlays = { TextOverlays(tool) })
+    }
     return StripSpec(items, hint = hint, overlays = { TextOverlays(tool) })
+}
+
+/**
+ * v1.9 (R14): “New layer each time” ([TextTool.newLayerEachTime]), a text button with a selected
+ * state (tag [V19Tags.NEW_LAYER_EACH_TIME]): on, every new text gets a layer of its own as in
+ * v1.8; off (the default), a new text joins the active text layer. The tap that places a text
+ * reads it, so it applies before any text exists.
+ *
+ * I27: the label is 11 sp on two lines in a fixed cell; past font scale
+ * [TextStripItems.NEW_LAYER_MAX_FONT_SCALE] it would need a third line, so it stops growing
+ * there (it shrinks rather than being cut, and stays above 11 sp).
+ */
+@Composable
+private fun NewLayerEachTimeButton(tool: TextTool) {
+    val on = tool.newLayerEachTime
+    val d = LocalDensity.current
+    val capped = Density(d.density, minOf(d.fontScale, TextStripItems.NEW_LAYER_MAX_FONT_SCALE))
+    Box(Modifier.testTag(V19Tags.NEW_LAYER_EACH_TIME)) {
+        CompositionLocalProvider(LocalDensity provides capped) {
+            StripTextButton(
+                PlaceLabels19.NEW_LAYER_EACH_TIME,
+                TextStripItems.NEW_LAYER.widthDp.dp,
+                onClick = { tool.newLayerEachTime = !on },
+                checked = on,
+            )
+        }
+    }
 }
 
 /** The Text tool's sheets and dialog, as v1.7 hosted them (§3.9 "Overlays"). */
@@ -108,6 +267,8 @@ private fun TextOverlays(tool: TextTool) {
     if (tool.wrapSheetOpen && item != null && !tool.editorOpen) TextWrapSheet(tool)
     // Also over the open editor (stacked on it), so the button always shows what it opens.
     if (tool.lettersSheetOpen && item != null) TextLetterScaleSheet(tool)
+    // v1.9 (R12): the node bar while the path's points are edited.
+    TextPathNodeBar(tool)
 }
 
 /**
@@ -158,7 +319,7 @@ private fun WrapButton(tool: TextTool) {
         description = TextStripItems.wrapLabel(tool),
         announceText = false,
         on = item != null && item.wrapActive,
-        dimmed = !(item != null && item.canWrap),
+        dimmed = !tool.canWrap,
     )
 }
 
@@ -170,6 +331,19 @@ internal object TextStripItems {
     const val WRAP = "text.wrap"
     const val NUMBERS = "text.numbers"
     const val SNAP = "text.snap"
+
+    /** v1.9 (R14): the More-row toggle [NewLayerEachTimeButton], while no text is open. */
+    val NEW_LAYER = StripKeysV19.NEW_LAYER_EACH_TIME_TEXT
+
+    /** v1.9 (R14): Duplicate for the open text (tag [V19Tags.TEXT_DUPLICATE]). */
+    val DUPLICATE = StripKeysV19.DUPLICATE
+
+    /** v1.9 (R19): Bring forward and Send backward for the open text of a layer of several. */
+    val FORWARD = StripKeysV19.FORWARD
+    val BACKWARD = StripKeysV19.BACKWARD
+
+    /** The largest font scale at which [NEW_LAYER]'s label fits its two lines (I27). */
+    const val NEW_LAYER_MAX_FONT_SCALE = 1.3f
 
     /** "Edit text" after its icon at 11 sp. */
     const val EDIT_DP = 92f
@@ -193,13 +367,25 @@ internal object TextStripItems {
     fun verticalLabel(vertical: Boolean) = if (vertical) "Vertical text (tap for horizontal)" else "Horizontal text (tap for vertical)"
 
     /** The wrap button's v1.7 label: why it can't wrap, whether it wraps. */
-    fun wrapLabel(tool: TextTool): String {
-        val item = tool.item
-        return when {
-            item != null && !item.canWrap -> "Wrap around picture (works with horizontal text)"
-            item != null && item.wrapActive -> "Wrap around picture: on"
-            else -> "Wrap around picture"
-        }
+    fun wrapLabel(tool: TextTool): String = wrapLabel(TextStripFacts.of(tool, activeText = false, barShown = false))
+
+    /** [wrapLabel] for [f]. */
+    fun wrapLabel(f: TextStripFacts): String = when {
+        f.wrapRefused -> "Wrap around picture (works with horizontal text)"
+        f.open && f.wrapOn -> "Wrap around picture: on"
+        else -> "Wrap around picture"
+    }
+
+    /** The v1.7 hints under the strip (the More row's first line), by [f]; none while points are edited. */
+    fun hint(f: TextStripFacts): String? = when {
+        f.nodes -> null
+        // Wrap is set but the text can't wrap (vertical, on a path).
+        f.wrapOn && f.wrapRefused -> TextTool.WRAP_HORIZONTAL_ONLY
+        f.open && f.onPath -> "Drag the dots to shape the path, two fingers to scale or turn"
+        f.open && f.boxed -> if (f.vertical) "Bottom / side handles: box size" else "Side / bottom handles: box size"
+        f.open -> if (f.vertical) "Bottom handle: box height" else "Side handle: box width"
+        f.activeText -> "or tap a text to edit it, empty canvas to add"
+        else -> "Tap the canvas to add text, or a text to edit it"
     }
 }
 

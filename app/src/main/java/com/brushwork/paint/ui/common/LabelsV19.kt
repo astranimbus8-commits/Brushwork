@@ -70,6 +70,22 @@ object TextLabels19 {       // R4, R6, R7, R12, R14, C13
     const val NODES_HINT = "Drag a point to move it. New points go after the selected point."
     const val NODES_MAX = "A text path holds up to 200 points"
     const val LAYER_FULL = "A text layer holds up to 64 texts. This one starts a new layer."
+    /**
+     * A3 (lead, at its merge): Duplicate of the open text refused in a full layer. A copy never
+     * starts a new layer, so [LAYER_FULL]'s second sentence would be wrong; worded apart from it
+     * (rule 4: neither holds the other).
+     */
+    const val LAYER_FULL_NO_COPY = "A text layer holds up to 64 texts: no room for a copy"
+    /**
+     * A3 (lead, at its merge): a text among others of its layer cannot start to wrap, nor be
+     * duplicated while it wraps. Not A3's "Only a text alone …": the Text strip's letter-scale
+     * state "On" would sit inside it (rule 4).
+     */
+    const val WRAP_ALONE_ONLY = "A text that shares its layer cannot wrap around a picture"
+    /** A3 (lead, at its merge): `TextFrameTool.join` refuses a text among others of its layer. */
+    const val ALONE_ONLY = "Only a text alone in its layer can be linked"
+    /** A3 (lead, at its merge): the in-tool step of a dragged path node ("Undo: " + this). */
+    const val MOVE_POINT = "Move point"
     /** C13: v1.8's rasterize toast for a layer with several texts (%s = layer name, %d = count). */
     const val RASTERIZED_TEXTS = "\"%s\" is now a regular layer (its %d texts can no longer be edited; undo to get it back)"
 }

@@ -1,6 +1,7 @@
 package com.brushwork.paint.tools.text
 
 import com.brushwork.paint.core.Vec2
+import com.brushwork.paint.vector.VSpline
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.acos
@@ -423,9 +424,15 @@ object TextPathGeometry {
             coordOk(s.cornerRadius) && coordOk(s.offset) && coordOk(s.baselineShift) &&
             angleOk(s.startAngleDeg) && angleOk(s.rotationDeg)
 
-    /** The guide of [spec], or null for straight text ([TextPathType.NONE]). */
+    /**
+     * The guide of [spec], or null for straight text ([TextPathType.NONE]). v1.9 (R12): its
+     * nodes when it has them ([TextPathNodes.of], [TextPathNodes.guide]); the flat fields of its
+     * type otherwise.
+     */
     fun guide(spec: TextPathSpec): TextPathGuide? {
         val s = sanitized(spec)
+        if (s.type == TextPathType.NONE) return null
+        TextPathNodes.of(s)?.let { return TextPathNodes.guide(it) }
         return when (s.type) {
             TextPathType.NONE -> null
             TextPathType.LINE -> lineGuide(s)
@@ -593,9 +600,25 @@ object TextPathGeometry {
 
     // ------------------------------------------------------------------ text placement
 
-    /** Whether the letters stand on the path (baseline on it) rather than hang from it (cap line on it). */
-    fun isStanding(spec: TextPathSpec): Boolean =
-        !spec.type.isClosed || (spec.side == TextPathSide.OUTSIDE) == spec.clockwise
+    /**
+     * Whether the letters stand on the path (baseline on it) rather than hang from it (cap line on
+     * it). v1.9 (R12): a closed node guide runs the way its nodes do ([TextPathNodes.isClockwise]).
+     */
+    fun isStanding(spec: TextPathSpec): Boolean {
+        val n = TextPathNodes.of(spec)
+        if (n != null) return !TextPathNodes.isClosed(n) || (spec.side == TextPathSide.OUTSIDE) == TextPathNodes.isClockwise(n)
+        return !spec.type.isClosed || (spec.side == TextPathSide.OUTSIDE) == spec.clockwise
+    }
+
+    /**
+     * v1.9 (R12): whether [spec]'s guide is closed (a circle, a rectangle, closed nodes): the text
+     * is aligned to its text position and the side choice applies (the direction choice too, for a
+     * circle or rectangle; closed nodes run the way their points do).
+     */
+    fun isClosedGuide(spec: TextPathSpec): Boolean {
+        val n = TextPathNodes.of(spec)
+        return if (n != null) TextPathNodes.isClosed(n) else spec.type.isClosed
+    }
 
     /**
      * Offset (px) along the letters' "up" normal of a glyph's baseline from the path, for glyphs
@@ -658,11 +681,17 @@ object TextPathGeometry {
      *   (on the outline);
      * - CURVE: 0 start, 1 first control point, 2 second control point, 3 end, 4 middle of the
      *   curve (moves it).
-     * NONE has none.
+     * NONE has none. v1.9 (R12): a path with nodes ([TextPathNodes.of]) has one handle per node, in
+     * their order, whatever its type.
      */
     fun handles(spec: TextPathSpec): List<Vec2> = handlesOf(sanitized(spec))
 
-    private fun handlesOf(spec: TextPathSpec): List<Vec2> = when (spec.type) {
+    private fun handlesOf(spec: TextPathSpec): List<Vec2> {
+        val n = TextPathNodes.of(spec) ?: return flatHandles(spec)
+        return n.points.map { Vec2(it.x, it.y) }
+    }
+
+    private fun flatHandles(spec: TextPathSpec): List<Vec2> = when (spec.type) {
         TextPathType.NONE -> emptyList()
         TextPathType.LINE -> listOf(
             Vec2(spec.x1, spec.y1),
@@ -733,10 +762,19 @@ object TextPathGeometry {
         return d
     }
 
-    /** [spec] with handle [index] (see [handles]) dragged to [pos]; unknown indices change nothing. */
+    /**
+     * [spec] with handle [index] (see [handles]) dragged to [pos]; unknown indices change nothing.
+     * v1.9 (R12): with nodes, handle [index] is node [index] (the flat fields follow as its v1.8
+     * fallback, [TextPathNodes.withNodes]).
+     */
     fun moveHandle(spec: TextPathSpec, index: Int, pos: Vec2): TextPathSpec {
         val clean = sanitized(spec)
         if (!pos.x.isFinite() || !pos.y.isFinite()) return clean
+        val n = TextPathNodes.of(clean)
+        if (n != null) {
+            if (index !in n.points.indices) return clean
+            return sanitized(TextPathNodes.withNodes(clean, TextPathNodes.withPointAt(n, index, pos)))
+        }
         return sanitized(moved(clean, index, pos))
     }
 
@@ -806,7 +844,8 @@ object TextPathGeometry {
      * [spec] moved by [translation], scaled by [scale] and rotated by [rotationDeg] around
      * [pivot] (p' = pivot + R(p - pivot) * scale + translation). Every shape's points move, sizes,
      * the offset and the baseline shift scale, angles turn — except the rectangle's text position,
-     * which is relative to the rectangle and turns with its rotation.
+     * which is relative to the rectangle and turns with its rotation. v1.9 (R12): the nodes move
+     * with the points (a straight text keeps its nodes too, for when its path is switched on again).
      */
     fun transformed(spec: TextPathSpec, translation: Vec2, scale: Float, rotationDeg: Float, pivot: Vec2): TextPathSpec {
         val s = sanitized(spec)
@@ -825,7 +864,13 @@ object TextPathGeometry {
         fun lim(v: Double): Float = v.coerceIn(-MAX_COORD.toDouble(), MAX_COORD.toDouble()).toFloat()
         fun mapX(x: Float, y: Float): Float = lim(px + ((x - px) * cos - (y - py) * sin) * k + tx)
         fun mapY(x: Float, y: Float): Float = lim(py + ((x - px) * sin + (y - py) * cos) * k + ty)
-        return sanitized(
+        val nodes = s.nodes?.let { n ->
+            val lim = VSpline.MAX_COORD.toDouble()
+            fun nx(x: Float, y: Float): Float = (px + ((x - px) * cos - (y - py) * sin) * k + tx).coerceIn(-lim, lim).toFloat()
+            fun ny(x: Float, y: Float): Float = (py + ((x - px) * sin + (y - py) * cos) * k + ty).coerceIn(-lim, lim).toFloat()
+            n.copy(points = n.points.map { p -> p.copy(x = nx(p.x, p.y), y = ny(p.x, p.y)) })
+        }
+        val out = sanitized(
             s.copy(
                 x1 = mapX(s.x1, s.y1), y1 = mapY(s.x1, s.y1), x2 = mapX(s.x2, s.y2), y2 = mapY(s.x2, s.y2),
                 cx1 = mapX(s.cx1, s.cy1), cy1 = mapY(s.cx1, s.cy1), cx2 = mapX(s.cx2, s.cy2), cy2 = mapY(s.cx2, s.cy2),
@@ -838,8 +883,10 @@ object TextPathGeometry {
                 startAngleDeg = if (s.type == TextPathType.RECT) s.startAngleDeg else normalizeDegrees(s.startAngleDeg + deg),
                 offset = lim(s.offset * k),
                 baselineShift = lim(s.baselineShift * k),
+                nodes = nodes,
             )
         )
+        return if (nodes == null) out else out.withNodeFallback()
     }
 
     /**

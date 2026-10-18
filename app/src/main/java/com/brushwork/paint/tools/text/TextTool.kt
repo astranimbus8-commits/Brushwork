@@ -8,6 +8,7 @@ import android.graphics.Rect
 import android.graphics.RectF
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.brushwork.paint.EditorController
@@ -42,8 +43,12 @@ import com.brushwork.paint.tools.transform.SnapAxis
 import com.brushwork.paint.tools.transform.SnapGuide
 import com.brushwork.paint.tools.transform.TransformHandles
 import com.brushwork.paint.tools.transform.offset
+import com.brushwork.paint.ui.common.LayerLabels19
 import com.brushwork.paint.ui.common.PillLabels
+import com.brushwork.paint.ui.common.TextLabels19
 import com.brushwork.paint.ui.editor.HistoryLabels
+import com.brushwork.paint.vector.select.ArrangeOrder
+import com.brushwork.paint.vector.select.ObjectEdits
 import kotlin.math.abs
 import kotlin.math.max
 
@@ -62,6 +67,16 @@ import kotlin.math.max
  * A re-edited text ignores the selection (it is re-rendered whole, so a leftover selection can
  * never cut away part of the old text); new text is clipped to the selection. A re-edited text
  * that is emptied deletes its layer (one undo step, no question asked).
+ *
+ * v1.9 (R14): a text layer holds up to [TextCodec.MAX_ITEMS] texts. With a text layer active, a
+ * tap on empty canvas places the new text IN that layer (its ✓ is v1.8's "Add text" step, the
+ * layer keeps its name), unless the More row's “New layer each time” is on ([newLayerEachTime],
+ * v1.8's own layer per text), a selection is active (v1.8's new layer, clipped to it), or the
+ * layer can take no other text: a frame of a linked story, a text that wraps around a picture,
+ * a live array, a full layer (a message says so) (I24). A tap on a text edits that text alone
+ * ([editLayer] with its index); a second tap on it opens the text of the same layer under it
+ * ([cycleBelow]), round to the top one. The open text's neighbours are kept as they are and
+ * drawn with it in picture order; ✓ re-renders only where the open text was and is.
  *
  * Fonts: the built-in families or fonts the user imported ([FontStore], e.g. from dafont),
  * referenced by their content hash; a missing imported font falls back to the built-in family.
@@ -107,8 +122,23 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
             // v1.7 (item 9): the pill's Scale is relative to the text as it was opened.
             if (value == null) scaleRefPx = 0f else if (itemState == null) scaleRefPx = value.spec.sizePx
             itemState = value
+            // v1.9 (R12): the node editing of a path ends with its text (placed, dropped).
+            if (value == null) endNodes()
             if (layerPreview != null) refreshLayerPreview()
         }
+
+    /**
+     * v1.9 (R12, D31): the node editing of the open text's path. The path sheet's three entries
+     * ([TextPathNodeEntry]) start it ([startNodes]); ✓ (TextLabels19.DONE_POINTS, [doneNodes])
+     * ends it. While it runs it is the controller's `inToolHistory` (Undo and Redo
+     * go through its steps first), fingers pick and drag the guide's nodes instead of moving the
+     * text, and the node bar shows.
+     */
+    val nodeEditor: TextPathNodeEditor = TextPathNodeEditor(object : TextPathNodeEditor.Host {
+        override val path: TextPathSpec? get() = item?.path
+        override fun setPath(spec: TextPathSpec) = update { it.copy(path = spec) }
+        override fun toast(message: String) = controller.toast(message)
+    })
 
     /** Appearance of the next new text (its color is taken from the drawing color). */
     var nextSpec by mutableStateOf<TextSpec?>(null)
@@ -148,6 +178,20 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
     /** The small "Letter scaling" sheet is showing (v1.6, the options strip's "Letters" chip). */
     var lettersSheetOpen by mutableStateOf(false)
 
+    private var newLayerState by mutableStateOf(controller.settings.textNewLayerEachTime)
+
+    /**
+     * v1.9 (R14): the More row's “New layer each time” ([AppSettings.textNewLayerEachTime], off
+     * by default): on, every new text gets a layer of its own as in v1.8; off, a new text joins
+     * the active text layer. The tap that places a text reads the setting itself ([joinTarget]).
+     */
+    var newLayerEachTime: Boolean
+        get() = newLayerState
+        set(v) {
+            newLayerState = v
+            controller.settings.textNewLayerEachTime = v
+        }
+
     init {
         // The re-flow listener skips the text open here and tells this tool when its picture changes.
         controller.textWrap.attach(this)
@@ -165,17 +209,74 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
     private val doc get() = controller.doc
     private var editorBackup: TextItem? = null
 
-    /** The text as loaded from [editingLayer]. */
+    /** The text as loaded from [editingLayer] (null while a new text joins it, [joining]). */
     private var loadedItem: TextItem? = null
 
     /**
-     * v1.9 (F2): the other texts of [editingLayer] (above [loadedItem], bottom first), kept as
-     * they are: the preview and ✓ draw them with the edited text, and ✓ stores them after it.
+     * v1.9 (R14): the texts of [editingLayer] under the open one (bottom first), kept as they
+     * are: the preview and ✓ draw them with the open text, and ✓ stores them before it. While a
+     * new text joins the layer ([joining]) these are all its texts.
      */
-    private var loadedRest: List<TextItem> = emptyList()
+    private var loadedBelow: List<TextItem> = emptyList()
 
-    /** [loadedRest] laid out, in the same order. */
-    private var restPrepared: List<PreparedText> = emptyList()
+    /** [loadedBelow] laid out, in the same order. */
+    private var belowPrepared: List<PreparedText> = emptyList()
+
+    /**
+     * v1.9 (F2, R14): the texts of [editingLayer] above the open one (bottom first), kept as
+     * they are: the preview and ✓ draw them with the open text, and ✓ stores them after it.
+     */
+    private var loadedAbove: List<TextItem> = emptyList()
+
+    /** [loadedAbove] laid out, in the same order. */
+    private var abovePrepared: List<PreparedText> = emptyList()
+
+    /**
+     * The sizes of [loadedBelow] and [loadedAbove] as Compose state, set with them ([placed]), so
+     * the strip's arrange items follow them ([arrangeShown], [canBringForward], [canSendBackward]).
+     */
+    private var belowCount by mutableIntStateOf(0)
+    private var aboveCount by mutableIntStateOf(0)
+
+    /**
+     * Where [loadedBelow] and [loadedAbove] draw ([TextLayerDraw.inkRect], in the same order),
+     * set with them ([placed]): the in-place preview draws only the texts that meet the tile it
+     * redraws, the rule ✓ redraws them by ([TextLayerDraw.drawMeeting]).
+     */
+    private var belowInk: List<Rect> = emptyList()
+    private var aboveInk: List<Rect> = emptyList()
+
+    /** The clip of the tile [LayerPreview] draws (main thread, no allocation per tile). */
+    private val previewClip = Rect()
+
+    /**
+     * Publishes the open text's place in its layer ([belowCount], [aboveCount]) after a change,
+     * and where its other texts draw ([belowInk], [aboveInk]).
+     */
+    private fun placed() {
+        belowCount = loadedBelow.size
+        aboveCount = loadedAbove.size
+        belowInk = inkRects(loadedBelow, belowPrepared)
+        aboveInk = inkRects(loadedAbove, abovePrepared)
+    }
+
+    private fun inkRects(items: List<TextItem>, preps: List<PreparedText>): List<Rect> =
+        items.indices.map { k -> TextLayerDraw.inkRect(items[k], preps[k]) }
+
+    /**
+     * v1.9 (R14): the pending text is a NEW text that goes into [editingLayer] on ✓ (on top of
+     * its texts, as v1.8's "Add text" step) instead of into a layer of its own.
+     */
+    val joining: Boolean get() = editingLayer != null && loadedItem == null
+
+    /** v1.9 (R14): the open text shares its layer with other texts (or is about to join one). */
+    val sharesLayer: Boolean get() = editingLayer != null && (joining || loadedBelow.isNotEmpty() || loadedAbove.isNotEmpty())
+
+    /** v1.9 (R14): where the open text is in its layer's picture order (0 = the bottom text). */
+    val openIndex: Int get() = loadedBelow.size
+
+    /** v1.9 (R14): the id of the open text in its layer ([TextItem.id]; 0 for a layer's only text or a new text). */
+    val openId: Int get() = if (editingLayer == null || joining) 0 else loadedItem?.id ?: 0
 
     /** Where the edited layer's old pixels are (hidden while editing). */
     private var loadedInk: Rect? = null
@@ -217,15 +318,20 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
 
     /**
      * Creates a new, empty text centered at ([x], [y]) and opens the editor. Refused (with a
-     * message) at the layer limit, so nothing is typed that could not be committed.
+     * message) at the layer limit, so nothing is typed that could not be committed. v1.9 (R14):
+     * with a text layer active that can take it ([joinTarget]) the text joins that layer: it is
+     * drawn in it (in place, on top of its texts) and ✓ adds it there; no layer is added.
      */
     fun startTextAt(x: Float, y: Float) {
-        if (!controller.canAddLayer) {
+        endNodes()
+        val join = joinTarget()
+        if (join == null && !controller.canAddLayer) {
             controller.toast("Layer limit reached (${controller.maxLayers}) for this canvas size: delete or merge a layer to add text")
             return
         }
         rememberVectorLayer()
         endLayerEdit()
+        if (join != null) beginJoin(join.first, join.second)
         item = TextItem("", specForNewText(), x.coerceIn(0f, doc.width.toFloat()), y.coerceIn(0f, doc.height.toFloat()))
         scaleRefPx = item!!.spec.sizePx
         editorBackup = null
@@ -235,24 +341,62 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
     }
 
     /**
+     * v1.9 (R14): the active text layer a new text joins, with its texts, or null for a layer of
+     * its own (v1.8): “New layer each time” is on (read here, at the tap); a selection is active
+     * (the new text is clipped to it, which only a layer of its own keeps); the layer is hidden,
+     * locked or shows its mask; it is a frame of a linked story or holds a text that wraps around
+     * a picture or is linked (those stay alone, I24); it has a live array; or it is full
+     * ([TextCodec.MAX_ITEMS] texts: a message says this text starts a new layer).
+     */
+    private fun joinTarget(): Pair<Layer, LayerTexts>? {
+        if (controller.settings.textNewLayerEachTime) return null
+        val layer = controller.activeLayer
+        if (!layer.isTextLayer || controller.selection != null) return null
+        if (!doc.effectiveVisible(layer) || doc.effectiveLocked(layer) || layer.editingMask || layer.array != null) return null
+        if (controller.textThreads.isFrame(layer)) return null
+        val texts = layerTexts(layer) ?: return null
+        if (texts.items.any { it.wrap.isOn || it.threaded }) return null
+        if (texts.items.size >= TextCodec.MAX_ITEMS) {
+            controller.toast(TextLabels19.LAYER_FULL)
+            return null
+        }
+        return layer to texts
+    }
+
+    /**
+     * v1.9 (R14): a new text is to join [layer] (holding [texts]): the layer is drawn from its
+     * texts with the new one on top ([LayerPreview]); nothing is stored until ✓.
+     */
+    private fun beginJoin(layer: Layer, texts: LayerTexts) {
+        editingLayer = layer
+        loadedItem = null
+        loadedBelow = texts.items
+        belowPrepared = texts.preps
+        loadedAbove = emptyList()
+        abovePrepared = emptyList()
+        placed()
+        loadedInk = null
+        layerPreview = LayerPreview(layer).also { controller.renderOverride = it }
+    }
+
+    /**
      * Loads the text of the text layer [layer] as pending work to edit it again: the layer
      * becomes active, its old pixels are hidden while the text is edited, and ✓ re-renders it
      * (one undo step). [openEditor] opens the editor dialog at once. Returns false (with a
-     * message) when the layer can't be edited.
+     * message) when the layer can't be edited. v1.9 (R14): [index] picks the text of a layer of
+     * several (picture order, 0 = the bottom one); null keeps the text open in [layer] if one
+     * is, and opens the bottom one otherwise (as v1.8, for "Edit text" in the layers window).
      */
-    fun editLayer(layer: Layer, openEditor: Boolean = false): Boolean {
+    fun editLayer(layer: Layer, openEditor: Boolean = false, index: Int? = null): Boolean {
         // v1.6 seam: a frame of a linked story is edited by the Text frames tool (it switches
         // tools and selects the frame; false for anything else).
         if (controller.textThreads.openForEditing(layer, openEditor)) return true
-        if (editingLayer === layer && item != null) {
+        if (editingLayer === layer && item != null && (index == null || (!joining && index == openIndex))) {
             if (openEditor) openEditor()
             return true
         }
         if (doc.indexOf(layer) < 0) return false
-        // v1.9 (F2): the bottom text is edited as in v1.8; the others are kept and drawn with it.
-        val all = TextCodec.decodeAll(layer.textData)
-        val loaded = all.firstOrNull()
-        if (loaded == null) {
+        if (layerTexts(layer) == null) {
             controller.toast("\"${layer.name}\" is not an editable text layer")
             return false
         }
@@ -262,14 +406,29 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
         // Finish another pending text first (placing it adds a layer).
         if (item != null && !commitItem()) discardItem()
         if (doc.indexOf(layer) < 0) return false
+        // Read again: the text just finished may have been in this layer.
+        val texts = layerTexts(layer) ?: return false
+        val all = texts.items
+        val k = (index ?: 0).coerceIn(0, all.lastIndex)
+        val loaded = all[k]
         // Selecting pauses this tool (onDeactivate/onActivate); nothing is pending at this point.
         controller.selectLayer(layer)
         vectorReturn = back
         editingLayer = layer
         loadedItem = loaded
-        loadedRest = all.drop(1)
-        restPrepared = loadedRest.map { TextRenderer.prepare(it) }
-        loadedInk = inkOf(layer, loaded)
+        loadedBelow = all.subList(0, k).toList()
+        belowPrepared = texts.preps.subList(0, k).toList()
+        loadedAbove = all.subList(k + 1, all.size).toList()
+        abovePrepared = texts.preps.subList(k + 1, all.size).toList()
+        placed()
+        // A text among others: where it was drawn is its own rect (a scan would meet its
+        // neighbours' pixels and take the whole layer); scanned when its font is missing here,
+        // so pixels drawn with the real font are cleared too.
+        loadedInk = if (all.size > 1 && !TextRenderer.isFontMissing(loaded.spec)) {
+            textRectOf(loaded, texts.preps[k])?.apply { inset(-PREVIEW_SLACK_PX, -PREVIEW_SLACK_PX) }
+        } else {
+            inkOf(layer, loaded)
+        }
         editingNew = false
         editorBackup = null
         // The old pixels are hidden and the pending text is drawn in their place (see LayerPreview).
@@ -294,17 +453,29 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
      * in their place THROUGH THE COMPOSITOR, so the layer's order, opacity, blend mode, mask and
      * the layers clipped to it look exactly like the result while editing (like the vector tools'
      * previews). The text is already laid out ([preparedFor] cache), so a tile redraw only draws it.
-     * v1.9 (F2): every text of the layer is drawn, in picture order, the edited one in place of
-     * the bottom text it was loaded from ([loadedRest] above it, as laid out when loaded).
+     * v1.9 (F2, R14): every text of the layer is drawn, in picture order, the open one in its
+     * place ([loadedBelow] under it, [loadedAbove] over it, as laid out when loaded); a new text
+     * that joins the layer is drawn on top of its texts. The other texts are drawn only where they
+     * meet the tile being redrawn ([belowInk], [aboveInk]): a drag redraws the tiles around the
+     * open text every frame, and a layer may hold [TextCodec.MAX_ITEMS] texts (T606).
      */
     private inner class LayerPreview(override val layer: Layer) : LayerRenderOverride {
         override fun drawContent(canvas: Canvas): Boolean {
-            val cur = item ?: return true
-            TextRenderer.drawItem(canvas, cur, preparedFor(cur), null, doc.colorMode)
-            val rest = loadedRest
-            val preps = restPrepared
-            for (k in rest.indices) TextRenderer.drawItem(canvas, rest[k], preps[k], null, doc.colorMode)
+            // A live array's copies are drawn from the layer over a larger area: every text then.
+            // An empty clip (getClipBounds false) leaves previewClip empty: nothing else is drawn.
+            val clip = if (layer.array == null) previewClip.also { canvas.getClipBounds(it) } else null
+            drawOthers(canvas, loadedBelow, belowPrepared, belowInk, clip)
+            item?.let { cur -> TextRenderer.drawItem(canvas, cur, preparedFor(cur), null, doc.colorMode) }
+            drawOthers(canvas, loadedAbove, abovePrepared, aboveInk, clip)
             return true
+        }
+
+        /** [texts] in order, those whose [ink] meets [clip] (all of them without one). */
+        private fun drawOthers(canvas: Canvas, texts: List<TextItem>, preps: List<PreparedText>, ink: List<Rect>, clip: Rect?) {
+            for (k in texts.indices) {
+                if (clip != null && k < ink.size && !Rect.intersects(ink[k], clip)) continue
+                TextRenderer.drawItem(canvas, texts[k], preps[k], null, doc.colorMode)
+            }
         }
     }
 
@@ -343,11 +514,17 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
         loadedInk?.let { controller.tiles.invalidate(it) }
         loadedInk = null
         loadedItem = null
-        loadedRest = emptyList()
-        restPrepared = emptyList()
+        loadedBelow = emptyList()
+        belowPrepared = emptyList()
+        loadedAbove = emptyList()
+        abovePrepared = emptyList()
+        placed()
         editingLayer = null
         controller.invalidateOverlay()
     }
+
+    /** v1.9 (R14): a text of a text layer: the layer and the text's index in it (picture order). */
+    data class TextHit(val layer: Layer, val index: Int)
 
     /**
      * Topmost visible, unlocked text layer whose text is at [p] (the active layer first), or null.
@@ -356,40 +533,64 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
      * Text frames tool ([editLayer]) instead of starting a new text on it; its box is known
      * without laying the frame out.
      */
-    fun textLayerAt(p: Vec2): Layer? {
+    fun textLayerAt(p: Vec2): Layer? = textAt(p)?.layer
+
+    /**
+     * v1.9 (R14): the text at [p]: in the layer [textLayerAt] finds, the topmost of its texts
+     * there. The texts are laid out once per stored text ([layerTexts]), so a tap over a layer of
+     * [TextCodec.MAX_ITEMS] texts only tests boxes.
+     */
+    fun textAt(p: Vec2): TextHit? {
         val t = controller.viewTransform
         val tol = t.screenToDocLength(t.dp(HIT_TOLERANCE_DP))
         val active = doc.activeLayer
         val box = RectF()
-        fun hits(l: Layer): Boolean {
-            if (!l.isTextLayer || !doc.effectiveVisible(l) || doc.effectiveLocked(l)) return false
+        fun hit(l: Layer): Int {
+            if (!l.isTextLayer || !doc.effectiveVisible(l) || doc.effectiveLocked(l)) return -1
             controller.textThreads.frameOf(l)?.let { frame ->
                 FrameGeometry.outerRect(frame, box)
-                return p.x >= box.left - tol && p.x <= box.right + tol && p.y >= box.top - tol && p.y <= box.bottom + tol
+                val inside = p.x >= box.left - tol && p.x <= box.right + tol && p.y >= box.top - tol && p.y <= box.bottom + tol
+                return if (inside) 0 else -1
             }
-            val (it, prep) = layerText(l) ?: return false
-            return it.text.isNotBlank() && prep.contains(it, p, tol)
+            val texts = layerTexts(l) ?: return -1
+            for (k in texts.items.indices.reversed()) {
+                val it = texts.items[k]
+                if (it.text.isNotBlank() && texts.preps[k].contains(it, p, tol)) return k
+            }
+            return -1
         }
-        if (hits(active)) return active
+        hit(active).let { if (it >= 0) return TextHit(active, it) }
         for (i in doc.layers.indices.reversed()) {
             val l = doc.layers[i]
-            if (l !== active && hits(l)) return l
+            if (l === active) continue
+            hit(l).let { if (it >= 0) return TextHit(l, it) }
         }
         return null
     }
 
-    /** Decoded text of text layers, keyed by layer id (dropped when the stored text changes). */
-    private val layerTexts = HashMap<Long, Triple<String, TextItem, PreparedText>>()
+    /** v1.9 (R14): every text of a text layer as stored in [data], each laid out ([preps], same order). */
+    private class LayerTexts(val data: String, val items: List<TextItem>, val preps: List<PreparedText>)
 
-    private fun layerText(layer: Layer): Pair<TextItem, PreparedText>? {
+    /**
+     * Decoded texts of text layers, keyed by layer id (dropped when the stored text changes). At
+     * most [LAYER_CACHE_SIZE] layers and [LAYER_CACHE_TEXTS] laid-out texts: v1.9 layers hold up
+     * to [TextCodec.MAX_ITEMS] texts each, so the layer count alone no longer bounds it (T606).
+     */
+    private val layerTextCache = HashMap<Long, LayerTexts>()
+
+    /** The texts of [layer] (null when it holds none), laid out; cached while its data and the fonts are unchanged. */
+    private fun layerTexts(layer: Layer): LayerTexts? {
         val data = layer.textData ?: return null
-        layerTexts[layer.id]?.let { (d, it, p) -> if (d == data && p.fontsCurrent) return it to p }
-        // v1.9 (F2): the bottom text, the one a tap opens (item-level hits are A3's).
-        val decoded = TextCodec.decodeAll(data).firstOrNull() ?: return null
-        val prep = TextRenderer.prepare(decoded)
-        if (layerTexts.size >= LAYER_CACHE_SIZE) layerTexts.clear()
-        layerTexts[layer.id] = Triple(data, decoded, prep)
-        return decoded to prep
+        layerTextCache[layer.id]?.let { c -> if (c.data == data && c.preps.all { it.fontsCurrent }) return c }
+        val items = TextCodec.decodeAll(data)
+        if (items.isEmpty()) return null
+        val texts = LayerTexts(data, items, items.map { TextRenderer.prepare(it) })
+        layerTextCache.remove(layer.id)
+        if (layerTextCache.size >= LAYER_CACHE_SIZE || layerTextCache.values.sumOf { it.items.size } + items.size > LAYER_CACHE_TEXTS) {
+            layerTextCache.clear()
+        }
+        layerTextCache[layer.id] = texts
+        return texts
     }
 
     /**
@@ -399,6 +600,8 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
      */
     fun openEditor() {
         val cur = item ?: return
+        // v1.9 (R12): "Edit text" while the path's points are edited ends that first.
+        endNodes()
         if (editorOpen) return
         editorBackup = cur
         editingNew = false
@@ -412,7 +615,7 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
      */
     override fun confirmEditor() {
         val cur = item
-        if (cur != null && cur.text.isBlank() && editingLayer != null) {
+        if (cur != null && cur.text.isBlank() && editingLayer != null && !joining) {
             // Refused (the layer was locked or hidden meanwhile; a message says so): the editor
             // stays open, so the text can be typed again or the edit cancelled.
             if (emptiedText()) {
@@ -426,6 +629,8 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
         editorBackup = null
         if (cur == null || cur.text.isBlank()) {
             item = null
+            // v1.9 (R14): an empty text that was to join a layer: the layer shows its pixels again.
+            if (joining) endLayerEdit()
             // Nothing was placed: the active layer never changed.
             vectorReturn = null
             wrapSheetOpen = false
@@ -433,7 +638,7 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
         } else {
             nextSpec = styleToRemember(cur.spec)
             // v1.7 (item 9): a new text is placed as the editor leaves it (the pill's 100 %).
-            if (editingLayer == null) scaleRefPx = cur.spec.sizePx
+            if (editingLayer == null || joining) scaleRefPx = cur.spec.sizePx
         }
         controller.invalidateOverlay()
     }
@@ -444,6 +649,8 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
         item = if (editingNew) null else editorBackup ?: item
         editorBackup = null
         if (item == null) {
+            // v1.9 (R14): a new text that was to join a layer: the layer shows its pixels again.
+            if (joining) endLayerEdit()
             vectorReturn = null
             wrapSheetOpen = false
             lettersSheetOpen = false
@@ -475,38 +682,41 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
     /**
      * v1.9 (F2): the edited text was emptied. A layer that holds other texts keeps them
      * ([removeEmptiedText]); a layer of one text is deleted as in v1.8 ([deleteEmptiedLayer]).
-     * Returns false (keep editing) when the layer got locked or hidden meanwhile.
+     * Returns false (keep editing) when the layer got locked or hidden meanwhile. v1.9 (R14): an
+     * empty new text that was to join a layer is just dropped (nothing was stored).
      */
     private fun emptiedText(): Boolean {
+        if (joining) {
+            discardItem()
+            return true
+        }
         val layer = editingLayer
-        if (layer != null && loadedRest.isNotEmpty() && doc.indexOf(layer) >= 0) return removeEmptiedText(layer)
+        if (layer != null && (loadedBelow.isNotEmpty() || loadedAbove.isNotEmpty()) && doc.indexOf(layer) >= 0) return removeEmptiedText(layer)
         return deleteEmptiedLayer()
     }
 
     /**
-     * v1.9 (F2): the edited (bottom) text of [layer] was emptied (or deleted with the pill's
-     * trash, [deleteObject]) while the layer holds other texts: only it goes, as ONE step named
-     * [label] ("Edit text" by default) whose data is the other texts and whose pixels are a fresh
-     * rendering of them (I1, I2); the layer and its name stay. Returns false (keep editing) when
-     * the layer got locked or hidden meanwhile, or memory ran out.
+     * v1.9 (F2, R14): the open text of [layer] was emptied (or deleted with the pill's trash,
+     * [deleteObject]) while the layer holds other texts: only it goes, as ONE step named [label]
+     * ("Edit text" by default) whose data is the other texts and whose pixels are a fresh
+     * rendering of them where the open text was (I1, I2); the layer and its name stay. Returns
+     * false (keep editing) when the layer got locked or hidden meanwhile, or memory ran out.
      */
     private fun removeEmptiedText(layer: Layer, label: String = "Edit text"): Boolean {
         if (!controller.checkEditable(layer)) return false
         val loaded = loadedItem
-        val rest = loadedRest
-        val preps = restPrepared
-        // Everything the old text covered (its real pixels and its computed bounds) and the others, drawn again.
+        val rest = loadedBelow + loadedAbove
+        val preps = belowPrepared + abovePrepared
+        // Everything the old text covered (its real pixels and its computed bounds); the others
+        // that meet it are drawn again there.
         val dirty = Rect()
         loadedInk?.let { dirty.union(it) }
         loaded?.let { textRectOf(it) }?.let { dirty.union(it) }
-        for (k in rest.indices) textRectOf(rest[k], preps[k])?.let { dirty.union(it) }
         dirty.inset(-1, -1)
         val json = TextCodec.encodeAll(rest)
         var done = false
         try {
-            done = controller.updateTextLayer(layer, json, label, dirty) { c ->
-                for (k in rest.indices) TextRenderer.drawItem(c, rest[k], preps[k], null)
-            }
+            done = controller.updateTextLayer(layer, json, label, dirty) { c -> TextLayerDraw.drawMeeting(c, layer, dirty, rest, preps) }
         } catch (e: OutOfMemoryError) {
             controller.toast("Not enough memory to update the text")
         }
@@ -550,11 +760,23 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
 
     /**
      * An imported font was deleted or imported: the current text is laid out again (with its
-     * fallback font or the font that is back).
+     * fallback font or the font that is back). v1.9: also for an imported list marker font
+     * (R7), and the other texts of its layer (R14) that use an imported font are laid out again
+     * for the in-place preview.
      */
     override fun onFontsChanged() {
         val cur = item ?: return
-        if (cur.spec.fontId == null) return
+        val stale = belowPrepared.any { !it.fontsCurrent } || abovePrepared.any { !it.fontsCurrent }
+        if (stale) {
+            belowPrepared = loadedBelow.mapIndexed { k, t -> belowPrepared[k].takeIf { it.fontsCurrent } ?: TextRenderer.prepare(t) }
+            abovePrepared = loadedAbove.mapIndexed { k, t -> abovePrepared[k].takeIf { it.fontsCurrent } ?: TextRenderer.prepare(t) }
+            placed()
+            if (previewInLayer) editingLayer?.let { controller.tiles.invalidate(Rect(0, 0, doc.width, doc.height)) }
+        }
+        if (cur.spec.fontId == null && cur.spec.list.markerFontId == null) {
+            if (stale) controller.invalidateOverlay()
+            return
+        }
         prepared = null
         if (layerPreview != null) refreshLayerPreview()
         controller.invalidateOverlay()
@@ -703,7 +925,10 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
 
     /**
      * Sets the text path. Switching to another shape places a sensible default of that shape
-     * around the text ([TextOnPath.defaultFor]); straight keeps the shape for later.
+     * around the text ([TextOnPath.defaultFor]); straight keeps the shape for later. v1.9 (R12):
+     * the edited points of a path ([TextPathSpec.nodes]) are kept for straight text too: going
+     * back to the shape they stand for ([TextPathNodes.fallbackType]) brings them back, moved so
+     * the text stays where it is; another shape drops them.
      */
     override fun setPath(spec: TextPathSpec) = update { cur ->
         if (spec.type == cur.path.type) return@update cur.copy(path = spec)
@@ -713,9 +938,21 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
             // Back to straight text: it appears where the text along the path was.
             cur.copy(path = spec, cx = at.x, cy = at.y)
         } else {
-            val next = TextOnPath.defaultFor(spec.type, at, TextRenderer.lineWidth(cur.text, cur.spec), cur.spec.sizePx, spec)
+            val kept = spec.nodes
+            if (!cur.path.isActive && kept != null && spec.type == TextPathNodes.fallbackType(kept)) {
+                restoredNodes(cur, spec, at)?.let { return@update it }
+            }
+            val next = TextOnPath.defaultFor(spec.type, at, TextRenderer.lineWidth(cur.text, cur.spec), cur.spec.sizePx, spec.copy(nodes = null))
             cur.copy(path = next)
         }
+    }
+
+    /** [cur] (straight) along [spec]'s kept nodes again, moved so its center is at [at]; null when they can't be its guide. */
+    private fun restoredNodes(cur: TextItem, spec: TextPathSpec, at: Vec2): TextItem? {
+        val nodes = TextPathNodes.of(spec) ?: return null
+        val back = cur.copy(path = TextPathNodes.withNodes(spec, nodes))
+        val a = anchorOf(back)
+        return back.copy(path = TextOnPath.transformed(back.path, at - a, 1f, 0f, at))
     }
 
     // ------------------------------------------------------------------ letter scaling (v1.6 §3.5)
@@ -746,8 +983,11 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
     /** Outlines of layers, shared with the re-flow listener. */
     private val contours: WrapContours get() = controller.textWrap.contours
 
-    /** Whether the current text can wrap around a picture (horizontal straight text). */
-    val canWrap: Boolean get() = item?.canWrap == true
+    /**
+     * Whether the current text can wrap around a picture (horizontal straight text). v1.9 (R14,
+     * I24): not while it shares its layer with other texts (a text that wraps stays alone).
+     */
+    val canWrap: Boolean get() = item?.canWrap == true && !sharesLayer
 
     /**
      * Layers the current text can wrap around, top first: every layer but text layers,
@@ -817,6 +1057,11 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
             controller.toast(WRAP_HORIZONTAL_ONLY)
             return
         }
+        // v1.9 (R14, I24): a text among others can only turn an existing wrap off.
+        if (sharesLayer && !cur.wrap.isOn) {
+            controller.toast(TextLabels19.WRAP_ALONE_ONLY)
+            return
+        }
         numbersOpen = false
         lettersSheetOpen = false
         if (!cur.wrap.isOn) defaultWrapSource(cur)?.let { setWrapSource(it) }
@@ -835,7 +1080,7 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
             if (cur.wrap.isOn) update { it.copy(wrap = it.wrap.copy(sourceLayerId = 0L, polygons = emptyList())) }
             return
         }
-        if (!cur.canWrap || doc.indexOf(layer) < 0 || layer.isTextLayer || layer.isAdjustmentLayer || layer === editingLayer) return
+        if (!cur.canWrap || (sharesLayer && !cur.wrap.isOn) || doc.indexOf(layer) < 0 || layer.isTextLayer || layer.isAdjustmentLayer || layer === editingLayer) return
         val polys = contours.polygons(layer, cur.wrap.contour) ?: run {
             controller.toast("Not enough memory to trace \"${layer.name}\"")
             return
@@ -949,9 +1194,60 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
 
     // ------------------------------------------------------------------ commit / discard
 
-    /** ✓: bakes the text; a text placed or opened while a vector layer was active goes back to it (v1.5). */
+    /**
+     * ✓: bakes the text; a text placed or opened while a vector layer was active goes back to it
+     * (v1.5). v1.9 (R12): while the path's points are edited, ✓ is TextLabels19.DONE_POINTS
+     * ([doneNodes]); the next ✓ bakes the text.
+     */
     override fun commit() {
+        if (nodeEditor.active) {
+            doneNodes()
+            return
+        }
         if (commitItem()) returnToVectorLayer()
+    }
+
+    // ------------------------------------------------------------------ node editing (v1.9 R12)
+
+    /**
+     * The path sheet's [entry] (TextLabels19.ADD_POINTS, EDIT_AS_PATH or EDIT_AS_POLYLINE): the
+     * sheet closes keeping its changes (as OK does), the guide becomes nodes and node editing starts
+     * with the toast TextLabels19.NODES_STARTED. False (nothing changes) for straight or empty
+     * text.
+     */
+    fun startNodes(entry: TextPathNodeEntry): Boolean {
+        val cur = item ?: return false
+        if (!cur.path.isActive || cur.text.isBlank()) return false
+        if (editorOpen) {
+            confirmEditor()
+            if (item == null || editorOpen) return false
+        }
+        numbersOpen = false
+        wrapSheetOpen = false
+        lettersSheetOpen = false
+        if (!nodeEditor.start(entry)) return false
+        controller.inToolHistory = nodeEditor
+        controller.invalidateOverlay()
+        return true
+    }
+
+    /**
+     * ✓ while the path's points are edited (TextLabels19.DONE_POINTS, the node bar's and the
+     * floating one): the editing ends with the nodes as they are, and the editor opens again at
+     * its path settings. The text is baked by the next ✓, as one step.
+     */
+    fun doneNodes() {
+        if (!nodeEditor.active) return
+        endNodes()
+        openEditor()
+        controller.invalidateOverlay()
+    }
+
+    /** Ends node editing (its nodes stay): Undo and Redo are v1.8's again. */
+    private fun endNodes() {
+        if (controller.inToolHistory === nodeEditor) controller.inToolHistory = null
+        if (nodeEditor.active) nodeEditor.end()
+        if (mode == Mode.NODE) mode = Mode.NONE
     }
 
     /** ✕ (and undo of pending text): drops the pending text, then back to the vector layer it came from (v1.5). */
@@ -1054,16 +1350,17 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
      * text", undo brings the layer back as it was) and the session ends. The last layer of the
      * drawing stays (the layer window's message). True when something was deleted. v1.9 (F2): in
      * a layer that holds other texts only the open text goes, as ONE "Delete text" step; the
-     * layer keeps the others ([removeEmptiedText]).
+     * layer keeps the others ([removeEmptiedText]). v1.9 (R14): a new text that was to join a
+     * layer is dropped (as ✕).
      */
     fun deleteObject(): Boolean {
         if (item == null) return false
         val layer = editingLayer?.takeIf { doc.indexOf(it) >= 0 }
-        if (layer == null) {
+        if (layer == null || joining) {
             discard()
             return true
         }
-        if (loadedRest.isNotEmpty()) {
+        if (loadedBelow.isNotEmpty() || loadedAbove.isNotEmpty()) {
             if (!removeEmptiedText(layer, HistoryLabels.DELETE_TEXT)) return false
             returnToVectorLayer()
             controller.invalidateOverlay()
@@ -1079,6 +1376,115 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
         returnToVectorLayer()
         controller.invalidateOverlay()
         return deleted
+    }
+
+    // ------------------------------------------------------------------ v1.9 (R14, R19): the open text as an item
+
+    /**
+     * v1.9 (R14): the More row's Duplicate is enabled: a text with words is open. A tap on a text
+     * that cannot be copied (it wraps around a picture, its layer is full) says why ([duplicateOpen]).
+     */
+    val canDuplicate: Boolean get() = item?.text?.isNotBlank() == true
+
+    /**
+     * v1.9 (R19): the More row shows Bring forward and Send backward: the open text is stored in
+     * a layer of two or more texts (not a new text that is to join one).
+     */
+    val arrangeShown: Boolean get() = item != null && !joining && editingLayer != null && belowCount + aboveCount > 0
+
+    /** v1.9 (R19): Bring forward applies: the open text is stored in a layer with texts above it. */
+    val canBringForward: Boolean get() = item != null && !joining && editingLayer != null && aboveCount > 0
+
+    /** v1.9 (R19): Send backward applies: the open text is stored in a layer with texts below it. */
+    val canSendBackward: Boolean get() = item != null && !joining && editingLayer != null && belowCount > 0
+
+    /** The texts the open text's layer holds once it is stored (1 for a new text of its own). */
+    private fun textsInOpenLayer(): Int = if (editingLayer == null) 1 else loadedBelow.size + loadedAbove.size + 1
+
+    /**
+     * v1.9 (R14, D24): the More row's Duplicate. The open text's pending changes are committed
+     * first, as ✓ does (their own step; a new text is placed, in its own layer or the one it
+     * joins); then [TextItemOps.duplicateItems] copies it with the object bar's offset as ONE step
+     * [LayerLabels19.DUPLICATE_STEP], right above it in picture order, and the copy opens. Refused
+     * with a message, before anything is committed, for a text that wraps around a picture
+     * ([TextLabels19.WRAP_ALONE_ONLY]) and in a full layer ([TextLabels19.LAYER_FULL_NO_COPY]).
+     * True when a copy was made.
+     */
+    fun duplicateOpen(): Boolean {
+        val cur = item ?: return false
+        if (cur.text.isBlank()) return false
+        if (cur.wrap.isOn) {
+            controller.toast(TextLabels19.WRAP_ALONE_ONLY)
+            return false
+        }
+        if (textsInOpenLayer() >= TextCodec.MAX_ITEMS) {
+            controller.toast(TextLabels19.LAYER_FULL_NO_COPY)
+            return false
+        }
+        val before = editingLayer?.takeIf { doc.indexOf(it) >= 0 }
+        if (before != null && !controller.checkEditable(before)) return false
+        // Where the text is once stored: its place (a new text that joins: on top of the others).
+        val k = openIndex
+        if (!commitItem()) return false
+        // A new text of its own: commitItem added its layer and made it the active one.
+        val layer = before ?: controller.activeLayer.takeIf { it.isTextLayer } ?: return false
+        val texts = layerTexts(layer) ?: return false
+        val index = if (before == null) texts.items.lastIndex else k
+        val id = texts.items.getOrNull(index)?.id ?: return false
+        val action = TextItemOps.duplicateItems(controller, layer, null, setOf(id))
+        if (action == null) {
+            // Committed, but nothing copied (the layer got locked or hidden): the text stays open.
+            editLayer(layer, index = index)
+            return false
+        }
+        controller.pushUndo(action)
+        editLayer(layer, index = index + 1)
+        return true
+    }
+
+    /**
+     * v1.9 (R19 (a), Arrange): the More row's Bring forward ([dir] +1) and Send backward
+     * (-1) for the open text of a layer of several. Its pending changes are committed first (their
+     * own step, as ✓); then the layer's picture order changes by [ArrangeOrder.step] (past the
+     * next text it overlaps, or one plain step when none does) as ONE step named after the item
+     * ([ObjectEdits.Arrange.label]), and the text stays open in its new place. Only the moved
+     * text's area is drawn again: elsewhere no two texts change places. False when nothing moved.
+     */
+    fun arrangeOpen(dir: Int): Boolean {
+        val cur = item ?: return false
+        val layer = editingLayer?.takeIf { doc.indexOf(it) >= 0 } ?: return false
+        if (joining || cur.text.isBlank() || (dir != 1 && dir != -1)) return false
+        if (if (dir > 0) loadedAbove.isEmpty() else loadedBelow.isEmpty()) return false
+        if (!controller.checkEditable(layer)) return false
+        val k = openIndex
+        if (!commitItem()) return false
+        val texts = layerTexts(layer) ?: return false
+        if (k !in texts.items.indices) return false
+        val bounds = texts.items.indices.map { i -> texts.preps[i].docBounds(texts.items[i]) }
+        val perm = ArrangeOrder.step(bounds, setOf(k), dir)
+        if (perm == null) {
+            editLayer(layer, index = k)
+            return false
+        }
+        val items = perm.map { texts.items[it] }
+        val preps = perm.map { texts.preps[it] }
+        val moved = texts.items[k]
+        val dirty = TextLayerDraw.inkRect(moved, texts.preps[k])
+        // Drawn with another font on another device: its real pixels may reach further.
+        if (TextRenderer.isFontMissing(moved.spec)) inkOf(layer, moved)?.let { dirty.union(it) }
+        val label = (if (dir > 0) ObjectEdits.Arrange.FORWARD else ObjectEdits.Arrange.BACKWARD).label
+        var done = false
+        try {
+            // An empty [dirty] (a text that draws nothing) moves no pixel: a data-only step. Never
+            // null here: that would clear the whole layer while drawMeeting draws nothing again.
+            done = controller.updateTextLayer(layer, TextCodec.encodeAll(items), label, dirty) { c ->
+                TextLayerDraw.drawMeeting(c, layer, dirty, items, preps)
+            }
+        } catch (e: OutOfMemoryError) {
+            controller.toast("Not enough memory to update the text")
+        }
+        editLayer(layer, index = if (done) perm.indexOf(k) else k)
+        return done
     }
 
     /** The open text as it is now: its pending changes are this tool's in-tool history (item 10). */
@@ -1115,7 +1521,7 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
     }
 
     override fun onDispose() {
-        layerTexts.clear()
+        layerTextCache.clear()
         prepared = null
     }
 
@@ -1203,16 +1609,21 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
     }
 
     /**
-     * Re-renders the edited text layer [layer] with [cur] (see [commitItem]). v1.9 (F2): [cur]
-     * replaces the bottom text it was loaded from; the layer's other texts ([loadedRest]) are
-     * stored after it and drawn again with it, in the same step.
+     * Re-renders the edited text layer [layer] with [cur] (see [commitItem]). v1.9 (F2, R14):
+     * [cur] replaces the text it was loaded from, between the layer's other texts
+     * ([loadedBelow], [loadedAbove]), which are stored as they were; a new text that joins the
+     * layer ([joining]) is stored on top of them as v1.8's "Add text" step. Only where the open
+     * text was and is gets cleared, and the other texts that meet it are drawn again there
+     * ([TextLayerDraw.drawMeeting]), in the same step. The layer's name follows the text only while it holds
+     * that text alone (v1.8).
      */
     private fun commitLayerEdit(layer: Layer, cur: TextItem): Boolean {
         val loaded = loadedItem
-        val rest = loadedRest
-        val restPreps = restPrepared
+        val join = joining
+        val below = loadedBelow
+        val above = loadedAbove
         // An emptied text deletes its layer (undoable, see deleteEmptiedLayer), or only itself
-        // when the layer holds other texts (removeEmptiedText).
+        // when the layer holds other texts (removeEmptiedText); an empty new text is dropped.
         if (cur.text.isBlank()) return emptiedText()
         if (cur == loaded) { discardItem(); return true }
         val prep = preparedFor(cur)
@@ -1227,19 +1638,18 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
         val dirty = Rect(newRect)
         loadedInk?.let { dirty.union(it) }
         loaded?.let { textRectOf(it) }?.let { dirty.union(it) }
-        // v1.9 (F2): the other texts are drawn again too.
-        for (k in rest.indices) textRectOf(rest[k], restPreps[k])?.let { dirty.union(it) }
         dirty.inset(-1, -1)
-        val json = TextCodec.encodeAll(listOf(cur) + rest)
+        val items = below + cur + above
+        val preps = belowPrepared + prep + abovePrepared
+        val json = TextCodec.encodeAll(items)
+        val label = if (join) "Add text" else "Edit text"
+        val alone = below.isEmpty() && above.isEmpty()
         val oldName = layer.name
-        val oldAuto = loaded?.layerName()
+        val oldAuto = loaded?.layerName()?.takeIf { alone }
         var done = false
         try {
-            controller.groupUndo("Edit text") {
-                done = controller.updateTextLayer(layer, json, "Edit text", dirty) { c ->
-                    TextRenderer.drawItem(c, cur, prep, null)
-                    for (k in rest.indices) TextRenderer.drawItem(c, rest[k], restPreps[k], null)
-                }
+            controller.groupUndo(label) {
+                done = controller.updateTextLayer(layer, json, label, dirty) { c -> TextLayerDraw.drawMeeting(c, layer, dirty, items, preps) }
                 // A name that was made from the old text follows the new text.
                 if (done && oldAuto != null && isAutoName(oldName, oldAuto) && cur.layerName() != oldName) controller.renameLayer(layer, cur.layerName())
             }
@@ -1266,7 +1676,8 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
     // ------------------------------------------------------------------ gestures
 
     /** [DEPTH]: the box's other side (height of horizontal text, width of vertical text). */
-    private enum class Mode { NONE, CREATE, MOVE, ROTATE, SCALE, BOX, DEPTH, PATH_HANDLE }
+    /** NODE (v1.9 R12): a finger on the canvas while the path's points are edited ([nodeEditor]). */
+    private enum class Mode { NONE, CREATE, MOVE, ROTATE, SCALE, BOX, DEPTH, PATH_HANDLE, NODE }
 
     private var mode = Mode.NONE
     private var downDoc = Vec2.ZERO
@@ -1332,10 +1743,15 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
 
     /**
      * The text path handles that snap: those that put the path somewhere (line ends and middle,
-     * circle center and radius, rectangle center and size corner, curve points and middle), not
-     * the angle, corner rounding or text position ones.
+     * circle center and radius, rectangle center and size corner, curve points and middle, every
+     * node of edited points), not the angle, corner rounding or text position ones.
      */
-    private fun handleSnaps(type: TextPathType, index: Int): Boolean = when (type) {
+    private fun handleSnaps(path: TextPathSpec, index: Int): Boolean {
+        TextPathNodes.of(path)?.let { return index in it.points.indices }
+        return flatHandleSnaps(path.type, index)
+    }
+
+    private fun flatHandleSnaps(type: TextPathType, index: Int): Boolean = when (type) {
         TextPathType.NONE -> false
         TextPathType.LINE -> index in 0..2
         TextPathType.CIRCLE, TextPathType.RECT -> index == 0 || index == 1
@@ -1344,9 +1760,20 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
 
     /**
      * Handles of the same path that stay put while handle [index] moves and that it can line up
-     * with (none for the circle's radius and the rectangle's size: only the size changes there).
+     * with (none for the circle's radius and the rectangle's size: only the size changes there;
+     * a node's neighbours for edited points).
      */
-    private fun fixedHandles(type: TextPathType, index: Int): List<Int> = when (type) {
+    private fun fixedHandles(path: TextPathSpec, index: Int): List<Int> {
+        val nodes = TextPathNodes.of(path) ?: return flatFixedHandles(path.type, index)
+        val n = nodes.points.size
+        val closed = TextPathNodes.isClosed(nodes)
+        return listOf(index - 1, index + 1)
+            .map { if (closed) (it + n) % n else it }
+            .filter { it in 0 until n && it != index }
+            .distinct()
+    }
+
+    private fun flatFixedHandles(type: TextPathType, index: Int): List<Int> = when (type) {
         TextPathType.LINE -> when (index) { 0 -> listOf(1); 1 -> listOf(0); else -> emptyList() }
         TextPathType.CURVE -> if (index in 0..3) (0..3).filter { it != index } else emptyList()
         else -> emptyList()
@@ -1445,6 +1872,15 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
         }
         // Also while the editor is open (its sheet may be minimized): drags move and resize the text.
         gestureStart = cur
+        if (nodeEditor.active) {
+            // v1.9 (R12): the nearest node within 24 dp is selected and follows the finger;
+            // elsewhere nothing is selected (the text stays put; a tap on the guide adds a node
+            // when the finger lifts, A3 step 13).
+            mode = Mode.NODE
+            nodeEditor.down(downDoc, t.screenToDocLength(t.dp(NODE_PICK_DP)))
+            controller.invalidateOverlay()
+            return
+        }
         val prep = preparedFor(cur)
         gesturePrepared = prep
         downInside = prep.contains(cur, downDoc, t.screenToDocLength(t.dp(BOX_PAD_DP + 8f)))
@@ -1465,7 +1901,7 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
                 handleIndex = best
                 handleGrab = hs[best] - downDoc
                 // Its other ends are targets too (a level / upright line, aligned curve points).
-                if (handleSnaps(cur.path.type, best)) beginSnap(fixedHandles(cur.path.type, best).mapNotNull { hs.getOrNull(it) })
+                if (handleSnaps(cur.path, best)) beginSnap(fixedHandles(cur.path, best).mapNotNull { hs.getOrNull(it) })
             } else {
                 mode = Mode.MOVE
                 startBox = snapBox(cur, prep)
@@ -1581,9 +2017,9 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
             Mode.PATH_HANDLE -> {
                 val raw = q + handleGrab
                 var at = raw
-                if (handleSnaps(start.path.type, handleIndex)) at = snapPathHandle(start.path, handleIndex, raw)
+                if (handleSnaps(start.path, handleIndex)) at = snapPathHandle(start.path, handleIndex, raw)
                 // v1.6 increments: a point handle moves in Length steps on the axes no guide holds.
-                if (increments.step(IncrementKind.LENGTH) != null && stepsAsPoint(start.path.type, handleIndex)) {
+                if (increments.step(IncrementKind.LENGTH) != null && stepsAsPoint(start.path, handleIndex)) {
                     val d = increments.lengthDelta(q - downDoc)
                     val stepped = downDoc + handleGrab + d
                     // Which axes a guide or the grid placed (asked, not told from the snapped
@@ -1596,6 +2032,8 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
                 }
                 item = start.copy(path = TextOnPath.moveHandle(start.path, handleIndex, at))
             }
+            // v1.9 (R12): the picked node follows the finger, the text re-flows (one step on lift).
+            Mode.NODE -> nodeEditor.move(q)
             Mode.NONE, Mode.CREATE -> return
         }
         controller.invalidateOverlay()
@@ -1694,8 +2132,13 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
         return stepped
     }
 
-    /** Text path handles that are points (moved by Length steps); not sizes, angles or the text position. */
-    private fun stepsAsPoint(type: TextPathType, index: Int): Boolean = when (type) {
+    /** Text path handles that are points (moved by Length steps); not sizes, angles or the text position. Every node of edited points. */
+    private fun stepsAsPoint(path: TextPathSpec, index: Int): Boolean {
+        TextPathNodes.of(path)?.let { return index in it.points.indices }
+        return flatStepsAsPoint(path.type, index)
+    }
+
+    private fun flatStepsAsPoint(type: TextPathType, index: Int): Boolean = when (type) {
         TextPathType.NONE -> false
         TextPathType.LINE -> index in 0..2
         TextPathType.CIRCLE, TextPathType.RECT -> index == 0
@@ -1755,6 +2198,14 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
         endSnap()
         clearReadout()
         when {
+            // v1.9 (R12): a node that moved is one in-tool step; a tap only selected (or not).
+            // A tap that picked no node adds one where it meets the guide (A3 step 13; on lift,
+            // so the first finger of a two-finger gesture adds nothing).
+            m == Mode.NODE -> {
+                nodeEditor.up()
+                val t = controller.viewTransform
+                if (!moved && nodeEditor.tapGuide(downDoc, t.screenToDocLength(t.dp(GUIDE_TAP_DP)))) controller.invalidateOverlay()
+            }
             moved -> {}
             // The editor is open (minimized to its pill while the canvas is used): the text can
             // be dragged and pinched, but a tap neither places it nor restarts the editor.
@@ -1762,7 +2213,8 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
             m == Mode.CREATE -> tapAt(p.x, p.y)
             // While the editor is open a tap neither applies the text nor reopens the editor.
             editorOpen -> {}
-            m == Mode.MOVE && downInside -> openEditor()
+            // v1.9 (R14): a second tap on a text opens the text of its layer under it, if any.
+            m == Mode.MOVE && downInside -> if (!cycleBelow(Vec2(p.x, p.y))) openEditor()
             // Tap away from the text: place it (like ✓, back to the vector layer it came from),
             // then edit the text tapped or start a new one there.
             m == Mode.MOVE -> if (commitItem()) {
@@ -1773,10 +2225,39 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
         controller.invalidateOverlay()
     }
 
-    /** A tap without pending text: edit the text layer's text under the finger, else add text. */
+    /**
+     * A tap without pending text: edit the text under the finger (v1.9: the topmost text there
+     * of the layer [textAt] finds), else add text.
+     */
     private fun tapAt(x: Float, y: Float) {
-        val layer = textLayerAt(Vec2(x, y))
-        if (layer == null || !editLayer(layer)) startTextAt(x, y)
+        val hit = textAt(Vec2(x, y))
+        if (hit == null || !editLayer(hit.layer, index = hit.index)) startTextAt(x, y)
+    }
+
+    /**
+     * v1.9 (R14): a tap on the open text at [p] when other texts of its layer are there too: the
+     * open text is finished (✓, a step only when it changed) and the next text down at [p] opens,
+     * round to the topmost after the bottom one. False when no other text of the layer is at [p]
+     * (or the open text is new): the tap opens the editor as in v1.8.
+     */
+    private fun cycleBelow(p: Vec2): Boolean {
+        val layer = editingLayer ?: return false
+        if (joining || item == null) return false
+        val t = controller.viewTransform
+        val tol = t.screenToDocLength(t.dp(HIT_TOLERANCE_DP))
+        val k = openIndex
+        val hits = ArrayList<Int>()
+        for (i in loadedBelow.indices) if (loadedBelow[i].text.isNotBlank() && belowPrepared[i].contains(loadedBelow[i], p, tol)) hits += i
+        for (i in loadedAbove.indices) if (loadedAbove[i].text.isNotBlank() && abovePrepared[i].contains(loadedAbove[i], p, tol)) hits += k + 1 + i
+        if (hits.isEmpty()) return false
+        val next = hits.filter { it < k }.maxOrNull() ?: hits.max()
+        // An emptied open text is removed by ✓: the texts above it move down one place.
+        val removed = item?.text?.isBlank() == true
+        // Refused (outside the canvas, locked meanwhile; a message says so): the text stays open.
+        if (!commitItem()) return true
+        if (doc.indexOf(layer) < 0) return true
+        editLayer(layer, index = if (removed && next > k) next - 1 else next)
+        return true
     }
 
     /**
@@ -1787,11 +2268,13 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
     override fun onLongPress(p: ToolPoint): Boolean {
         if (item == null || gestureStart == null) return false
         return mode == Mode.ROTATE || mode == Mode.SCALE || mode == Mode.BOX || mode == Mode.DEPTH || mode == Mode.PATH_HANDLE ||
-            (mode == Mode.MOVE && downInside)
+            (mode == Mode.MOVE && downInside) || (mode == Mode.NODE && nodeEditor.dragging)
     }
 
     override fun onCancel() {
-        if (mode != Mode.NONE && mode != Mode.CREATE) gestureStart?.let { item = it }
+        // v1.9 (R12): a node being dragged goes back (no step).
+        if (mode == Mode.NODE) nodeEditor.cancel()
+        else if (mode != Mode.NONE && mode != Mode.CREATE) gestureStart?.let { item = it }
         mode = Mode.NONE
         gestureStart = null
         gesturePrepared = null
@@ -1815,6 +2298,9 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
         pinchStart = null
         // Pinching isn't snapped (and no guide of a cancelled drag stays).
         endSnap()
+        // v1.9 (R12): while the path's points are edited two fingers zoom the view (a pinch
+        // would move every node outside the node steps).
+        if (nodeEditor.active) return false
         val cur = item ?: return false
         val t = controller.viewTransform
         val prep = preparedFor(cur)
@@ -1998,7 +2484,35 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
         }
         canvas.drawPath(guideScreen, haloPaint)
         canvas.drawPath(guideScreen, dashPaint)
-        for (hp in TextOnPath.handles(cur.path)) drawHandle(canvas, t, t.docToScreen(hp), filled = true)
+        if (nodeEditor.active) drawNodes(canvas, t) else for (hp in TextOnPath.handles(cur.path)) drawHandle(canvas, t, t.docToScreen(hp), filled = true)
+    }
+
+    /**
+     * v1.9 (R12): the guide's nodes while they are edited: corners as squares, smooth nodes as
+     * dots, the selected one ringed [NODE_RING_DP] wide (where a finger picks it).
+     */
+    private fun drawNodes(canvas: Canvas, t: ViewTransform) {
+        val n = nodeEditor.nodes ?: return
+        val r = t.dp(HANDLE_RADIUS_DP)
+        val o = r + t.dp(1.5f)
+        for ((i, p) in n.points.withIndex()) {
+            val s = t.docToScreen(Vec2(p.x, p.y))
+            if (p.sharp) {
+                fillPaint.color = 0x99000000.toInt()
+                canvas.drawRect(s.x - o, s.y - o, s.x + o, s.y + o, fillPaint)
+                fillPaint.color = ACCENT
+                canvas.drawRect(s.x - r, s.y - r, s.x + r, s.y + r, fillPaint)
+            } else {
+                drawHandle(canvas, t, s, filled = true)
+            }
+            if (i == nodeEditor.selected) {
+                val ring = t.dp(NODE_RING_DP / 2f)
+                haloPaint.strokeWidth = t.dp(4f)
+                canvas.drawCircle(s.x, s.y, ring, haloPaint)
+                linePaint.strokeWidth = t.dp(2f)
+                canvas.drawCircle(s.x, s.y, ring, linePaint)
+            }
+        }
     }
 
     private val wrapPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; color = WRAP_OUTLINE_COLOR }
@@ -2105,6 +2619,13 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
         private const val BOX_PAD_DP = 6f
         private const val ROTATE_STEM_DP = 30f
         private const val TOUCH_SLOP_DP = 8f
+
+        /** v1.9 (R12): a finger picks the nearest node within this; the selected node's ring (diameter). */
+        private const val NODE_PICK_DP = 24f
+        private const val NODE_RING_DP = 40f
+
+        /** v1.9 (A3 step 13): a tap this close to the guide adds a node there (the Path tool's IbisDims.PathInsertDistance). */
+        private const val GUIDE_TAP_DP = 24f
         private const val BOX_HANDLE_HALF_DP = 9f
         private const val BOX_HANDLE_WIDTH_DP = 6f
         /** Tapping this close to a text layer's box still counts as tapping its text. */
@@ -2112,6 +2633,9 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
         /** Extra document px redrawn around the in-layer preview. */
         private const val PREVIEW_SLACK_PX = 2
         private const val LAYER_CACHE_SIZE = 16
+
+        /** v1.9 (R14): the most laid-out texts [layerTextCache] keeps, over all its layers (4 full layers). */
+        private const val LAYER_CACHE_TEXTS = 4 * TextCodec.MAX_ITEMS
         /** Guide label of a text path's other points. */
         private const val PATH_POINT_LABEL = "Path point"
         /** A box edge counts as upright / level (and snaps) when its direction is this close to an axis (cos ~0.8°). */
