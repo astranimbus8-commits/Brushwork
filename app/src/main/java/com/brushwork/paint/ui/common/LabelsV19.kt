@@ -154,6 +154,8 @@ object LayerLabels19 {      // R14, R19
     const val DUPLICATE_STEP = "Duplicate in layer"
     /** The toast after a selection-bar Duplicate of vector objects or texts. */
     const val DUPLICATED = "Made %d copies in this layer"
+    /** A4 (lead, at its merge): the toast when the selection holds nothing of the active layer (%s = its name). */
+    const val NOTHING_TO_DUPLICATE = "The selection holds nothing of \"%s\" to duplicate"
     /** R19: the dialog before a merge of two data layers into pixels (%s = a WHY_* text). */
     const val MERGE_TITLE = "Merge into pixels?"
     const val MERGE_BODY = "These layers cannot stay editable: %s. The result will be pixels. Undo brings them back."
@@ -167,6 +169,8 @@ object LayerLabels19 {      // R14, R19
     const val WHY_FRAMES = "a text is a frame of a story or wraps around a picture"
     const val WHY_OVERLAP = "a see-through layer has overlapping objects"
     const val WHY_TOO_MANY = "the layers hold more than 64 texts"
+    /** A4 (lead, at its merge): two text layers of different opacities (one layer has one opacity). */
+    const val WHY_OPACITY = "the layers have different opacities"
 }
 
 object CanvasLabels19 {     // R15

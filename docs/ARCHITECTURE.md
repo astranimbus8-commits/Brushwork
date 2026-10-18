@@ -1653,6 +1653,130 @@ in "…" on purpose: the panel title, its adjustment note, the Masks strip chips
 
 <!-- v19-A4 -->
 
+R19 ("when you merge either a shape layer with another shape layer, a text layer with another
+text layer or a curve layer with another curve layer they dont become rasterized", and the arrange
+options on them) and R14 ("a button to duplicate the selection in the same layer").
+
+- **Files.** `engine/LayerMerge.kt` (the merge kinds, the raster reasons, the fold, "Keep
+  editable"), `ui/layers/LayerOps.kt` (`mergeDown(c, layer, ask, keepEditable)`,
+  `mergeAsPixels`), `ui/layers/MergeDialog.kt` (`MergeIntoPixelsDialog`, tag
+  `V19Tags.MERGE_DIALOG`), `ui/layers/LayersPanel.kt` (the dialog's saveable state),
+  `ui/layers/LayerRow.kt` (the derived shape badge), `tools/select/SelectionDuplicate.kt`,
+  `ui/editor/SelectionBar.kt`, `vector/select/ObjectActions.kt` (`arrange`'s body).
+  `EditorController.mergeDown` stays a one-line delegate (region `v19-A4 mergeDown`), and region
+  `v19-A4 mergeFolder` asks `LayerMerge.folderData` for the data its merged layer keeps; the
+  other A4 regions are unchanged. `LayerConvert.shapeToVector` (F1b) converts a legacy shape
+  layer on the way.
+- **Merge kinds** (`LayerMerge.kindOf(upper, lower)`, the pair "Merge down" works on: `lower`
+  right below `upper`):
+  - `TEXT_ITEMS`: two text layers. The texts of the upper layer join the lower layer's on top
+    (`TextCodec.encodeAll(below + above)`, ids kept or assigned); the lower layer keeps its name
+    and opacity. The conditions, in order (the first that fails is the reason): no mask on either
+    (`WHY_MASK`); both Normal (`WHY_BLEND`); neither clipping (`WHY_CLIP`); no live array
+    (`WHY_COPIES`); no threaded or wrapped text (`WHY_FRAMES`, I24); at most `TextCodec.MAX_ITEMS`
+    texts in all (`WHY_TOO_MANY`); the same opacity (`WHY_OPACITY`, added by the lead at the
+    merge); under 100 % no text of one layer meeting one of the other, by rounded paint bounds
+    (`WHY_OVERLAP`).
+  - `VECTOR_OBJECTS`: two shape or vector layers (v1.8's vector-onto-vector case included). The
+    upper layer's objects join the lower layer's on top with new ids (`VectorContent.plus`); a
+    legacy shape layer becomes a vector layer of one `VShape`. The conditions: no mask; the upper
+    one Normal and not clipping (the lower layer's blend and clipping stay the merged layer's, as
+    in v1.8); no live array; no adjustment layer (`WHY_KINDS`); each layer's opacity folds
+    exactly (below), else `WHY_OVERLAP`.
+  - `RASTER`: anything else, v1.8's flatten through a temporary two-layer document. A text layer
+    with a shape or vector layer is `WHY_KINDS`.
+  - Every kind is ONE step "Merge down" that undo restores whole (data, pixels, props, the
+    removed layer). No merge draws the paper (I21, `LayerMergePaperTest`).
+  - The kept types are not rendered anew: the upper layer's pixels are drawn over the lower
+    layer's, piece by piece (`LayerMerge.disjoint`, the disjoint rects of a `Region`): each
+    text's own paint bounds, each object's (up to `MAX_PARTS` = 64 objects; more, or a legacy
+    shape layer, take one bounding box or the whole layer). Only the undo tiles the pieces meet
+    are saved, so two texts in opposite corners of a PHONE canvas touch two places, not 2.6 Mpx.
+- **The opacity fold (D26).** A shape or vector layer under 100 % folds its opacity into each
+  object's own opacity, and the merged layer is at 100 %. That is exact when no two of its objects
+  share a pixel (their paint bounds rounded out are pairwise disjoint: a sweep by left edge), so
+  that is the condition (`foldsExactly`). The merged pixels are not rendered anew: the lower
+  layer's are scaled by its opacity within its objects' paint bounds (DST_IN), and the upper
+  layer's are drawn over them at its opacity. `MergeExactTest` compares the picture before and
+  after within 1/255, and within 3/255 where a fold is involved (anti-aliased edges round twice).
+- **The dialog.** `LayerMerge.rasterReason(upper, lower)` is non-null only for two data layers
+  (text, shape, vector) that would become pixels. Raster, adjustment, folder and non-adjacent
+  pairs, kept types, and data that does not decode (merged as pixels, as in v1.8) give null.
+  `LayerOps.mergeDown` with `ask` (the layers panel's Merge) hands the reason to the panel,
+  which shows `MergeIntoPixelsDialog`:
+  - `LayerLabels19.MERGE_TITLE` and the body with the reason;
+  - `LayerLabels19.MERGE_CONFIRM`: `mergeAsPixels`, then the toast `MERGED_AS_PIXELS` with the
+    reason;
+  - "Cancel": no step;
+  - only for `WHY_OVERLAP`, `LayerLabels19.KEEP_EDITABLE` with its note
+    (`LayerMerge.mergeDownEditable`): the type is kept although see-through overlaps change a
+    little; the objects are rendered anew wherever either layer painted (I1).
+  - The panel keeps the open dialog (`mergeAskId`, `mergeAskWhy`) across a rotation. A merge
+    onto a raster layer never asks.
+- **The derived shape badge.** `LayerRowModel.shapesOnly`: a vector layer whose objects are all
+  `VShape` (a merge of shape layers) shows the shape badge (`showsShapeBadge`), like a legacy
+  shape layer. Nothing is stored; an object of another kind makes it a vector layer again.
+- **Duplicate on the selection bar** (R14). `LayerLabels19.DUPLICATE` comes after Save, the
+  bar's eleventh item. It shows only where `SelectionDuplicate.kindOf(c)` is non-null: there is a
+  selection, and the active layer is not a folder, an adjustment layer, a live array, a mask
+  being edited, a legacy shape layer, or a text layer while `TextItemOps.available` is false (A3).
+  It is one step `LayerLabels19.DUPLICATE_STEP` (`groupUndo`); the offset is
+  `ObjectActions.duplicateOffset` (16 px at 100 %).
+  - Pixels: the selected pixels (`SelectionEdits.drawSelected`) are drawn again, offset right and
+    down, on the same layer (an alpha lock keeps them inside the painted pixels), and the
+    selection moves onto them (`SelectionDuplicate.shifted`: only the selection's bounds are
+    drawn onto a new ALPHA_8 mask and scanned for its tight bounds, never a full-document copy;
+    a pixel copy that does not fit in memory restores the saved tiles and records nothing).
+    This is a stand-in: the design floats the copy in Transform on the
+    same layer, which needs an in-layer placement in `TransformTool` (today closing a placement
+    over a painted layer deletes the layer); the lead deferred that change to Gate 2.
+  - Objects: the objects the selection touches (`c.vectors.touching`) are copied right above the
+    topmost of them (`ObjectEdits.duplicate`) and selected, with the toast `DUPLICATED`. When the
+    selection touches none, a toast says so (`LayerLabels19.NOTHING_TO_DUPLICATE`, with the
+    layer's name) and there is no step.
+  - Texts: `TextItemOps.duplicateItems`, once A3 makes it available.
+  - The item grows to its one-line label at any font size (`BarItem(fit = true)`).
+  - Slid to its end, the bar must start with a whole item at least the cue's 12 dp in (v1.8
+    polish). With eleven items a 392 dp phone started with "Deselect" under the start cue, so the
+    row's end padding (`selectionBarEndPadding`) grows where needed: the item before it then
+    shows only under the cue.
+- **Bring forward and Send backward** (R19). `ObjectActions.arrange` (signature frozen) sends
+  Forward and Backward through `ArrangeOrder.step` over the objects' paint bounds. Each selected
+  object passes the next object that overlaps it, or takes one plain step when none does, so
+  "Already in front" and "Already at the back" come only at the top or the bottom. Front and Back
+  keep v1.5's `ObjectEdits.arrange`. Each is one step; A9's shape More row calls the same entry.
+- **Merge folder keeps the type** (R19, step 8). `EditorController.mergeFolder` still makes the
+  merged layer from the folder's composite (`FolderComposite.renderBlock`), with the folder's
+  name and props as in v1.8. `LayerMerge.folderData(folder)` adds the data when that composite is
+  exactly the rendering of it. The folder holds no folder, and its shown children are all Normal,
+  without a mask, clipping, live array or adjustment. A hidden child is left out, as the
+  composite leaves it out. Then:
+  - all text layers at 100 %, no threaded or wrapped text, at most `TextCodec.MAX_ITEMS` texts:
+    one text layer of their texts, bottom first;
+  - all shape or vector layers whose opacity folds exactly (`foldsExactly`): one vector layer of
+    their objects, bottom first, each layer's opacity folded in (`faded`), a shape converted;
+  - anything else: one raster layer, as in v1.8, without the R19 merge dialog (v1.8's
+    pass-through question in `LayerOps.mergeFolder` stays).
+  - Either way it is one step `FolderLabels.MERGE` (`MergeFolderKeepsTypeTest`).
+- **Compat** (5.2 row 10). v1.8 reads and edits the fixtures `layers-merged` (a vector merge
+  with a folded 50 % layer, and two shape layers merged into a vector layer of shapes) and
+  `duplicates` (a raster and a vector Duplicate) as they are: existing kinds and fields only. A
+  text merge writes row 5's `more` (A3's row).
+- **Tests.**
+  - `v19/a4`: `MergeKeepsTypeTest`, `MergeExactTest`, `MergeRasterReasonTest`,
+    `MergeConfirmDialogTest` (UI), `LayerMergePaperTest`, `ShapeBadgeTest`,
+    `SelectionDuplicateRobolectricTest`, `ArrangeOneStepTest`, `MergeFolderKeepsTypeTest`,
+    `MergeUndoReopenTest` (every merge and Duplicate kind: undo and redo restore pixels, data,
+    props, the layer list and the selection byte for byte; the results reopen as saved), with
+    `A4Kit`.
+  - `qa19`: `Qa19MergeUiTest` and `Qa19DuplicateUiTest` (392 and 360 dp, font scales 1, 1.3 and
+    2.0, I27; the eight v1.6 items keep their x positions, "More" whole at 392 dp).
+  - Forced updates: `LayerMergeExtractionTest`, `VectorLayerOpsRobolectricTest`,
+    `ObjectActionsRobolectricTest` (Forward's plain step), `Qa18PolishChromeSelectionBarTest`
+    (eleven items; the stroke waits for the tool menu to close, and its one retry closes a
+    menu still open and picks the marquee again when another tool took the stroke); and, by the
+    lead at the merge, `qa18/ChromeLabelsTest` (the selection bar's list ends with Duplicate).
+
 <!-- /v19-A4 -->
 
 ### Text (A3)

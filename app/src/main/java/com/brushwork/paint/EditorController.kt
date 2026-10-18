@@ -1727,6 +1727,10 @@ class EditorController(
      * folder merges as Normal), eye, lock and clipping; the block goes. ONE `LayerTreeAction`
      * step; the merged layer becomes active. MERGED events (source = the new layer) for every
      * layer that left.
+     *
+     * v1.9 (R19, A4 step 8): when the folder's shown children all merge by type, the merged layer
+     * keeps it: one text layer of their texts or one vector layer of their objects, on the same
+     * composite pixels ([LayerMerge.folderData]).
      */
     fun mergeFolder(folder: Layer): Boolean {
         if (!folder.isFolder || doc.indexOf(folder) < 0) return false
@@ -1743,10 +1747,13 @@ class EditorController(
                     toast(String.format(StabilityLabels19.NO_MEMORY_FOR, FolderLabels.MERGE))
                     return@editScope false
                 }
+                // (Decided first: it lands the vector renders still on their way.)
+                val kept = layerMerge.folderData(folder)
                 val pixels = folderPixels(folder) ?: return@editScope false
                 val merged = Layer(doc.newLayerId(), folder.name, pixels)
                 val props = folder.props()
                 merged.copyPropsFrom(if (folder.folder?.passThrough == true) props.copy(blendMode = LayerBlendMode.NORMAL) else props)
+                if (kept != null) merged.restoreData(kept)
                 val order = ArrayList<Layer>(doc.layers.size)
                 val parents = ArrayList<Long>(doc.layers.size)
                 for ((i, l) in doc.layers.withIndex()) {

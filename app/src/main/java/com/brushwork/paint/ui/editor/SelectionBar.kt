@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -26,6 +27,7 @@ import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.ContentCut
 import androidx.compose.material.icons.outlined.ContentPaste
+import androidx.compose.material.icons.outlined.ControlPointDuplicate
 import androidx.compose.material.icons.outlined.Deselect
 import androidx.compose.material.icons.outlined.DeleteSweep
 import androidx.compose.material.icons.outlined.InvertColors
@@ -36,6 +38,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -45,28 +48,36 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.remove.ContentAwareFillJob
+import com.brushwork.paint.tools.select.SelectionDuplicate
 import com.brushwork.paint.ui.common.ArrayLabels
+import com.brushwork.paint.ui.common.LayerLabels19
 import com.brushwork.paint.ui.common.SavedSelectionLabels
 import com.brushwork.paint.ui.common.SheetBackground
+import com.brushwork.paint.ui.common.V19Tags
 import com.brushwork.paint.ui.common.longPressLabel
 import com.brushwork.paint.ui.remove.ContentAwareFillSheet
 import com.brushwork.paint.ui.editor.chrome.ChromeTags
 import com.brushwork.paint.ui.theme.BrushworkColors
 import com.brushwork.paint.ui.theme.IbisColors
+import kotlin.math.ceil
 
 /**
  * Floating actions for the current selection (whatever made it: marquee, lasso, magic wand,
  * smart select...): copy, cut, paste, deselect, delete the selected pixels, content-aware fill
  * (opens its options), invert and the full selection menu ([onMore]); v1.7 adds "Array" (an array
- * from the selection) and "Save" (a saved selection) after it. With no selection but
+ * from the selection) and "Save" (a saved selection) after it; v1.9 adds [LayerLabels19.DUPLICATE]
+ * ([SelectionDuplicate]) after Save where it keeps the layer's kind. With no selection but
  * something copied, it offers Paste only, and
  * [onHide] (non-null then) hides it until something new is copied.
  */
@@ -79,10 +90,18 @@ internal fun SelectionActionBar(
 ) {
     val hasSelection = controller.selection != null
     val canPaste = controller.clipboard != null
+    // v1.9 (R14): reading layersVersion, the bar follows a change of the active layer or its kind.
+    val canDuplicate = controller.layersVersion.let { SelectionDuplicate.kindOf(controller) != null }
     // Content-aware fill options; Fill closes them (the busy overlay shows the progress).
     var fillOptionsOpen by remember { mutableStateOf(false) }
     if (fillOptionsOpen) ContentAwareFillSheet(controller, onDismiss = { fillOptionsOpen = false })
     val scroll = rememberScrollState()
+    // v1.9: slid to its end, the bar starts clear of its start cue ([selectionBarEndPadding]).
+    val density = LocalDensity.current
+    var viewportPx by remember { mutableIntStateOf(0) }
+    var leadPx by remember { mutableIntStateOf(0) }
+    val endPad = with(density) { selectionBarEndPadding(leadPx.toDp(), viewportPx.toDp()) }
+    val endPadPx = with(density) { endPad.roundToPx() }
     Surface(
         color = SheetBackground,
         contentColor = BrushworkColors.OnChrome,
@@ -90,9 +109,12 @@ internal fun SelectionActionBar(
         shadowElevation = 4.dp,
         modifier = modifier,
     ) {
-        Box {
+        Box(Modifier.onSizeChanged { viewportPx = it.width }) {
             Row(
-                Modifier.horizontalScroll(scroll).padding(horizontal = 4.dp, vertical = 2.dp),
+                Modifier
+                    .horizontalScroll(scroll)
+                    .onSizeChanged { leadPx = it.width - endPadPx }
+                    .padding(start = BarEdge, end = endPad, top = 2.dp, bottom = 2.dp),
                 horizontalArrangement = Arrangement.spacedBy(0.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -128,10 +150,23 @@ internal fun SelectionActionBar(
                     BarItem(Icons.Outlined.BookmarkAdd, SavedSelectionLabels.SAVE_BUTTON, SavedSelectionLabels.SAVE) {
                         controller.endCanvasGesture(); controller.saveSelection()
                     }
+                    // v1.9 (R14): after Save, so the earlier items keep their places; only where it
+                    // keeps the layer's type (SelectionDuplicate.kindOf).
+                    if (canDuplicate) {
+                        BarItem(
+                            Icons.Outlined.ControlPointDuplicate,
+                            LayerLabels19.DUPLICATE,
+                            LayerLabels19.DUPLICATE_DESC,
+                            fit = true,
+                            modifier = Modifier.testTag(V19Tags.DUPLICATE),
+                        ) {
+                            controller.endCanvasGesture(); SelectionDuplicate.duplicate(controller)
+                        }
+                    }
                 }
                 if (onHide != null) BarItem(Icons.Outlined.Close, "Hide", "Hide the paste bar", onClick = onHide)
             }
-            // v1.8 polish: the bar scrolls sideways (ten items are wider than a phone); a cue at each
+            // v1.8 polish: the bar scrolls sideways (ten items, eleven in v1.9, are wider than a phone); a cue at each
             // edge with items past it says so.
             Box(Modifier.matchParentSize()) {
                 if (scroll.canScrollBackward) ScrollCue(forward = false, Modifier.align(Alignment.CenterStart))
@@ -172,18 +207,53 @@ private fun ScrollCue(forward: Boolean, modifier: Modifier) {
 
 /**
  * The scroll cue's width: the bar's 4 dp edge padding and 8 dp of an item's side margin. Item
- * labels are centred in 46 dp; on a 392 dp phone the bar slid to its end starts with a whole
- * "Paste", whose label begins 8.7 dp past the bar's edge.
+ * labels are centred in 46 dp; slid to its end, the bar starts with a whole item at least this
+ * far from its edge ([selectionBarEndPadding]).
  */
 private val ScrollCueWidth = 12.dp
 
+/** A bar item's width (v1.6), and the row's padding at each end (v1.8). */
+private val BarItemWidth = 46.dp
+private val BarEdge = 4.dp
+
+/**
+ * v1.9 (eleven items, [LayerLabels19.DUPLICATE] last): the row's end padding. It is v1.8's
+ * [BarEdge] unless the bar slid to its end would start with a whole item nearer than
+ * [ScrollCueWidth] to its edge, its label under the start cue ("Deselect" on a 392 dp phone):
+ * then it is wider by what leaves [ScrollCueWidth] of the item before it in view, under the cue
+ * alone, and puts that item [ScrollCueWidth] in. [lead] is the row's width without its end
+ * padding (its start padding and items, every one [BarItemWidth] wide but the last), [viewport]
+ * the bar's.
+ */
+internal fun selectionBarEndPadding(lead: Dp, viewport: Dp): Dp {
+    val pad = BarEdge.value
+    val item = BarItemWidth.value
+    val cue = ScrollCueWidth.value
+    val scrolled = lead.value + pad - viewport.value
+    if (lead.value <= 0f || viewport.value <= 0f || scrolled <= 0f) return BarEdge
+    // The first item wholly in view, the k-th: its left edge at pad + k * item along the row.
+    val k = ceil((scrolled - pad) / item - 0.001f)
+    val d = pad + k * item - scrolled
+    return if (d >= cue - 0.01f) BarEdge else (pad + d + item - cue).dp
+}
+
 /** Icon over a short label; [clickLabel] tells a screen reader what it does, and a long press shows it (v1.8). */
 @Composable
-private fun BarItem(icon: ImageVector, label: String, clickLabel: String, enabled: Boolean = true, lines: Int = 1, onClick: () -> Unit) {
+private fun BarItem(
+    icon: ImageVector,
+    label: String,
+    clickLabel: String,
+    enabled: Boolean = true,
+    lines: Int = 1,
+    fit: Boolean = false,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
     val tint = if (enabled) BrushworkColors.OnChrome else BrushworkColors.OnChromeDim.copy(alpha = 0.45f)
     Column(
-        Modifier
-            .width(46.dp)
+        modifier
+            // v1.9: [fit] grows the item to a one-line label wider than the others' (whole at any font size).
+            .then(if (fit) Modifier.widthIn(min = BarItemWidth) else Modifier.width(BarItemWidth))
             // Grows (rather than clipping) the two-line label under a large system font.
             .heightIn(min = 46.dp)
             .clip(RoundedCornerShape(10.dp))
@@ -195,6 +265,16 @@ private fun BarItem(icon: ImageVector, label: String, clickLabel: String, enable
     ) {
         Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(20.dp))
         Spacer(Modifier.height(2.dp))
-        Text(label, style = MaterialTheme.typography.labelSmall, fontSize = 10.sp, lineHeight = if (lines > 1) 11.sp else 12.sp, color = tint, maxLines = lines, textAlign = TextAlign.Center)
+        Text(
+            label,
+            style = MaterialTheme.typography.labelSmall,
+            fontSize = 10.sp,
+            lineHeight = if (lines > 1) 11.sp else 12.sp,
+            color = tint,
+            maxLines = lines,
+            softWrap = !fit,
+            textAlign = TextAlign.Center,
+            modifier = if (fit) Modifier.padding(horizontal = 4.dp) else Modifier,
+        )
     }
 }

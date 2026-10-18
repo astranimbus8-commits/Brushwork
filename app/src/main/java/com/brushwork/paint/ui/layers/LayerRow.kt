@@ -97,6 +97,7 @@ import com.brushwork.paint.ui.common.V17Tags
 import com.brushwork.paint.ui.editor.EditorIcons
 import com.brushwork.paint.ui.theme.IbisColors
 import com.brushwork.paint.ui.theme.IbisDims
+import com.brushwork.paint.vector.VShape
 import kotlin.math.roundToInt
 
 /** What kind of editable layer a row shows a badge for (v1.5). */
@@ -158,6 +159,12 @@ internal data class LayerRowModel(
      * row when its folder is closed; the list shows only these.
      */
     val shownInList: Boolean = true,
+    /**
+     * v1.9 (R14): a vector layer whose objects are all shapes (at least one): it shows the shape
+     * badge ([showsShapeBadge]) and keeps its vector menus. Derived from the objects on every build,
+     * never stored, so it follows undo.
+     */
+    val shapesOnly: Boolean = false,
 ) {
     /** An editable text layer (its text can be edited again with the text tool). */
     val isText: Boolean get() = kind == LayerKindBadge.TEXT
@@ -170,6 +177,9 @@ internal data class LayerRowModel(
 
     /** A vector layer (its objects stay editable). */
     val isVector: Boolean get() = kind == LayerKindBadge.VECTOR
+
+    /** v1.9 (R14): the shape badge shows: a legacy shape layer, or a vector layer of shapes only ([shapesOnly]). */
+    val showsShapeBadge: Boolean get() = isShape || (isVector && shapesOnly)
 
     /** An adjustment layer (its effect applies to the layers below). */
     val isAdjustment: Boolean get() = kind == LayerKindBadge.ADJUSTMENT
@@ -244,6 +254,7 @@ internal data class LayerRowModel(
                     hiddenByFolder = tree?.hiddenByFolder(l) == true,
                     lockedByFolder = tree?.lockedByFolder(l) == true,
                     shownInList = tree?.shown(l) ?: true,
+                    shapesOnly = l.isVectorLayer && l.vector?.objects?.let { o -> o.isNotEmpty() && o.all { it is VShape } } == true,
                 )
             }
         }
@@ -863,7 +874,7 @@ private fun BoxScope.KindBadge(row: LayerRowModel) {
     when {
         frame != null -> FrameBadgeView(frame, LayerLabels.frameBadge(n, frame), m)
         row.isText -> TextLayerBadge(n, m)
-        row.isShape -> ShapeLayerBadge(n, m)
+        row.showsShapeBadge -> ShapeLayerBadge(n, m)
         row.isVector -> LetterBadge("V", LayerLabels.badge(n, LayerLabels.VECTOR_BADGE), m)
         row.isAdjustment -> IconBadge(Icons.Filled.Contrast, LayerLabels.badge(n, LayerLabels.ADJUSTMENT_BADGE), m)
     }

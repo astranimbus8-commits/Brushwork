@@ -3,6 +3,7 @@ package com.brushwork.paint.engine
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.LayerBlendMode
+import com.brushwork.paint.ui.common.LayerLabels19
 import com.brushwork.paint.vector.VectorContent
 import com.brushwork.paint.vector.select.ObjectTestKit
 import org.junit.After
@@ -21,6 +22,11 @@ import org.robolectric.RobolectricTestRunner
  * two vector layers as objects (adjacent, the upper one Normal at 100 % without mask, clipping or
  * adjustment, the lower one at 100 % without mask), and the merge itself is v1.8's: one step
  * "Merge down" that undo restores, the same refusals. [LayerMerge.rasterReason] is null (A4 fills it).
+ *
+ * v1.9 A4 (R19, 2.8 forced update): a layer under 100 % whose objects don't overlap folds its
+ * opacity into them, so the 50 % variants (one object each) keep their objects too; and
+ * [LayerMerge.rasterReason] names why two vector layers become pixels ([LayerLabels19.WHY_BLEND],
+ * [LayerLabels19.WHY_CLIP]).
  */
 @RunWith(RobolectricTestRunner::class)
 class LayerMergeExtractionTest {
@@ -49,10 +55,10 @@ class LayerMergeExtractionTest {
     /** What would stop v1.8 from merging as objects, each applied the way the user would. */
     private val variants: List<Pair<String, (EditorController, Layer, Layer) -> Unit>> = listOf(
         "plain" to { _, _, _ -> },
-        "upper at 50 %" to { c, u, _ -> c.setLayerProps(u, u.props().copy(opacity = 0.5f)) },
+        "upper at 50 % (folded)" to { c, u, _ -> c.setLayerProps(u, u.props().copy(opacity = 0.5f)) },
         "upper Multiply" to { c, u, _ -> c.setLayerProps(u, u.props().copy(blendMode = LayerBlendMode.MULTIPLY)) },
         "upper clipping" to { c, u, _ -> c.setLayerProps(u, u.props().copy(clipping = true)) },
-        "lower at 50 %" to { c, _, l -> c.setLayerProps(l, l.props().copy(opacity = 0.5f)) },
+        "lower at 50 % (folded)" to { c, _, l -> c.setLayerProps(l, l.props().copy(opacity = 0.5f)) },
         "lower Multiply (kept)" to { c, _, l -> c.setLayerProps(l, l.props().copy(blendMode = LayerBlendMode.MULTIPLY)) },
         "upper hidden" to { c, u, _ -> c.setLayerProps(u, u.props().copy(visible = false)) },
     )
@@ -76,9 +82,10 @@ class LayerMergeExtractionTest {
         for ((why, apply) in variants) {
             val (v, u, l) = fixture()
             apply(v, u, l)
-            val expected = if (why == "plain" || why.endsWith("(kept)") || why == "upper hidden") MergeKind.VECTOR_OBJECTS else MergeKind.RASTER
+            val expected = if (why == "plain" || why.endsWith("(kept)") || why.endsWith("(folded)") || why == "upper hidden") MergeKind.VECTOR_OBJECTS else MergeKind.RASTER
             assertEquals(why, expected, v.layerMerge.kindOf(u, l))
-            assertNull(why, v.layerMerge.rasterReason(u, l))
+            val reason = when (why) { "upper Multiply" -> LayerLabels19.WHY_BLEND; "upper clipping" -> LayerLabels19.WHY_CLIP; else -> null }
+            assertEquals(why, reason, v.layerMerge.rasterReason(u, l))
         }
         assertNull(merge.rasterReason(lower, background))
     }

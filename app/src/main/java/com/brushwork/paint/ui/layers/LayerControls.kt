@@ -183,7 +183,8 @@ internal class LayerWindowUi {
  * What the window's buttons act on: the active layer's row and the host's callbacks.
  * v1.7: [canDelete] (a folder, or not the last pixel layer; v1.6: more than one layer) and
  * [onMergeFolder] ("Merge folder" on a folder row: the host asks first when the picture would
- * change).
+ * change). v1.9 (R19): [onMergeDown] (merge down on a layer row: the host asks first when two
+ * data layers would become pixels).
  */
 internal class LayerWindowEnv(
     val controller: EditorController,
@@ -200,6 +201,7 @@ internal class LayerWindowEnv(
     val onOpenPanel: (EditorPanel) -> Unit,
     val canDelete: Boolean = layerCount > 1,
     val onMergeFolder: () -> Unit = {},
+    val onMergeDown: () -> Unit = { LayerOps.mergeDown(controller, row.layer) },
 ) {
     val layer: Layer get() = row.layer
 }
@@ -283,7 +285,7 @@ internal fun stripActions(env: LayerWindowEnv): List<WindowAction> {
             // its level (a folder's bottom child has none). v1.6: docIndex > 0.
             (row.isFolder || env.docIndex > 0) && LayerOps.canMergeDown(c, layer),
             iconGlyph(Icons.Filled.VerticalAlignBottom),
-        ) { c.fromPanel { if (row.isFolder) env.onMergeFolder() else LayerOps.mergeDown(c, layer) } },
+        ) { c.fromPanel { if (row.isFolder) env.onMergeFolder() else env.onMergeDown() } },
         WindowAction(LayerLabels.DELETE, env.canDelete, iconGlyph(Icons.Outlined.Delete)) { c.fromPanel(env.onDelete) },
         WindowAction(LayerLabels.FILTERS, true, { tint -> Text("FX", color = tint, fontSize = 15.sp, lineHeight = 16.sp, fontWeight = FontWeight.Bold) }) {
             c.fromPanel { env.onOpenPanel(EditorPanel.FILTERS) }

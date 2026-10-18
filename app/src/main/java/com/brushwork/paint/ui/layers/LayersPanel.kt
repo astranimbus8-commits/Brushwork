@@ -71,6 +71,7 @@ import com.brushwork.paint.model.Selection
 import com.brushwork.paint.model.TransparencyDisplay
 import com.brushwork.paint.ui.common.BwDialog
 import com.brushwork.paint.ui.common.FolderLabels
+import com.brushwork.paint.ui.common.LayerLabels19
 import com.brushwork.paint.ui.editor.EditorPanel
 import com.brushwork.paint.ui.editor.SliderMath
 import com.brushwork.paint.ui.editor.ValueInputDialog
@@ -166,6 +167,9 @@ fun LayersPanel(
     // v1.7 (item 8): the folder whose delete or merge is being asked about.
     var deleteFolderId by rememberSaveable { mutableStateOf<Long?>(null) }
     var mergeFolderId by rememberSaveable { mutableStateOf<Long?>(null) }
+    // v1.9 (R19): the layer whose merge into pixels is being asked about, and why.
+    var mergeAskId by rememberSaveable { mutableStateOf<Long?>(null) }
+    var mergeAskWhy by rememberSaveable { mutableStateOf<String?>(null) }
     val ui = remember { LayerWindowUi() }
     // A view preference (AppSettings is not observable): mirrored here for the squares.
     var transparency by remember { mutableStateOf(controller.settings.transparencyDisplay) }
@@ -206,6 +210,8 @@ fun LayersPanel(
                 else LayerOps.mergeFolder(controller, active)
             }
         },
+        // v1.9 (R19): the guards speak first; two data layers that would become pixels ask why.
+        onMergeDown = { LayerOps.mergeDown(controller, active, ask = { why -> mergeAskWhy = why; mergeAskId = active.id }) },
     )
     // v1.7: the clipping toggle has nothing to clip to at the bottom of the row's level.
     val isBottom = LayerTreeRows.isBottomOfLevel(doc.layers, activeDocIndex)
@@ -320,6 +326,7 @@ fun LayersPanel(
         opacityId?.let { if (doc.layerById(it) == null) opacityId = null }
         deleteFolderId?.let { if (doc.layerById(it)?.isFolder != true) deleteFolderId = null }
         mergeFolderId?.let { if (doc.layerById(it)?.isFolder != true) mergeFolderId = null }
+        mergeAskId?.let { if (doc.layerById(it) == null) mergeAskId = null }
     }
 
     deleteFolderId?.let(doc::layerById)?.takeIf { it.isFolder }?.let { folder ->
@@ -341,6 +348,20 @@ fun LayersPanel(
             confirmText = MERGE_CONFIRM,
             onConfirm = { mergeFolderId = null; controller.fromPanel { LayerOps.mergeFolder(controller, folder) } },
         ) {}
+    }
+
+    mergeAskId?.let(doc::layerById)?.let { layer ->
+        val why = mergeAskWhy.orEmpty()
+        MergeIntoPixelsDialog(
+            reason = why,
+            onMerge = { mergeAskId = null; controller.fromPanel { LayerOps.mergeAsPixels(controller, layer, why) } },
+            onKeepEditable = if (why == LayerLabels19.WHY_OVERLAP) {
+                { mergeAskId = null; controller.fromPanel { LayerOps.mergeDown(controller, layer, keepEditable = true) } }
+            } else {
+                null
+            },
+            onDismiss = { mergeAskId = null },
+        )
     }
 
     renameId?.let(doc::layerById)?.let { layer ->

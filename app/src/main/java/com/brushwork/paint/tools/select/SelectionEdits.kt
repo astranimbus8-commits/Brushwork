@@ -301,7 +301,7 @@ object SelectionEdits {
      * paint, so "src then mask with DST_IN" would be a no-op; painting the source (as a shader)
      * through the mask gives the masked pixels instead.
      */
-    private fun drawSelected(c: Canvas, src: Bitmap, sel: Selection) {
+    internal fun drawSelected(c: Canvas, src: Bitmap, sel: Selection) {
         val paint = Paint().apply { shader = BitmapShader(src, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP) }
         c.save()
         c.clipRect(sel.bounds)

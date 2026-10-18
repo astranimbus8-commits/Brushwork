@@ -153,7 +153,7 @@ class VectorLayerOpsRobolectricTest {
 
     @Test
     fun mergesThatWouldLookDifferentAreRasterMerges() {
-        for (setupUpper in listOf<(Layer) -> Unit>({ it.opacity = 0.5f }, { it.blendMode = LayerBlendMode.MULTIPLY }, { it.mask = BitmapUtils.createMaskBitmap(w, h) })) {
+        for (setupUpper in listOf<(Layer) -> Unit>({ it.blendMode = LayerBlendMode.MULTIPLY }, { it.mask = BitmapUtils.createMaskBitmap(w, h) })) {
             val c = setup()
             c.vectors.addObjects(c.v1, listOf(box(20f, 20f, 200f, 160f)), "Add")
             c.vectors.addObjects(c.v2, listOf(box(100f, 100f, 300f, 260f)), "Add")
@@ -163,12 +163,24 @@ class VectorLayerOpsRobolectricTest {
             c.undo()
             assertNotNull(c.v1.vector)
         }
-        // The lower layer's opacity would fade the upper objects too.
+        // v1.9 (R19, 2.8 forced update): an upper layer at 50 % with one object and a lower layer
+        // at 40 % become exact folds: each layer's opacity goes into its objects, the merged layer
+        // is at 100 %.
         val c = setup()
+        c.vectors.addObjects(c.v1, listOf(box(20f, 20f, 200f, 160f)), "Add")
         c.vectors.addObjects(c.v2, listOf(box(100f, 100f, 300f, 260f)), "Add")
         c.v1.opacity = 0.4f
+        c.v2.opacity = 0.5f
         c.mergeDown(c.v2)
-        assertNull(c.v1.vector)
+        assertEquals(listOf(0.4f, 0.5f), c.v1.vector!!.objects.map { it.opacity })
+        assertEquals(1f, c.v1.opacity)
+        // Two overlapping objects at 50 % can't fold: pixels.
+        val d = setup()
+        d.vectors.addObjects(d.v1, listOf(box(20f, 20f, 200f, 160f)), "Add")
+        d.vectors.addObjects(d.v2, listOf(box(100f, 100f, 300f, 260f), box(200f, 200f, 380f, 280f)), "Add")
+        d.v2.opacity = 0.5f
+        d.mergeDown(d.v2)
+        assertNull("raster merge", d.v1.vector)
     }
 
     @Test
