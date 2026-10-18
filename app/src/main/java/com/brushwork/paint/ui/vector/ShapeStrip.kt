@@ -36,6 +36,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.core.Units
+import com.brushwork.paint.model.Layer
 import com.brushwork.paint.tools.points.Mixed
 import com.brushwork.paint.tools.points.PointSelection
 import com.brushwork.paint.tools.vector.LineCapStyle
@@ -51,9 +52,11 @@ import com.brushwork.paint.ui.common.PointLabels
 import com.brushwork.paint.ui.editor.endCanvasGesture
 import com.brushwork.paint.ui.theme.BrushworkColors
 import com.brushwork.paint.ui.tools.strip.LocalStripContext
+import com.brushwork.paint.ui.tools.strip.StripContext
 import com.brushwork.paint.ui.tools.strip.StripItem
 import com.brushwork.paint.ui.tools.strip.StripRow
 import com.brushwork.paint.ui.tools.strip.StripSpec
+import com.brushwork.paint.vector.draw.VectorEraserModes
 
 /**
  * The Shape tool's strip (v1.8, design §3.9 and §4.6; area F).
@@ -62,7 +65,9 @@ import com.brushwork.paint.ui.tools.strip.StripSpec
  * "Shape style" 56 (the style glyph and ▾), or for Line and Arrow "Line ends" 56 (plain lines
  * only; a brush paints its own ends), the stroke width 64 (AUTO 1; its text, "60 px", opens
  * "Shape settings") and, while a shape is open, "Points" 72. 260 dp in full, 192 without the
- * AUTO item; a cell that doesn't apply keeps its room (neighbours never jump).
+ * AUTO item; a cell that doesn't apply keeps its room (neighbours never jump). v1.9 (R11): while
+ * erasing a vector or shape layer the Eraser's mode cell 56 ([VectorEraseChooser.modeCell], rank
+ * 0, never leaves row 1) ends row 1, and "Points" leads the More row instead.
  *
  * The More row, in order: "Editable" (a new shape in a layer of its own: raster layers, not
  * while a shape layer is open), "Stroke with", "Center", "Proportional" ("Circle" for an
@@ -100,6 +105,13 @@ internal fun shapeStrip(tool: ShapeTool, c: EditorController): StripSpec {
         strip.closeMore()
         showSettings = true
     }
+    // v1.9 (R11): erasing a vector or shape layer, the Eraser's mode cell in row 1; its
+    // "Turn into pixels" asks first (an overlay).
+    var asking by remember(c) { mutableStateOf<Layer?>(null) }
+    val modeCell = ShapeStripItems.modeCell(tool, c, strip) { layer ->
+        strip.closeMore()
+        asking = layer
+    }
     val items = ShapeStripItems.items(
         tool, c, info,
         openSettings = openSettings,
@@ -116,6 +128,7 @@ internal fun shapeStrip(tool: ShapeTool, c: EditorController): StripSpec {
             typingRoundness = true
         },
         barShown = strip.selectionBarShown,
+        modeCell = modeCell,
     )
     val keys = items.map { it.key }.toSet()
     return StripSpec(
@@ -127,6 +140,13 @@ internal fun shapeStrip(tool: ShapeTool, c: EditorController): StripSpec {
             if (typingRoundness) ShapeRoundnessDialog(tool) { typingRoundness = false }
             // v1.9 (R18): the bevel popup, while a bevel is open.
             ShapeBevelPopupHost(tool)
+            // v1.9 (R11): the mode cell's "Turn into pixels"; the outline's erase follows the layer.
+            asking?.let { layer ->
+                ErasePixelsDialog(c, layer) {
+                    asking = null
+                    tool.refreshPreview()
+                }
+            }
         },
         // The v1.7 type, style and line-end chips' entries are inside their dropdowns; the
         // Handles group is inside "Handles".
@@ -286,6 +306,7 @@ internal object ShapeStripItems {
         typeHandles: () -> Unit,
         typeRoundness: () -> Unit,
         barShown: Boolean,
+        modeCell: StripItem? = null,
     ): List<StripItem> = buildList {
         fun set(f: (com.brushwork.paint.tools.vector.ShapeSettings) -> com.brushwork.paint.tools.vector.ShapeSettings) = tool.update(f)
         val lineLike = info.lineLike
@@ -340,11 +361,18 @@ internal object ShapeStripItems {
                 if (widthText != null) ShapeValueCell(widthText, WIDTH_DP.dp, openSettings)
             },
         )
-        add(
-            StripItem(POINTS, POINTS_LABEL, POINTS_DP.dp, shown = info.pending) {
-                if (tool.box != null) ShapeTextToggle(POINTS_LABEL, tool.pointsMode, { tool.setPointEditing(!tool.pointsMode) }, POINTS_DP.dp)
-            },
-        )
+        val points = @Composable {
+            if (tool.box != null) ShapeTextToggle(POINTS_LABEL, tool.pointsMode, { tool.setPointEditing(!tool.pointsMode) }, POINTS_DP.dp)
+        }
+        if (modeCell == null) {
+            add(StripItem(POINTS, POINTS_LABEL, POINTS_DP.dp, shown = info.pending, content = points))
+        } else {
+            // v1.9 (R11): erasing a vector or shape layer, the mode cell (rank 0) takes the end
+            // of row 1 and "Points" leads the More row: TYPE, STYLE, WIDTH and the cell keep row 1
+            // within 364 dp at 392 dp without the chip (all five need 368).
+            add(modeCell)
+            if (info.pending) add(more(POINTS, POINTS_LABEL, POINTS_DP, points))
+        }
 
         // ---- The More row.
         if (info.editableShown) {
@@ -457,6 +485,25 @@ internal object ShapeStripItems {
         // v1.9 (R18): [PointLabels19.BEVEL], after v1.8's More items (StripKeysV19 rank 60); in
         // Points mode the box's Center and Proportional are hidden ([ShapeStripInfo.boxModifiersShown]).
         if (info.pointsMode) add(shapeBevelItem(tool))
+    }
+
+    /**
+     * v1.9 (R11): the Eraser's mode cell ([VectorEraseChooser.modeCell], StripKeysV19.ERASE_MODE_CELL)
+     * while [tool] erases the objects of a vector or shape layer (erase mode on, the layer's content
+     * edited), else null. A mode picked is the Eraser's ([VectorEraserModes]) and the outline's erase
+     * follows it at once; [onPixels] asks before the active layer is turned into pixels.
+     */
+    fun modeCell(tool: ShapeTool, c: EditorController, ctx: StripContext, onPixels: (Layer) -> Unit): StripItem? {
+        if (!tool.eraseOn || !VectorEraserStrip.erasesObjects(c)) return null
+        val layer = c.activeLayer
+        return VectorEraseChooser.modeCell(
+            ctx, layer, VectorEraserModes.mode(c),
+            onMode = { m ->
+                VectorEraserModes.setMode(c, m)
+                tool.refreshPreview()
+            },
+            onPixels = { onPixels(layer) },
+        )
     }
 
     private fun more(key: String, label: String, widthDp: Float = CELL_DP, content: @Composable () -> Unit) =
