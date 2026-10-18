@@ -267,7 +267,7 @@ data class ShapeSettings(
  * with its message, the outline shows alone), with the stroke at its width and, for a filled
  * closed style, its fill. Every edit of the pending shape works as when painting and updates the
  * erase. Its commit (✓, a tap outside, a tool or layer switch, turning erase mode off) is ONE step
- * [EraseLabels19.STEP_SHAPE]; ✕ leaves no trace. "Editable (own layer)", "New layer each time"
+ * [EraseLabels19.STEP_SHAPE]; ✕ leaves no trace. "Editable (own layer)", PlaceLabels19.NEW_LAYER_EACH_TIME
  * and joining are ignored, a tap opens no shape, and "Turn into path" and the object items are
  * not offered. Transient: never saved, off whenever the tool is chosen again ([onSelected]).
  *

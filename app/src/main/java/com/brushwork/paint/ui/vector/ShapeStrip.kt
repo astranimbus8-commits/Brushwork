@@ -106,7 +106,7 @@ internal fun shapeStrip(tool: ShapeTool, c: EditorController): StripSpec {
         showSettings = true
     }
     // v1.9 (R11): erasing a vector or shape layer, the Eraser's mode cell in row 1; its
-    // "Turn into pixels" asks first (an overlay).
+    // [EraseLabels19.TURN_INTO_PIXELS] asks first (an overlay).
     var asking by remember(c) { mutableStateOf<Layer?>(null) }
     val modeCell = ShapeStripItems.modeCell(tool, c, strip) { layer ->
         strip.closeMore()
@@ -140,7 +140,7 @@ internal fun shapeStrip(tool: ShapeTool, c: EditorController): StripSpec {
             if (typingRoundness) ShapeRoundnessDialog(tool) { typingRoundness = false }
             // v1.9 (R18): the bevel popup, while a bevel is open.
             ShapeBevelPopupHost(tool)
-            // v1.9 (R11): the mode cell's "Turn into pixels"; the outline's erase follows the layer.
+            // v1.9 (R11): the mode cell's [EraseLabels19.TURN_INTO_PIXELS]; the outline's erase follows the layer.
             asking?.let { layer ->
                 ErasePixelsDialog(c, layer) {
                     asking = null
