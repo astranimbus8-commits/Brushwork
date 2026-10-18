@@ -2047,6 +2047,94 @@ an adjustment layer's mask, whose lift redraws its tiles (above).
 
 <!-- v19-A7b -->
 
+R9, second half ("the app seems to be crashing often", with large artworks): the memory the
+editor holds is one policy with levels, a large allocation is admitted before it starts, the
+filters and the save no longer need a layer-sized Java buffer, and no wait on the main thread is
+unbounded. A soak harness runs the whole loop for Q10 and Q11 every night.
+
+- **Files.** `engine/GovernorPolicyV19.kt` (the policy, `registerWeakly`), `engine/GovernorPolicies.kt`
+  (`current` is V19), `filters/FilterTiling.kt`, `storage/LayerCodec.kt` (`snapshot`, `bandRows`,
+  `writeBands`), `storage/LayerEntries.kt` (`BAND_BYTES`, `writePixels`),
+  `tools/transform/LayerBoundsCache.kt` (H4, below), `vector/VectorLayers.kt` (`flushPending`)
+  and `array/ArrayRenders.kt` (`flush`): the bounded waits. Regions: `EditorController`
+  `v19-A7b layerCap` (the undo entry, `maxLayers`, `effectiveLayerCount`), `settle` and
+  `landSavedSelections` (the waits), `addMask`; `EditorSession` `saveOnLeaving`; `FilterSession`
+  `apply`. Labels: `StabilityLabels19.UNDO_TRIMMED`, `NO_MEMORY_FOR`, `TOO_SLOW`. Tests:
+  `v19/a7b/`.
+- **Levels** (`GovernorPolicyV19`, the default `MemoryGovernor.policy` from `BrushworkApp.onCreate`).
+  Entries are trimmed lowest priority first. `PRIORITY_DISPLAY` 0: "display tiles"
+  (`EditorController`, closed in `dispose`), `ThumbnailCache`, `OpticalKerning`.
+  `PRIORITY_PROXIES` 10: "live proxies" (`LiveAdjust`). `PRIORITY_BELOW` 20: "below-caches"
+  (`StrokeBelowCache`). `PRIORITY_UNDO` 50: "undo history" (`UNDO_ENTRY`, one per editor).
+  NORMAL and MODERATE free nothing; LOW (`TRIM_MEMORY_RUNNING_LOW`) frees the entries under 20;
+  CRITICAL (`RUNNING_CRITICAL`, `COMPLETE`) frees them all. A6's entries are held weakly
+  (`WeakRegistration`, `registerWeakly`): a collected owner's entry reads 0 bytes and is closed.
+  `GovernorRegistrationsV19Test` pins each of A6's caches to its level and what LOW and CRITICAL
+  free.
+- **Undo trim** (`trimUndo`, main thread, no collection). The undo entry drops the oldest steps
+  while the memory in use (Java heap plus `Debug.getNativeHeapAllocatedSize`, read once, less
+  the dropped steps' `byteSize`) is at or over `HEAP_TARGET` 70 % of `maxMemory`. It keeps the
+  newest `KEEP_UNDO_STEPS` = 1 and the redo steps, and nothing while `holdTrim` holds. Any drop
+  shows "Memory is low: older undo steps were cleared".
+- **Admit** (`admit`, any thread). A flatten, filter apply, export, merge or folder merge runs
+  only when its estimate fits in the free Java heap less `ADMIT_MARGIN` 64 MB, with one
+  collection before a refusal. Refused: "Not enough memory for <name>", nothing changes. The
+  Java heap only: bitmaps are native since API 26, so a bitmap admit rarely refuses on the phone.
+- **Filter tiling** (`FilterTiling`). A local filter (a `PixelMapper`) applies to its region (the
+  selection's bounds, else the layer) in bands of `BAND_PIXELS` (1 M pixels, at most 256 rows):
+  the region's result (4 bytes a pixel) plus two bands, instead of v1.8's 8 bytes a pixel of
+  the layer. Neighbourhood filters (blurs, distortions) keep the whole-image path behind
+  `admit`. Pixels, changed bounds and the step are byte-identical (`FilterTilingEqualsWholeTest`).
+- **Banded save** (`LayerEntries.writePixels`). On main, the layer or mask is copied natively
+  (`LayerCodec.snapshot`); on IO it is written a band at a time through a Java scratch of at most
+  `BAND_BYTES` 4 MB, byte-identical to v1.8's file (`BandedSaveByteIdenticalTest`). Array sources
+  still write from a whole buffer (`ArrayCodec`).
+- **Bounded waits** (`awaitDeferredJob`, `deferredWaitLimitMs` 1.5 s). v1.8's three
+  `runBlocking` waits (a vector render, an array render, a saved selection compressing) wait at
+  most 1.5 s on main. Past it the work is cancelled and never lands: the layer keeps what it had,
+  no step is recorded, and "<step> took too long and was cancelled" shows. An Undo or Redo that
+  waited is that cancellation. Under another overlay ("Saving…", "Exporting…") the work lands on
+  the spot through the synchronous path. `NoRunBlockingOnMainTest` keeps them out
+  (A5's `EraseLanding` is a lead request).
+- **Leaving** (`EditorSession.saveOnLeaving`, Home, app switch, screen off). It returns at once;
+  on the app scope it waits up to the limit for the renders and the saved selections
+  (`awaitDeferredWork`), lands what is pending synchronously (`leavingDeferred`: never
+  cancelled), and saves.
+- **Smart guides and recycled layers** (H4, `LayerBoundsCache`). Trimming the history disposes a
+  removed layer's step (`LayerTreeAction.dispose`, frozen), which recycles the layer on main
+  while its scan may still read it. The worker now copies the layer and its mask on main
+  (`copyPixels`), scans the copies on Default and recycles them in a `finally`. A result is kept
+  only when the layer, its bitmap, its mask and its content version are the ones copied. No
+  memory for a copy means nothing to snap to in that content (not retried until it changes).
+  Cost: one main-thread copy per queued layer, and transiently the layer plus its mask at full
+  size (`LayerBoundsCacheCopyTest`).
+- **Masks in the layer cap** (`effectiveLayerCount`). A layer mask is a document-sized bitmap
+  like a layer, so it counts as one, turned off or not. `addMask` refuses at the cap with the
+  layer-limit message; an adjustment layer from a selection takes its two rooms at once
+  (`canAddAdjustmentLayer`). The Layers panel's "n / max" counts masks too. An artwork over the
+  cap still opens (`MaskCapTest`). `LayerOps.addEnabledMask`, `MaskActions.addSpecMask`, folder
+  duplication and `ArraySources.hasRoom` do not count masks yet (lead requests).
+- **Soak harness** (`SoakHarnessTest`, `@Category(Timing)`; it runs only with `-PsoakOnly`, which
+  sets `bw.testSet=soak`: `.github/workflows/soak.yml`, nightly and on demand; it skips itself
+  elsewhere). Two artworks (phone and PRINT proportions at 512 px) go round 3 times: open from
+  the last save; 200 strokes (brush, eraser, a layer mask), LOW every 50, CRITICAL every 100 with
+  Undo and Redo after it; a blur in a selection and Invert; a Magnetic lasso round (Q10: 12
+  anchors, a drag, one selection step); a Color select round (Q11: Reds, fuzziness drags,
+  samples, one selection step); a layer deleted with its folder while the smart guides scan
+  it, recycled by CRITICAL (H4: only a step with folders recycles what it removed); save;
+  close. It asserts no crash or handled report and no scope error, layers reopen as saved, no
+  live bitmap is recycled, and closed editors' caches hold 0 bytes. The registry must not grow
+  round by round. No main-thread call may reach a FREEZE report, and each tool activation's
+  best time must be within 250 ms (CI factor applied). It prints the longest call of each kind
+  (the job's JUnit XML keeps them). On the desktop JVM a run takes about 17 s; the longest call
+  is a filter start (about 180 ms), the activations take under 5 ms.
+
+**At the merge (the lead).** `MemoryGovernorRegistryTest.theDefaultPolicyIsV18`,
+`VectorAsyncBurstQaTest` (its 3 s gate is past the 1.5 s wait) and A6's
+`GovernorRegistrationTest` line 155 (an editor now also registers "undo history") still pin the
+behaviour before A7b. `EditorController.dispose` should close `undoMemoryRegistration`. The rest
+are in the report's lead requests.
+
 <!-- /v19-A7b -->
 
 ## Core model (`model/`)
