@@ -135,6 +135,49 @@ internal object LayerCodec {
     }
 
     /**
+     * v1.9 (A7b step 4, R9): [bitmap]'s pixels for a banded write ([writeBands]), taken at once
+     * (MAIN thread for document bitmaps): a native copy whose bytes are exactly what [copyPixels]
+     * gives, so it costs no Java heap. A storable bitmap is copied as is; another one is
+     * converted ([toStorable]). The caller owns and recycles it.
+     */
+    fun snapshot(bitmap: Bitmap): Bitmap {
+        if (!isStorable(bitmap)) return toStorable(bitmap)
+        return bitmap.copy(Bitmap.Config.ARGB_8888, false) ?: throw OutOfMemoryError("No memory to copy a ${bitmap.width}x${bitmap.height} layer")
+    }
+
+    /** Rows of a [width]-pixel band that fit in [bandBytes] (at least one row). */
+    fun bandRows(width: Int, bandBytes: Int): Int = max(1, bandBytes / (width * 4))
+
+    /**
+     * v1.9 (A7b step 4, R9): writes [snapshot] (a storable bitmap, see [snapshot]) as a pixel file
+     * (atomically), a band of rows at a time through [scratch], which holds at least one row.
+     * The deflater gets the same bytes in the same order as [write] gives it, without a flush, so
+     * the file is byte-identical to [write]'s of the same pixels. Blocking: call on IO.
+     */
+    fun writeBands(file: File, snapshot: Bitmap, scratch: ByteArray) {
+        val w = snapshot.width
+        val h = snapshot.height
+        val rowBytes = w * 4
+        require(isStorable(snapshot) && scratch.size >= rowBytes)
+        val rows = minOf(scratch.size / rowBytes, h)
+        writeStream(file, w, h, byteLength(w, h)) { out ->
+            var y = 0
+            while (y < h) {
+                val n = minOf(rows, h - y)
+                val band = if (n == h) snapshot else Bitmap.createBitmap(snapshot, 0, y, w, n)
+                try {
+                    check(band.byteCount == n * rowBytes && isStorable(band)) { "Unexpected band format ${band.config}" }
+                    band.copyPixelsToBuffer(ByteBuffer.wrap(scratch, 0, n * rowBytes))
+                } finally {
+                    if (band !== snapshot) band.recycle()
+                }
+                out.write(scratch, 0, n * rowBytes)
+                y += n
+            }
+        }
+    }
+
+    /**
      * v1.7: the bytes of a pixel file (header and compressed pixels) written to [out], which is
      * left open; the array container (`ArrayCodec`, PIXELS) embeds them. Blocking: call on IO.
      */

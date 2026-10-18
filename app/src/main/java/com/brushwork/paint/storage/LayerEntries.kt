@@ -45,6 +45,20 @@ internal object LayerEntries {
     /** Saved-selection ids (and a `nextSelectionId`) this far from 0 come from a damaged file. */
     private const val MAX_SELECTION_ID = 1L shl 52
 
+    /** v1.9 (A7b step 4, R9): the Java scratch of a banded save at most (the design allows 6 MB). */
+    const val BAND_BYTES = 4 * 1024 * 1024
+
+    /**
+     * Test seam (v1.9, A7b step 4): false saves pixel files as v1.8 did, from one buffer the size
+     * of the layer; `BandedSaveByteIdenticalTest` and the back-compat generator compare the two.
+     */
+    @Volatile
+    internal var bandedSave = true
+
+    /** Test seam: the band size of a banded save ([BAND_BYTES]); a test makes it small. */
+    @Volatile
+    internal var bandBytes = BAND_BYTES
+
     /** The load warning of a damaged array container (`ArrayLabels.damaged`). */
     fun arrayDamaged(name: String) = "The array of layer “$name” could not be read; its copies are kept as pixels"
 
@@ -301,7 +315,7 @@ internal object LayerEntries {
      * (or whose files are missing) write new files, named with [revision]. [existing] lists the
      * folder's files when the save started; [previous] is the `project.json` being replaced.
      * Pixels are copied on the calling (main) thread, one layer at a time, and compressed and
-     * written on IO.
+     * written on IO; v1.9 (A7b step 4): copied natively and written in bands ([BAND_BYTES]).
      */
     class Writer(
         private val dir: File,
@@ -365,16 +379,13 @@ internal object LayerEntries {
             }
             if (!fits(layer.bitmap)) return null
             val version = layer.contentVersion
-            val buffer = scratch ?: ByteArray(length).also { scratch = it }
             val contentName = ProjectFormat.layerFile(layer.id, revision)
-            LayerCodec.copyPixels(layer.bitmap, buffer)
-            withContext(Dispatchers.IO) { LayerCodec.write(File(dir, contentName), w, h, buffer, length) }
+            writePixels(File(dir, contentName), layer.bitmap)
             var maskName: String? = null
             if (mask != null) {
                 if (!fits(mask)) return null
                 maskName = ProjectFormat.maskFile(layer.id, revision)
-                LayerCodec.copyPixels(mask, buffer)
-                withContext(Dispatchers.IO) { LayerCodec.write(File(dir, maskName), w, h, buffer, length) }
+                writePixels(File(dir, maskName), mask)
             }
             // The vector content is immutable: encoded off the main thread, written atomically.
             var vectorName: String? = null
@@ -387,7 +398,7 @@ internal object LayerEntries {
             var arrayName: String? = null
             if (arrayed) {
                 val name = ProjectFormat.arrayFile(layer.id, revision)
-                if (!writeArray(File(dir, name), source, buffer)) return null
+                if (!writeArray(File(dir, name), source, scratch ?: ByteArray(0))) return null
                 arrayName = name
             }
             savedVersions += layer to version
@@ -419,6 +430,33 @@ internal object LayerEntries {
             }
             return true
         }
+
+        /**
+         * Writes [bitmap] (a layer's pixels or its mask) as the pixel file [file]. v1.9 (A7b step
+         * 4, R9): the pixels are taken here (main thread) as a native copy and written on IO a
+         * band at a time through a scratch of at most [BAND_BYTES], byte-identical to v1.8's
+         * write from a whole-layer buffer ([bandedSave] false), which needed the layer's size in
+         * Java heap.
+         */
+        private suspend fun writePixels(file: File, bitmap: Bitmap) {
+            if (!bandedSave) {
+                val buffer = scratch?.takeIf { it.size >= length } ?: ByteArray(length).also { scratch = it }
+                LayerCodec.copyPixels(bitmap, buffer)
+                withContext(Dispatchers.IO) { LayerCodec.write(file, w, h, buffer, length) }
+                return
+            }
+            val rows = minOf(LayerCodec.bandRows(w, bandBytes), h)
+            val buffer = scratch?.takeIf { it.size >= rows * w * 4 } ?: ByteArray(rows * w * 4).also { scratch = it }
+            val snapshot = LayerCodec.snapshot(bitmap)
+            try {
+                withContext(Dispatchers.IO) { LayerCodec.writeBands(file, snapshot, buffer) }
+            } finally {
+                snapshot.recycle()
+            }
+        }
+
+        /** v1.9 (A7b step 4): the Java scratch this save holds (a band, or v1.8's whole layer). */
+        internal val scratchBytes: Int get() = scratch?.size ?: 0
 
         /** Lets the (possibly large) pixel buffer be collected before the slower steps. */
         fun release() {
