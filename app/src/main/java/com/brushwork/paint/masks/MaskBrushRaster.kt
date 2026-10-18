@@ -90,51 +90,229 @@ object MaskBrushRaster {
 
     /** The dabs of [s]: one at the first point, then every spacing along the polyline, plus the end. */
     fun dabsOf(s: MaskStroke): Dabs {
-        val size = if (s.size.isFinite()) s.size.coerceIn(1f, 5000f) else 1f
-        val radius = size / 2f
-        val hard = if (s.hardness.isFinite()) s.hardness.coerceIn(0f, 1f) else 0.5f
-        val inner = min(hard * radius, radius - MIN_RAMP).coerceAtLeast(0f)
-        val spacing = max(1f, SPACING * size)
-        val flow = if (s.flow.isFinite()) s.flow.coerceIn(0f, 1f) else 1f
-        // Dabs over one point of the centre line weigh about (radius + inner) / spacing in total.
-        val passes = max(1f, (radius + inner) / spacing)
-        val strength = if (flow >= 1f) 1f else (1.0 - (1.0 - flow).pow(1.0 / passes)).toFloat()
         val pts = s.points
-        // Unboxed growing arrays (long strokes have thousands of dabs).
-        var xs = FloatArray(max(16, pts.size * 2))
-        var ys = FloatArray(xs.size)
-        var n = 0
-        fun add(x: Float, y: Float) {
-            if (n == xs.size) { xs = xs.copyOf(n * 2); ys = ys.copyOf(n * 2) }
-            xs[n] = x; ys[n] = y; n++
+        val trail = DabTrail(s.size, s.hardness, s.flow, s.erase, capacity = max(16, pts.size * 2))
+        for (i in 0 until pts.size) trail.add(pts.x[i], pts.y[i])
+        return trail.dabs()
+    }
+
+    /**
+     * The dabs of a stroke as its points arrive (v1.9 A6, R13: a stroke being painted adds its
+     * new dabs only; [dabsOf] is this trail over all the points at once, so both give the same
+     * dabs). The first [count] dabs in [x] / [y] are final; the end point's own dab ([hasEnd]) is
+     * not: the next point moves it on.
+     */
+    class DabTrail(size: Float, hardness: Float, flow: Float, val erase: Boolean, capacity: Int = 16) {
+        val radius: Float
+        val inner: Float
+        val strength: Float
+        private val spacing: Float
+
+        /** Dab centres (unboxed growing arrays: long strokes have thousands of dabs). */
+        var x = FloatArray(max(1, capacity))
+            private set
+        var y = FloatArray(x.size)
+            private set
+        /** Final dabs so far. */
+        var count = 0
+            private set
+        private var px = Float.NaN
+        private var py = Float.NaN
+        private var carry = 0f
+
+        init {
+            val sz = if (size.isFinite()) size.coerceIn(1f, 5000f) else 1f
+            radius = sz / 2f
+            val hard = if (hardness.isFinite()) hardness.coerceIn(0f, 1f) else 0.5f
+            inner = min(hard * radius, radius - MIN_RAMP).coerceAtLeast(0f)
+            spacing = max(1f, SPACING * sz)
+            val f = if (flow.isFinite()) flow.coerceIn(0f, 1f) else 1f
+            // Dabs over one point of the centre line weigh about (radius + inner) / spacing in total.
+            val passes = max(1f, (radius + inner) / spacing)
+            strength = if (f >= 1f) 1f else (1.0 - (1.0 - f).pow(1.0 / passes)).toFloat()
         }
-        var px = Float.NaN; var py = Float.NaN
-        var carry = 0f
-        for (i in 0 until pts.size) {
-            val x = pts.x[i]; val y = pts.y[i]
-            if (!x.isFinite() || !y.isFinite()) continue
+
+        private fun put(px: Float, py: Float) {
+            if (count == x.size) { x = x.copyOf(count * 2); y = y.copyOf(count * 2) }
+            x[count] = px; y[count] = py; count++
+        }
+
+        /** The stroke's next point (a point that is not finite, or where the last one is, adds nothing). */
+        fun add(x: Float, y: Float) {
+            if (!x.isFinite() || !y.isFinite()) return
             if (px.isNaN()) {
-                add(x, y)
+                put(x, y)
                 px = x; py = y
-                continue
+                return
             }
             val dx = x - px; val dy = y - py
             val len = sqrt(dx * dx + dy * dy)
-            if (len <= 0f) continue
+            if (len <= 0f) return
             // The next dab lies (spacing - carry) further along.
             var d = spacing - carry
             while (d <= len) {
                 val t = d / len
-                add(px + dx * t, py + dy * t)
+                put(px + dx * t, py + dy * t)
                 d += spacing
             }
             carry = len - (d - spacing)
             px = x; py = y
         }
-        // The end point gets a dab of its own unless the last one is close to it.
-        if (!px.isNaN() && n > 0 && carry > spacing * 0.25f) add(px, py)
-        return Dabs(xs.copyOf(n), ys.copyOf(n), n, radius, inner, strength, s.erase)
+
+        /** The end point gets a dab of its own unless the last one is close to it. */
+        val hasEnd: Boolean get() = !px.isNaN() && count > 0 && carry > spacing * 0.25f
+        val endX: Float get() = px
+        val endY: Float get() = py
+
+        /**
+         * Writes the end point's dab (when [hasEnd]) right after the final ones in [x] / [y]
+         * without counting it; returns how many dabs the stroke has now (with the end).
+         */
+        fun withEnd(): Int {
+            if (!hasEnd) return count
+            if (count == x.size) { x = x.copyOf(count * 2); y = y.copyOf(count * 2) }
+            x[count] = px; y[count] = py
+            return count + 1
+        }
+
+        /** Every dab of the stroke so far, the end point's included. */
+        fun dabs(): Dabs {
+            val n = withEnd()
+            return Dabs(x.copyOf(n), y.copyOf(n), n, radius, inner, strength, erase)
+        }
     }
+
+    /**
+     * v1.9 A6 (R13): the coverage of ONE brush component while a stroke is painted into it, for a
+     * [width] x [height] document. Where the stroke's dabs have reached, the values are kept as
+     * Floats (tiles of [TILE]² px, made when a dab first reaches them, starting from [prior]: the
+     * component's bytes before the stroke, null = none) and every final dab of [trail] is applied
+     * ONCE, in order, as it arrives ([add]), so a frame costs its new dabs instead of the whole
+     * stroke. [coverage] rounds the values back to bytes with the end point's dab applied to a
+     * copy: per sample the same Float steps in the same order as [apply] of the stroke's dabs, so
+     * the same bytes (the canonical arithmetic above). [add] is false once the tiles would exceed
+     * [maxTiles] (the caller then renders the stroke the v1.8 way). Main thread.
+     */
+    class StrokeTiles(
+        val width: Int,
+        val height: Int,
+        val trail: DabTrail,
+        private val prior: (left: Int, top: Int, w: Int, h: Int) -> ByteArray?,
+        private val maxTiles: Int = MAX_TILES,
+    ) {
+        private val cols = (width + TILE - 1) / TILE
+        private val tiles = arrayOfNulls<FloatArray>(cols * ((height + TILE - 1) / TILE))
+        private var made = 0
+        private var applied = 0
+
+        /** Tiles made so far (each [TILE]² Floats). */
+        val tileCount: Int get() = made
+
+        /** Adds the stroke's next point; false when its dabs would need more than [maxTiles] tiles. */
+        fun add(x: Float, y: Float): Boolean {
+            trail.add(x, y)
+            if (trail.strength <= 0f || trail.radius <= 0f) { applied = trail.count; return true }
+            while (applied < trail.count) {
+                if (!applyDab(trail.x[applied], trail.y[applied])) return false
+                applied++
+            }
+            return true
+        }
+
+        private fun tile(tc: Int, tr: Int): FloatArray? {
+            val i = tr * cols + tc
+            tiles[i]?.let { return it }
+            if (made >= maxTiles) return null
+            val left = tc * TILE; val top = tr * TILE
+            val w = min(TILE, width - left); val h = min(TILE, height - top)
+            val t = FloatArray(TILE * TILE)
+            val bytes = prior(left, top, w, h)
+            if (bytes != null) for (r in 0 until h) for (c in 0 until w) t[r * TILE + c] = (bytes[r * w + c].toInt() and 0xFF) / 255f
+            tiles[i] = t
+            made++
+            return t
+        }
+
+        /**
+         * Applies the dab at ([cx], [cy]) to every pixel centre it reaches: the same range, tests
+         * and Float steps as the full-resolution render's (document px x sits at x + 0.5 there too).
+         */
+        private fun applyDab(cx: Float, cy: Float): Boolean {
+            val r = trail.radius
+            val c0 = max(0, firstIndex(cx - r, 0f, 1f) - 1); val c1 = min(width - 1, lastIndex(cx + r, 0f, 1f) + 1)
+            val r0 = max(0, firstIndex(cy - r, 0f, 1f) - 1); val r1 = min(height - 1, lastIndex(cy + r, 0f, 1f) + 1)
+            if (c0 > c1 || r0 > r1) return true
+            for (tr in r0 / TILE..r1 / TILE) for (tc in c0 / TILE..c1 / TILE) if (tile(tc, tr) == null) return false
+            val r2 = r * r
+            for (row in r0..r1) {
+                val dy = (row + 0.5f) - cy
+                if (dy * dy >= r2) continue
+                val dy2 = dy * dy
+                var tileCol = c0 / TILE
+                var cur = tiles[(row / TILE) * cols + tileCol]!!
+                for (c in c0..c1) {
+                    if (c / TILE != tileCol) { tileCol = c / TILE; cur = tiles[(row / TILE) * cols + tileCol]!! }
+                    val dx = (c + 0.5f) - cx
+                    val dist2 = dx * dx + dy2
+                    if (dist2 >= r2) continue
+                    val p = profile(sqrt(dist2), trail.inner, r)
+                    if (p <= 0f) continue
+                    val k = (row % TILE) * TILE + c % TILE
+                    cur[k] = step(cur[k], p)
+                }
+            }
+            return true
+        }
+
+        private fun step(v: Float, p: Float): Float =
+            if (trail.erase) v * (1f - trail.strength * p) else v + (1f - v) * trail.strength * p
+
+        /**
+         * The component's coverage bytes on [grid] (pixel-aligned, inside the document; null
+         * otherwise): the stroke so far, its end point's dab included.
+         */
+        fun coverage(grid: SampleGrid): ByteArray? {
+            if (!grid.isPixelAligned) return null
+            val left = grid.x0.toInt(); val top = grid.y0.toInt()
+            if (left < 0 || top < 0 || left + grid.cols > width || top + grid.rows > height) return null
+            val out = prior(left, top, grid.cols, grid.rows)?.takeIf { it.size >= grid.size } ?: ByteArray(grid.size)
+            val hasEnd = trail.hasEnd && trail.strength > 0f && trail.radius > 0f
+            val ex = trail.endX; val ey = trail.endY
+            val r = trail.radius
+            val r2 = r * r
+            for (row in 0 until grid.rows) {
+                val y = top + row
+                val dy = (y + 0.5f) - ey
+                val endRow = hasEnd && dy * dy < r2
+                val dy2 = dy * dy
+                for (col in 0 until grid.cols) {
+                    val x = left + col
+                    val t = tiles[(y / TILE) * cols + x / TILE]
+                    val k = row * grid.cols + col
+                    var v = if (t != null) t[(y % TILE) * TILE + x % TILE] else -1f
+                    if (endRow) {
+                        val dx = (x + 0.5f) - ex
+                        val dist2 = dx * dx + dy2
+                        if (dist2 < r2) {
+                            val p = profile(sqrt(dist2), trail.inner, r)
+                            if (p > 0f) {
+                                if (v < 0f) v = (out[k].toInt() and 0xFF) / 255f
+                                v = step(v, p)
+                            }
+                        }
+                    }
+                    if (v >= 0f) out[k] = quantize(v)
+                }
+            }
+            return out
+        }
+    }
+
+    /** Side of [StrokeTiles]' tiles (document px). */
+    const val TILE = 64
+
+    /** Most tiles a [StrokeTiles] makes (16 MB of Floats: 4 M document px under the stroke). */
+    const val MAX_TILES = 1024
 
     /**
      * Document bounds (left, top, right, bottom) a stroke can change, or null when it is empty:

@@ -1890,6 +1890,157 @@ to insert a point).
 
 <!-- v19-A6 -->
 
+A6 makes drawing, erasing and the mask tools cheaper per frame without changing a committed pixel
+(I25) or v1.8's behaviour under Robolectric's EXACT policy (I8). Steps 1-10 of design 3.2 A6; P4,
+P3 and R11a are built and kept off (CUT (proxy)), each behind one constant.
+
+**The lift (P1, I25).** A brush, eraser, smudge, blur or watercolor lift redraws only the parts of the canvas
+in the 256 px undo tiles its dabs touched (`EditorController.commitStrokeEdit` in region `v19-A6 commitEdit`,
+`EditInvalidation.tilesAfterCommit`), not the stroke's bounding box; other `commitEdit` callers
+keep v1.8's rect. Where the canvas already shows the stroke exactly as it commits (an RGB
+document, no recorder-gated tool such as the clone stamp, not a path stroke, the stroke's
+override still installed; smudge, blur and watercolor without a monochrome override and not on an
+adjustment layer's mask) the lift passes `displayCurrent = true` and redraws only the dabs the
+canvas has not shown yet and the retapered end (`BrushTool.lastLiftShowedCommit` reports the
+decision). A watercolor stroke on an adjustment layer's mask redraws its tiles as before: no
+override draws that mask while it paints, so `AdjustmentStage` keeps the effect clipped to the
+mask's coverage from before the stroke until the commit marks the layer changed (or turns its spec
+into a painted mask). `v19/a6/PreviewEqualsCommitParityTest` pins the premise: after every lift
+the display equals a full redraw of the committed document, bit for bit, across blend modes, alpha
+lock, selection, grain, taper, layer masks (brush, eraser, smudge), clipping, adjustment layers
+(above the stroke, and their painted and editable masks), folders, symmetry, smudge, blur and
+watercolor; elsewhere the lift redraws its tiles as before.
+
+**Per-frame allocations (P2).** `DisplayTiles` keeps each tile's Canvas and `CompositeTarget`
+with its bitmap, counts its dirty tiles (`hasDirty` is O(1); `dirty` holds null for a clean tile,
+as in v1.8, since `VectorPerfHarness` reads it, and each tile's own reused rect otherwise) and
+reuses its rects, order arrays and `TileUpdate` values; `Compositor` caches its blend Paint per (mode,
+alpha) on the main thread; `DirectStroke` (smudge, blur, watercolor) recycles its dabs. The brush
+and the raster Eraser (`BufferStroke`) keep theirs, which the lift reads for its tiles, so their
+frames allocate only the new dabs.
+
+**Mask drags (R13).** Under the live policy (`LiveAdjust.Policy.LIVE`, the app's; tests opt in
+with `liveAdjust.policy` and `clock`) the Masks tool records a drag's newest spec and renders its
+preview once per frame: `CanvasView.onDraw` first calls `BeforeFrame.beforeFrame()` on the active
+tool. While the finger moves the preview renders at the interaction scale
+(`MaskTool.interactionScaleFor`: `LiveAdjust.proxyScaleFor(zoom)`, at least 1/8 and at most v1.8's
+`MaskPreview.previewScale`), so it lines up with the live proxies one to one; after 150 ms still
+(`LiveAdjust.touch(..., resting = true)` keeps the proxies refining) and on release it renders at
+v1.8's scale. With "Fast adjustment preview" off the drag previews at v1.8's scale, once per
+frame. A Brush-mask stroke stamps only the dabs added since the last frame into the preview
+(`MaskBrushRaster.DabTrail`, `StrokeTiles`: 64 px float tiles, at most 1024). A release whose
+full-resolution render is estimated above `MaskTool.REFINE_MIN_MS` (24 ms) becomes a `MaskRefine`:
+bands rendered on the main thread, one slice per Handler message within 6 ms of the live clock,
+while the preview shows the edit; it lands as ONE step through `MaskEdits.applyWith`, equal to
+v1.8's `MaskEdits.apply` (I1). It is a `DeferredStep`: another step, undo / redo, a new gesture
+or leaving the tool lands it first; a layer changed in another way drops it. It holds one byte per
+pixel of the changed region (at most the document); when that does not fit in memory the release
+renders at once, as in v1.8. Under EXACT every
+move previews at once at v1.8's scale and the release renders at once (I8).
+
+**Memory (design 2.4.3).** Three entries in the `MemoryGovernor` registry, for A7b's policy:
+- "display tiles", priority 0, one per editor (region `v19-A6 invalidate`): the bytes of the tile
+  bitmaps held (`DisplayTiles.heldBytes`). At any pressure above NORMAL its trim frees them all
+  (`DisplayTiles.freeBitmaps`) and invalidates the canvas, which renders them again on its next
+  frame; NORMAL frees nothing. `EditorController.dispose` closes it.
+- "live proxies", priority 10, while a `LiveAdjust` holds proxies (registered with its
+  ComponentCallbacks2, closed with them): `LiveAdjust.proxyBytes`. Above NORMAL, proxies kept
+  after a session (2 s) are freed; at LOW or worse a running session ends (its next frame renders
+  exactly). MODERATE leaves a running session alone.
+- "below-caches", priority 20, while a stroke's below-cache (P3 and R11a, below) holds tiles:
+  `StrokeBelowCache.bytes`, at most 24 MB. Above NORMAL it is freed and the rest of the stroke
+  composites as v1.8.
+All hold their owner weakly (`engine/live/WeakRegistration`): an owner collected without closing
+reads as 0 bytes and its entry is closed at the next registration. All trims run on the main
+thread and return the bytes freed. The "Fast adjustment preview" switch reads R13's note
+(`FAST_ADJUST_PREVIEW_DESCRIPTION = StabilityLabels19.FAST_ADJUST_NOTE`) in Settings and in the
+Masks sheet.
+
+**Drawing preview (P4, LA2): CUT (proxy), kept hidden.** `engine/live/StrokePreview` and
+`ui/editor/DrawingPreviewSetting` ("Drawing preview": "Faster" or "Exact pixels", saved in
+`AppSettings.drawPreview`, default "Faster", with `StabilityLabels19.DRAWING_PREVIEW_NOTE` under
+the chips, in Settings' Display section after "Fast adjustment preview"). With "Faster" a stroke
+that paints pixels the user drags (not a path, a recorded stroke or the clone stamp) asks
+`LiveAdjust.beginStroke` when it starts; under the live policy it then hands each event's dirty
+rect to `LiveAdjust.touchStroke` instead of invalidating it: a stroke session whose proxies
+composite the whole stack (split 0; P3's below-cache serves the display tiles, not the proxies) at the proxy scale, and
+`end` after the lift or the cancel refines to exact pixels. Dabs are stamped at document
+resolution in both modes, so the layer, the undo step and the canvas after refinement are the
+same (I1, I7); the lift redraws the stroke's tiles (`previewIsCommit` is false while live).
+Zooming faster than x1.2 per second ends the session; the rest of that stroke is drawn exactly.
+LA2 ships it only when "Faster" is at least 20 % cheaper per frame on A4 or PRINT at fit;
+`v19/a6/DrawPreviewProxyBench` (JVM, local) measured Faster / Exact ms per drawing frame: A4 at fit
+(0.39) 8.50 / 8.40, at 0.47 8.83 / 8.99; PRINT at fit (0.32) 9.09 / 9.19, at 0.41 9.83 / 9.73. The
+frame is the tiles' blit and the canvas chrome; the stroke's own composite is about 2 % of it. So
+`StrokePreview.SHIPPED` is false: the setting is not shown, `StrokePreview.faster` is false and
+every stroke previews as in v1.8 ("Exact pixels"). Flipping `SHIPPED` ships it as built.
+
+**Stroke below-cache (P3): CUT (proxy), kept off.** `engine/live/StrokeBelowCache` (one per
+editor, `LiveAdjust.strokeBelow`) keeps, for each display tile a stroke reaches, the composite of
+the layers below the stroke's layer at scale 1. The split k is the first layer of the stroke
+layer's clipping group (an adjustment layer is a group of its own); in a document with folders it
+is the layer itself when every folder it is in draws its children as is and it is not clipped,
+otherwise there is no cache. `DisplayTiles.render` asks its `BelowRenderer` first: the tile's dirty
+part is the cache copied 1:1 (SRC), then `Compositor.drawSplit(k, n)` with the stroke's override,
+which equals a CLEAR and `drawDocument` bit for bit (I7). `drawSplit` accepts any group start
+(`isSplitBoundary`); `drawDocument`'s own contract is unchanged (`DrawDocumentRangeTest`). The
+cache is built where it is needed, in 16 px cells (a bit per cell; one build per frame, the missing
+cells' bounding box). A `BelowKey` of `[0, k)` is checked at every use, and an invalidation the
+stroke did not make itself (`own`) drops the cells there. It holds at most 24 MB (LRU over tiles,
+the "below-caches" entry above) and goes at the lift and the cancel. Brush, smudge, blur and
+watercolor strokes that are not paths, recorded strokes or the clone stamp begin it when
+`StrokeBelowCache.strokesOn`. `v19/a6/StrokeBelowBench` (JVM, local; the P0 bench's boards, Hard
+round 40, its 30 cm serpentine at fit, median of 9 alternating strokes) measured the display
+tiles' composite per drawing frame, cached / full: PHONE (layer 10 of 20) 0.17 / 0.17 ms, PRINT
+(layer 1 of 3) 0.07 / 0.06 ms, PHONE with 40 layers painting the top one 0.32 / 0.40 ms; the
+whole frame 5.93 / 5.96, 9.48 / 9.24 and 6.27 / 6.86 ms. A stroke reaches new pixels every frame,
+so most of each frame's part is built anyway; the composite is about 3 % of the JVM frame (the
+software blit of the screen is the rest), and `brush.lift`, the row that met P3's threshold, has
+had no composite in it since P1. So `FOR_STROKES` is false: every stroke composites as v1.8.
+Flipping it ships P3 as built.
+
+**Raster Eraser below-cache (R11a): CUT (proxy), kept off.** The raster Eraser's strokes (soft,
+hard and pixel erasers, DST_OUT; on a layer's pixels or on a mask) begin the same cache when
+`StrokeBelowCache.eraserOn`, its own switch. Unlike P3 the saving is measurable: a 90 px soft
+eraser repaints each pixel over several frames, so more of each frame's part is already cached.
+`StrokeBelowBench` measured the composite per erasing frame, cached / full: PHONE 0.37 / 0.50 ms
+(0.74), PRINT 0.18 / 0.18 ms (one layer below), PHONE with 40 layers erasing the top one 0.43 /
+0.94 ms (0.45). The whole JVM frame moves by about 6 % at best (6.30 / 6.69 ms on PHONE; its
+rows are noisier than the composite's), short of the 20 % per frame that step 8 asked of P4, and
+the composite's share of a phone's CPU frame (where the blit is on the GPU) is a device
+measurement. So `FOR_ERASER` is false: the Eraser composites as v1.8. Flipping it ships R11a as
+built.
+
+**Guards.** `v19/a6/LiftInvalidationTest`, `PreviewEqualsCommitParityTest`,
+`DisplayTilesReuseTest`, `MaskInteractionScaleTest`, `BrushMaskIncrementalTest`,
+`MaskReleaseParityTest`, `GovernorRegistrationTest`, `DrawingPreviewGuardTest` (P4 off as
+shipped and under EXACT; opted in, the stroke is drawn from proxies and lands bit for bit as
+"Exact pixels"; the zoom guard), `qa19/Qa19DrawPreviewUiTest` and `Qa19DrawPreviewNarrowUiTest`
+(hidden as shipped; available, the setting whole at 392 and 360 dp and font scales 1, 1.3, 2.0),
+`DrawSplitTest` (`[0, k)` then `[k, n)` equals the full draw at every group start, flat and with
+folders; a split inside a group is refused), `StrokeBelowCacheTest` (P3 turned on: the canvas
+equals a fresh render at every second move and after the lift, with the cache used, across split
+positions, clipping groups, blend modes, adjustment layers, masks, "Safe compositing", folders,
+selection, symmetry, smudge, blur, a grayscale document, changes below during the stroke, the
+memory cap and the cancel; R11a turned on: the soft, hard and pixel erasers, clipped, masked and
+clip-base layers, a layer's mask, an adjustment's mask, selection, blend modes and a change below;
+500 seeded random changes below and above during brush and Eraser strokes, exact after every
+frame; as shipped the switches decide);
+Timing (`A6Bench`, the P0 bench's way of
+timing a laid-out `CanvasView`): `LiftPerfTest` (the brush lift and the raster Eraser's frame on a
+512 px canvas; locally the PRINT lift within Q5's 40 ms at the T606 factor 6 and the PHONE erase
+frame within 1.5x A6's checkpoint), `MaskFramePerfTest` (the mask tool's work per frame, live
+at most 0.6x v1.8's, for Linear, Radial and Brush; 512 px everywhere, A4 at fit locally) and
+`StrokeBelowBench` (local only: the composite and the frame with the below-cache on and off).
+
+**At the merge (the lead).** `EditorController.dispose` closes the "display tiles" entry
+(`GovernorRegistrationTest`); the weak hold stays for an editor that is never disposed. P4
+(`StrokePreview.SHIPPED`), P3 (`StrokeBelowCache.FOR_STROKES`) and R11a (`FOR_ERASER`) stay off
+until the device A/B of Gate 3 (D5 and D6, D8, D10: p95 frame time, at least 60 samples per side,
+a release-like APK pair); the JVM numbers above cannot decide them. `WeakRegistration` stays in
+`engine/live` (A7b may use it from there). `LayerToolRules` still allows the watercolor brush on
+an adjustment layer's mask, whose lift redraws its tiles (above).
+
 <!-- /v19-A6 -->
 
 ### Memory and banded save (A7b)

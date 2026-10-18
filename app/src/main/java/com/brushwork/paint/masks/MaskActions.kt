@@ -120,7 +120,23 @@ object MaskEdits {
      * from [brushes] when it has them. Returns false (with a message) when the layer is gone,
      * locked or hidden, or memory is short.
      */
-    fun apply(c: EditorController, layer: Layer, after: MaskSpec, label: String, region: Rect? = null, brushes: BrushSource? = null): Boolean = c.editScope {
+    fun apply(c: EditorController, layer: Layer, after: MaskSpec, label: String, region: Rect? = null, brushes: BrushSource? = null): Boolean =
+        applyWith(c, layer, after, label, region, brushes, null)
+
+    /**
+     * [apply], with the new pixels of the changed region written by [write] (the mask bitmap, the
+     * region) instead of rendered here (null: rendered): v1.9 A6 (R13), [MaskRefine] rendered
+     * them from [after] in bands ahead of time. The step is the one [apply] records.
+     */
+    fun applyWith(
+        c: EditorController,
+        layer: Layer,
+        after: MaskSpec,
+        label: String,
+        region: Rect?,
+        brushes: BrushSource?,
+        write: ((mask: Bitmap, region: Rect) -> Unit)?,
+    ): Boolean = c.editScope {
         if (!usable(c, layer)) return@editScope false
         val mask = layer.mask ?: return@editScope addSpecMask(c, layer, after, label, brushes)
         val w = c.doc.width; val h = c.doc.height
@@ -144,7 +160,7 @@ object MaskEdits {
             val rec = c.beginEdit(layer, EditTarget.MASK).also { it.preserveData = true }
             try {
                 rec.touch(reg)
-                MaskSpecs.renderInto(mask, after, reg, brushes)
+                if (write != null) write(mask, reg) else MaskSpecs.renderInto(mask, after, reg, brushes)
             } catch (e: OutOfMemoryError) {
                 rec.abort()
                 c.toast("Not enough memory for \"$label\"")
@@ -156,7 +172,7 @@ object MaskEdits {
             // once, then refined), not by re-rendering every visible tile in one frame.
             if (layer.isAdjustmentLayer) c.liveAdjust.changed(layer, reg)
         } else {
-            MaskSpecs.renderInto(mask, after, reg, brushes)
+            if (write != null) write(mask, reg) else MaskSpecs.renderInto(mask, after, reg, brushes)
             layer.restoreData(dataAfter)
             layer.markChanged()
             c.pushUndo(MaskSpecAction(label, layer, dataBefore, dataAfter, reg))

@@ -25,6 +25,7 @@ import com.brushwork.paint.EditorController
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.engine.PaperBackdrop
 import com.brushwork.paint.engine.PerfTrace
+import com.brushwork.paint.engine.live.BeforeFrame
 import com.brushwork.paint.model.TransparencyDisplay
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
@@ -403,6 +404,8 @@ class CanvasView(context: Context, private val controller: EditorController) : V
         canvas.drawColor(backdropColor)
         if (!viewport.hasSize) return
         ensureFitted()
+        // v1.9 A6 (R13): the tool's coalesced preview work, once per frame, before the tiles update.
+        (controller.currentTool as? BeforeFrame)?.beforeFrame()
         val doc = controller.doc
         val w = doc.width.toFloat(); val h = doc.height.toFloat()
 

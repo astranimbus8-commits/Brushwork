@@ -227,6 +227,9 @@ internal class MasksLiveFlow(private val live: LiveCanvas, private val w: Int, p
         var scale = 0f
         live.quiet()
         drag { i ->
+            // v1.9 A6 (R13): the Masks tool's coalesced move first, as CanvasView.onDraw does (outside
+            // the timed canvas part, where the move's preview work was in v1.8).
+            tool.beforeFrame()
             if (c.liveAdjust.isActive) {
                 started = true
                 frames += live.liveFrame("$where move $i")

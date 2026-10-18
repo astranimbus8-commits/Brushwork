@@ -8,8 +8,10 @@ import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
 import android.graphics.Rect
 import android.graphics.RectF
+import android.os.Looper
 import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.Layer
+import com.brushwork.paint.model.LayerBlendMode
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -190,6 +192,42 @@ class Compositor(private val doc: Document, private val overrideProvider: () -> 
         return k == 0 || k == n || (k in 1 until n && doc.layers[k].isAdjustmentLayer)
     }
 
+    /**
+     * v1.9 A6 (P3, design 3.2 A6 step 9): [drawDocument] of layers [from, until) with the overrides,
+     * where the range may also start or end at any clipping group's first layer
+     * ([isSplitBoundary]), not only at an adjustment layer: a stroke's below-cache
+     * (`engine/live/StrokeBelowCache`) is `[0, k)` with k the stroke layer's group, and the
+     * frame draws `[k, n)` over it. At scale 1 onto the same target, `[0, k)` then `[k, n)` is
+     * the full draw bit for bit: [drawFlat] draws one group after another onto one canvas, so the
+     * canvas after `[0, k)` is exactly the cache. With folders, [FolderComposite] still refuses a
+     * cut through a folder that is not drawn as is ([IllegalArgumentException]); callers split
+     * only where `FolderComposite.drawnAsIs` holds. [drawDocument]'s own contract is unchanged.
+     */
+    internal fun drawSplit(canvas: Canvas, clip: Rect, target: CompositeTarget?, from: Int, until: Int) {
+        require(isSplitBoundary(from) && isSplitBoundary(until) && from <= until) {
+            "Layer range [$from, $until) splits a clipping group or is out of 0..${doc.layers.size}"
+        }
+        if (from == until) return
+        val bounds = RectF(clip)
+        val override = overrideProvider()
+        if (doc.hasFolders) {
+            FolderComposite.draw(this, doc, canvas, bounds, override, target, from until until)
+            return
+        }
+        drawFlat(canvas, doc.layers, from, until, bounds, override, target)
+    }
+
+    /**
+     * v1.9 A6 (P3): true when a [drawSplit] range may start or end at index [k]: the ends, an
+     * adjustment layer, or a layer that starts a clipping group (it is not clipped to the unit
+     * below it, `LayerTree.isClipped`: as [drawFlat] and [FolderComposite] group a level).
+     */
+    internal fun isSplitBoundary(k: Int): Boolean {
+        val layers = doc.layers
+        val n = layers.size
+        return k == 0 || k == n || (k in 1 until n && (layers[k].isAdjustmentLayer || !FolderComposite.isClipped(layers, k)))
+    }
+
     /** Reused view of a [MultiLayerRenderOverride] as the override of one of its layers (main thread). */
     private val multiView = MultiLayerView()
 
@@ -215,8 +253,25 @@ class Compositor(private val doc: Document, private val overrideProvider: () -> 
         return if (override.layer === layer) override else null
     }
 
+    /**
+     * v1.9 A6 (P2): the group paints [BlendModes.paint] makes, one per blend mode and alpha,
+     * made once on the main thread (where every frame draws) instead of per layer and tile;
+     * never changed after they are made. Other threads get a new paint, as before.
+     */
+    private var blendPaints: Array<Paint?>? = null
+
+    /** [BlendModes.paint] for [mode] and [opacity]: the shared one on the main thread. */
+    private fun blendPaint(mode: LayerBlendMode, opacity: Float): Paint {
+        if (Looper.myLooper() !== Looper.getMainLooper()) return BlendModes.paint(mode, opacity)
+        // The alpha BlendModes.paint gives the paint: equal alphas make equal paints.
+        val alpha = (opacity.coerceIn(0f, 1f) * 255f + 0.5f).toInt()
+        val cache = blendPaints ?: arrayOfNulls<Paint>(LayerBlendMode.values().size * 256).also { blendPaints = it }
+        val key = mode.ordinal * 256 + alpha
+        return cache[key] ?: BlendModes.paint(mode, opacity).also { cache[key] = it }
+    }
+
     internal fun drawGroup(canvas: Canvas, base: Layer, clips: List<Layer>, bounds: RectF, override: LayerRenderOverride?) {
-        val groupPaint = BlendModes.paint(base.blendMode, base.opacity)
+        val groupPaint = blendPaint(base.blendMode, base.opacity)
         if (clips.isEmpty()) {
             drawLayer(canvas, base, groupPaint, bounds, override)
             return
@@ -224,7 +279,7 @@ class Compositor(private val doc: Document, private val overrideProvider: () -> 
         val save = canvas.saveLayer(bounds, groupPaint)
         drawLayer(canvas, base, null, bounds, override)
         for (c in clips) {
-            val cs = canvas.saveLayer(bounds, BlendModes.paint(c.blendMode, c.opacity))
+            val cs = canvas.saveLayer(bounds, blendPaint(c.blendMode, c.opacity))
             drawLayer(canvas, c, null, bounds, override)
             // Keep only where the base (with its mask) has alpha.
             val bs = canvas.saveLayer(bounds, dstInPaint)

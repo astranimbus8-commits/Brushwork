@@ -224,6 +224,24 @@ class EditorController(
         tiles.invalidate(rect)
         onInvalidate?.invoke()
     }
+
+    /**
+     * v1.9 A6 (design 2.4.3): the display tiles in the [MemoryGovernor] registry at priority 0,
+     * the first to go: what they hold now, and under any pressure above NORMAL their bitmaps are
+     * freed and the canvas draws itself again from the document. Held weakly: an editor that is
+     * gone reads as 0 bytes. The policy calls it on the main thread (onTrimMemory). [dispose]
+     * closes it.
+     */
+    private val displayMemory: MemoryGovernor.Registration = com.brushwork.paint.engine.live.WeakRegistration.register(
+        this, "display tiles", 0, { it.tiles.heldBytes }, { c, pressure -> c.trimDisplay(pressure) },
+    )
+
+    private fun trimDisplay(pressure: com.brushwork.paint.engine.MemoryPressure): Long {
+        if (pressure == com.brushwork.paint.engine.MemoryPressure.NORMAL) return 0L
+        val freed = tiles.freeBitmaps()
+        if (freed > 0L) onInvalidate?.invoke()
+        return freed
+    }
     // endregion
 
     /** Redraw overlays only (handles, guides, marching ants). */
@@ -1162,6 +1180,29 @@ class EditorController(
         label: String,
         extraActions: List<UndoAction> = emptyList(),
         displayCurrent: Boolean = false,
+    ): Boolean = commitEditThen(recorder, label, extraActions) { rect ->
+        EditInvalidation.afterCommit(rect, displayCurrent)?.let { invalidateDoc(it) }
+    }
+
+    /**
+     * v1.9 A6 (P1): [commitEdit] for a brush or eraser lift. Pixels change only in the tiles the
+     * [recorder] snapshotted, so only those tiles' part of the changed rect is redrawn
+     * ([EditInvalidation.tilesAfterCommit]), not its whole bounding box: a long diagonal stroke
+     * on a big canvas no longer redraws every display tile between its ends.
+     */
+    fun commitStrokeEdit(recorder: PixelEditRecorder, label: String, displayCurrent: Boolean = false): Boolean {
+        val tiles = recorder.touchedTileRects()
+        return commitEditThen(recorder, label, emptyList()) { rect ->
+            for (r in EditInvalidation.tilesAfterCommit(tiles, rect, displayCurrent)) invalidateDoc(r)
+        }
+    }
+
+    /** [commitEdit]'s steps; [redraw] gets the changed rect (the union of the touched areas). */
+    private fun commitEditThen(
+        recorder: PixelEditRecorder,
+        label: String,
+        extraActions: List<UndoAction>,
+        redraw: (Rect) -> Unit,
     ): Boolean = editScope {
         if (recorder.isEmpty) return@editScope false
         val rect = Rect(recorder.touched)
@@ -1177,7 +1218,7 @@ class EditorController(
         pushUndo(if (all.size == 1) action else CompositeAction(label, all))
         recorder.layer.markChanged()
         layersVersion++
-        EditInvalidation.afterCommit(rect, displayCurrent)?.let { invalidateDoc(it) }
+        redraw(rect)
         queueEdit(EditEvent(recorder.layer, recorder.target, rect, label))
         true
     }
@@ -2592,6 +2633,8 @@ class EditorController(
         arrayRenders.dispose()
         vectors.dispose()
         snapping.clear()
+        // v1.9 (A6 merge): the display tiles leave the MemoryGovernor registry with the editor.
+        displayMemory.close()
         tiles.release()
         undoManager.clear()
     }
