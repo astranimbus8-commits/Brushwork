@@ -1408,6 +1408,11 @@ for the next path. While on, the pending outline is drawn dashed and erases live
   is on and possible (an open path fills as if closed). Varying thickness erases the line's
   outline; mirror copies erase too (a fill or a varying line is one region, united with PathOps,
   as mirrored copies wind the other way). Taper and pressure are ignored: full width to the ends.
+  Cost: a plain line of uniform width erases with the path itself (about 1 ms a frame at 500
+  points on the desktop JVM); a fill or a varying line with copies is united with PathOps every
+  frame (10 to 22 ms at 500 points, about 3 ms at 50), which the paint preview never builds. The
+  Timing guard `CurveEraseFrameBudgetTest` holds 50 points within 4 ms; many points with copies
+  on the phone is a device check.
 - ✓ commits ONE step labelled `EraseLabels19.STEP_PATH` (the Path tool), `STEP_FILL` (a fill
   alone) or `STEP_LINE`; a refused commit keeps the path. A refused layer (locked, hidden, an
   alpha-locked layer's pixels, a folder) shows the outline only and says why once per layer state
@@ -1426,8 +1431,12 @@ Tests: `v19/a1/` (`GroupThicknessControlTest`, `GroupWeightControlTest`, `Thickn
 `ThicknessFromZeroTest`, `CurveWidthConstantsTest`, `PolylineBevelRobolectricTest`,
 `CurvePolylineReopenTest`, `CurveEraseRobolectricTest` on raster, text, vector and legacy shape
 layers, `CurveStripInventoryTest` every strip state at 392 and 360 dp with the label scan,
-`CurveOwnLayerTest`; Timing `GroupThicknessBudgetTest`), `qa19/Qa19ThicknessUiTest` (also the own
-layer row of each settings sheet), `qa19/Qa19PolylineBevelUiTest`.
+`CurveOwnLayerTest`, `CurveEraseRoundTripTest` (every erase step's undo and redo, save and reopen,
+"Turn into pixels" mid-outline, "To Bézier" with erase on, in-tool undo while erasing); Timing
+`GroupThicknessBudgetTest`, `CurveEraseFrameBudgetTest`), `qa19/Qa19ThicknessUiTest` (also the own
+layer row of each settings sheet at 360 dp and font scale 1.3 and 2.0, and erasing a vector layer
+through the stroke kind menu, the mode cell and the pixels dialog at 392 and 360 dp and every font
+scale), `qa19/Qa19PolylineBevelUiTest`.
 
 <!-- /v19-A1 -->
 

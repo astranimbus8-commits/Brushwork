@@ -538,7 +538,8 @@ private fun strokeKindItem(tool: CurveTool, f: CurveStripFacts, row: StripRow, r
                 text = { Text(EraseLabels19.INSTEAD_OF_PAINT) },
                 onClick = {
                     close()
-                    tool.setErase(!erasing)
+                    // (Read now, as slot 1 does: the menu may be older than the last switch.)
+                    tool.setErase(!tool.eraseOn)
                 },
                 leadingIcon = { CheckMark(erasing) },
                 modifier = Modifier.semantics { selected = erasing },
