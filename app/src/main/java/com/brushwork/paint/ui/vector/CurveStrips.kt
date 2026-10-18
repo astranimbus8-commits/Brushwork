@@ -449,7 +449,7 @@ private fun CurveOverlays(tool: CurveTool, ui: CurveStripUi) {
     }
     // v1.9 (R18): Polyline's bevel popup, More row open or closed.
     if (tool.polyline) CurveBevelPopupHost(tool)
-    // v1.9 (R11 a): the mode cell's "Turn into pixels" (the erase then takes the layer's pixels).
+    // v1.9 (R11 a): the mode cell's [EraseLabels19.TURN_INTO_PIXELS] (the erase then takes the layer's pixels).
     ui.pixels?.let { layer -> ErasePixelsDialog(tool.controller, layer) { ui.pixels = null } }
 }
 
@@ -549,7 +549,7 @@ private fun strokeKindItem(tool: CurveTool, f: CurveStripFacts, row: StripRow, r
 /**
  * v1.9 (R11 a): the row-1 mode cell while the tool erases a vector or shape layer
  * ([CurveStripFacts.eraseCell]; StripKeysV19.ERASE_MODE_CELL, A5's [VectorEraseChooser.modeCell]):
- * a mode changes the Eraser's (the pending erase follows it); "Turn into pixels" asks first.
+ * a mode changes the Eraser's (the pending erase follows it); [EraseLabels19.TURN_INTO_PIXELS] asks first.
  */
 private fun eraseCellItem(tool: CurveTool, f: CurveStripFacts, ui: CurveStripUi): StripItem? {
     val mode = f.eraseCell ?: return null
