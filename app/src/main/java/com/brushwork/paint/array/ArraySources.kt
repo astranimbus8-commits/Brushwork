@@ -111,14 +111,16 @@ internal object ArraySources {
     /**
      * True when the document still has room after adding [newLayers] pixel layers and
      * [addBytes] of array source pixels while [freedBytes] are let go (§3.3 b, the rule of
-     * `EditorController.effectiveLayerCount`): `pixelLayerCount + newLayers + ⌈array bytes /
-     * layerBytes⌉ ≤ maxLayers`, which is `canAddLayer` for one new layer without pixels.
+     * `EditorController.effectiveLayerCount`): `pixelLayerCount + masks + newLayers + ⌈array
+     * bytes / layerBytes⌉ ≤ maxLayers`, which is `canAddLayer` for one new layer without pixels.
+     * v1.9 (A7b step 6, the lead at A7b's merge): the layer masks count, as there.
      */
     fun hasRoom(c: EditorController, newLayers: Int, addBytes: Long, freedBytes: Long = 0L): Boolean {
         val doc = c.doc
         val per = max(1L, doc.layerBytes)
         val bytes = max(0L, doc.layers.sumOf { it.array?.pixels?.bytes ?: 0L } - freedBytes + addBytes)
-        val count = doc.pixelLayerCount.toLong() + newLayers + (bytes + per - 1) / per
+        val masks = doc.layers.count { it.mask != null }
+        val count = doc.pixelLayerCount.toLong() + masks + newLayers + (bytes + per - 1) / per
         return count <= c.maxLayers
     }
 

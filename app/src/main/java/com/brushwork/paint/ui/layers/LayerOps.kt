@@ -473,8 +473,13 @@ object LayerOps {
         }
     }
 
-    /** Same as [EditorController.addMask] plus re-enabling the mask, as ONE undo step. */
+    /**
+     * Same as [EditorController.addMask] plus re-enabling the mask, as ONE undo step. v1.9 (A7b
+     * step 6, the lead at A7b's merge): a mask counts in the layer cap, so at the cap nothing is
+     * added and the layer-limit message shows, as [EditorController.addMask] does.
+     */
     private fun addEnabledMask(c: EditorController, layer: Layer, fromSelection: Boolean) {
+        if (!c.canAddLayer) { c.toast(c.layerLimitMessage()); return }
         val sel = if (fromSelection) c.selection else null
         val mask = BitmapUtils.createMaskBitmap(c.doc.width, c.doc.height, if (sel != null) MASK_HIDDEN else MASK_VISIBLE)
         if (sel != null) Canvas(mask).drawBitmap(sel.mask, 0f, 0f, Paint().apply { color = MASK_VISIBLE })

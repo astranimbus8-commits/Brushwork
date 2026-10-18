@@ -3,9 +3,19 @@ package com.brushwork.paint.v19.a7b
 import android.content.Context
 import android.graphics.Path
 import androidx.test.core.app.ApplicationProvider
+import com.brushwork.paint.array.ArraySources
 import com.brushwork.paint.engine.BitmapUtils
+import com.brushwork.paint.exchange.PayloadImport
+import com.brushwork.paint.exchange.export.PayloadKind
+import com.brushwork.paint.exchange.export.PayloadLayer
 import com.brushwork.paint.filters.FilterRegistry
 import com.brushwork.paint.masks.AdjustmentLayerOps
+import com.brushwork.paint.masks.AdjustmentSpec
+import com.brushwork.paint.masks.MaskEdits
+import com.brushwork.paint.masks.MaskSpec
+import com.brushwork.paint.masks.RadialMask
+import com.brushwork.paint.model.LayerBlendMode
+import com.brushwork.paint.model.LayerProps
 import com.brushwork.paint.model.Selection
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.ui.layers.LayerOps
@@ -81,6 +91,113 @@ class MaskCapTest {
         c.addMask(layers[1], fromSelection = false)
         assertNotNull(layers[1].mask)
         assertEquals(100, c.effectiveLayerCount)
+    }
+
+    /**
+     * The lead at A7b's merge: the two other ways a mask is made check the room too, the layer
+     * window's "Add mask" on a layer whose mask was turned off (`LayerOps.addEnabledMask`) and an
+     * editable mask made by the Mask tool or "Add gradient mask…" (`MaskEdits.addSpecMask`).
+     */
+    @Test
+    fun aTurnedOffLayerMaskAndAnEditableMaskNeedRoomToo() {
+        val c = Smoke.controller(app, Smoke.document(64, 64, layers = 99))
+        assumeTrue("the heap allows the 100-layer cap (${c.maxLayers})", c.maxLayers == 100)
+        val layers = c.doc.layers
+        c.addMask(layers[0], fromSelection = false)
+        assertEquals(100, c.effectiveLayerCount)
+        val spec = MaskSpec(components = listOf(RadialMask(1, cx = 32f, cy = 32f, rx = 20f, ry = 16f, feather = 0.5f)), nextId = 2)
+        val steps = c.undoManager.undoCount
+
+        layers[1].maskEnabled = false
+        c.message = null
+        LayerOps.addMask(c, layers[1], fromSelection = false)
+        assertNull("no mask at the cap", layers[1].mask)
+        assertFalse("still turned off", layers[1].maskEnabled)
+        assertEquals(c.layerLimitMessage(), c.message)
+        assertEquals("no step", steps, c.undoManager.undoCount)
+
+        c.message = null
+        assertFalse(MaskEdits.apply(c, layers[2], spec, "Add gradient mask"))
+        assertNull("no editable mask at the cap", layers[2].mask)
+        assertNull(layers[2].maskSpec)
+        assertEquals(c.layerLimitMessage(), c.message)
+        assertEquals("no step", steps, c.undoManager.undoCount)
+        assertEquals(100, c.effectiveLayerCount)
+
+        // With room again each is made, as one step, and counts.
+        c.deleteMask(layers[0])
+        LayerOps.addMask(c, layers[1], fromSelection = false)
+        assertNotNull(layers[1].mask)
+        assertTrue("turned on in the same step", layers[1].maskEnabled)
+        assertEquals(100, c.effectiveLayerCount)
+        c.deleteMask(layers[1])
+        assertTrue(MaskEdits.apply(c, layers[2], spec, "Add gradient mask"))
+        assertNotNull(layers[2].mask)
+        assertEquals(spec, layers[2].maskSpec)
+        assertEquals(100, c.effectiveLayerCount)
+    }
+
+    /** The lead at A7b's merge: a duplicated layer or folder brings its masks, which need room too. */
+    @Test
+    fun duplicatingALayerOrAFolderCountsTheCopiesMasks() {
+        val c = Smoke.controller(app, Smoke.document(64, 64, layers = 98))
+        assumeTrue("the heap allows the 100-layer cap (${c.maxLayers})", c.maxLayers == 100)
+        val layers = c.doc.layers
+        c.addMask(layers[0], fromSelection = false)
+        assertEquals(99, c.effectiveLayerCount)
+        assertTrue("one room left", c.canAddLayer)
+        val steps = c.undoManager.undoCount
+
+        // The layer and its mask would need two.
+        c.message = null
+        assertNull(c.duplicateLayer(layers[0]))
+        assertEquals(c.layerLimitMessage(), c.message)
+        assertEquals(98, c.doc.layers.size)
+        assertEquals("no step", steps, c.undoManager.undoCount)
+
+        // So would a folder holding it.
+        val folder = c.putInNewFolder(layers[0])!!
+        val inFolder = c.undoManager.undoCount
+        c.message = null
+        assertNull(c.duplicateLayer(folder))
+        assertEquals(c.layerLimitMessage(), c.message)
+        assertEquals(99, c.doc.layers.size)
+        assertEquals("no step", inFolder, c.undoManager.undoCount)
+        assertEquals(99, c.effectiveLayerCount)
+
+        // A layer without a mask takes the last room.
+        assertNotNull(c.duplicateLayer(c.doc.layers.first { it.mask == null && !it.isFolder }))
+        assertEquals(100, c.effectiveLayerCount)
+    }
+
+    /** The lead at A7b's merge: an array's room check counts the layer masks, as `effectiveLayerCount` does. */
+    @Test
+    fun anArraysRoomCheckCountsTheMasks() {
+        val c = Smoke.controller(app, Smoke.document(64, 64, layers = 99))
+        assumeTrue("the heap allows the 100-layer cap (${c.maxLayers})", c.maxLayers == 100)
+        assertTrue("room for one more layer", ArraySources.hasRoom(c, 1, 0L))
+        c.addMask(c.doc.layers[0], fromSelection = false)
+        assertEquals(100, c.effectiveLayerCount)
+        assertFalse("the mask took the last room", ArraySources.hasRoom(c, 1, 0L))
+        assertTrue("an array without new layers or pixels still fits", ArraySources.hasRoom(c, 0, 0L))
+        c.deleteMask(c.doc.layers[0])
+        assertTrue(ArraySources.hasRoom(c, 1, 0L))
+    }
+
+    /** The lead at A7b's merge: an import counts the masks it brings (an adjustment layer's two rooms already hold its own). */
+    @Test
+    fun anImportCountsTheMasksItBrings() {
+        val props = LayerProps("A", 1f, LayerBlendMode.NORMAL, true, false, false, false, true)
+        val raster = PayloadLayer(1, props)
+        val masked = PayloadLayer(2, props, hasMask = true)
+        val adjustment = PayloadLayer(3, props, PayloadKind.ADJUSTMENT, adjustment = AdjustmentSpec())
+        val maskedAdjustment = PayloadLayer(4, props, PayloadKind.ADJUSTMENT, hasMask = true, adjustment = AdjustmentSpec())
+        assertEquals(emptyList<PayloadLayer>(), PayloadImport.fitting(listOf(masked), 1))
+        assertEquals(listOf(masked), PayloadImport.fitting(listOf(masked, raster), 2))
+        assertEquals(listOf(masked, raster), PayloadImport.fitting(listOf(masked, raster), 3))
+        assertEquals(listOf(maskedAdjustment), PayloadImport.fitting(listOf(maskedAdjustment, raster), 2))
+        assertEquals(listOf(maskedAdjustment, raster), PayloadImport.fitting(listOf(maskedAdjustment, raster), 3))
+        assertEquals("an adjustment layer without a mask takes one of its two", listOf(adjustment, raster), PayloadImport.fitting(listOf(adjustment, raster), 2))
     }
 
     @Test

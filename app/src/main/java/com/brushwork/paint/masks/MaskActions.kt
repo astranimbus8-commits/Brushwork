@@ -185,9 +185,12 @@ object MaskEdits {
 
     /**
      * Gives the mask-less [layer] an editable mask rendered from [spec] (one step [label]; the
-     * mask is enabled in the same step).
+     * mask is enabled in the same step). v1.9 (A7b step 6, the lead at A7b's merge): a mask counts
+     * in the layer cap, so at the cap nothing is added and the layer-limit message shows, as
+     * `EditorController.addMask` does.
      */
     private fun addSpecMask(c: EditorController, layer: Layer, spec: MaskSpec, label: String, brushes: BrushSource?): Boolean {
+        if (!c.canAddLayer) { c.toast(c.layerLimitMessage()); return false }
         val bmp: Bitmap = try {
             MaskSpecs.newMask(spec, c.doc.width, c.doc.height, brushes)
         } catch (e: OutOfMemoryError) {
