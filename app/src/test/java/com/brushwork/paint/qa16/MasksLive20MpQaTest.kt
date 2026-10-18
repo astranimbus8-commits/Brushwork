@@ -49,8 +49,8 @@ class MasksLive20MpQaTest {
             flow.radiusHandleDrag()
             flow.layerOpacityDrag()
             val history = flow.undoRedo(
-                listOf("Opacity", "Edit mask", "Mask: radial", "Edit adjustment"),
-                viaSession = setOf("Opacity", "Edit mask", "Mask: radial", "Edit adjustment"),
+                listOf("Opacity", "Edit mask", "Mask: radial", MasksLiveFlow.EXPOSURE_STEP),
+                viaSession = setOf("Opacity", "Edit mask", "Mask: radial", MasksLiveFlow.EXPOSURE_STEP),
             )
             println("[qa16] 4000x5000 canvas ${live.width} x ${live.height} at zoom ${s.c.viewTransform.zoom}")
             flow.costs.forEach { println("[qa16] 4000x5000 $it") }

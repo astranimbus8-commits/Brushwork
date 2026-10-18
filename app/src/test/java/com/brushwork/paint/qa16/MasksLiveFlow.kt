@@ -71,6 +71,11 @@ internal class MasksLiveFlow(private val live: LiveCanvas, private val w: Int, p
     val costs = mutableListOf<DragCost>()
     val notes = mutableListOf<String>()
 
+    companion object {
+        /** The Exposure drag's step: v1.9 (R8) names an Adjust-sheet change after its control (v1.8: "Edit adjustment"). */
+        val EXPOSURE_STEP: String = String.format(FilterLabels19.CHANGE_STEP, "Exposure")
+    }
+
     private fun x(f: Float) = w * f
     private fun y(f: Float) = h * f
 
@@ -110,7 +115,7 @@ internal class MasksLiveFlow(private val live: LiveCanvas, private val w: Int, p
         click("Close", exact = true)
         settle()
         assertFalse(tool.adjustOpen)
-        assertOneStep("Exposure drag (one step at the release)", before, String.format(FilterLabels19.CHANGE_STEP, "Exposure"))
+        assertOneStep("Exposure drag (one step at the release)", before, EXPOSURE_STEP)
         live.assertConverged("$tag Exposure drag")
         costs += DragCost("Exposure slider", frames.first, live.exactFrameMs(), live.v15StageMs(), frames.second)
     }
