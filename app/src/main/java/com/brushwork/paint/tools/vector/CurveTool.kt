@@ -739,7 +739,8 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
     init {
         // Strokes of paths that become vector objects are neither clipped by the selection nor
         // by alpha lock (the objects aren't): the live pixels are then exactly the replay's.
-        brushPreview.unclipped = { vectorTarget(targetLayer ?: controller.doc.activeLayer) }
+        // (v1.9: also those that go into a vector layer of their own: [objectTarget].)
+        brushPreview.unclipped = { objectTarget(targetLayer ?: controller.doc.activeLayer) }
         brushPreview.onLiveChanged = { onBrushLiveChanged() }
     }
 
@@ -754,7 +755,8 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         // only the unit and the nudge step are the user's own settings then.
         val user = reopened?.userSettings ?: ownSettings
         val toSave = when {
-            user != null -> user.copy(unit = new.unit, nudgeStepPx = new.nudgeStepPx)
+            // (v1.9: and "Editable (own layer)", a choice of where new paths go, not a look.)
+            user != null -> user.copy(unit = new.unit, nudgeStepPx = new.nudgeStepPx, ownLayer = new.ownLayer)
             // (A generated curve's own Closed is not saved: [userClosed].)
             else -> userClosed?.let { new.copy(closed = it) } ?: new
         }
@@ -823,13 +825,13 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
      */
     private var userClosed: Boolean? = null
 
-    /** The pending path shows [look] (see [ownSettings]); the unit and nudge step stay the user's. */
+    /** The pending path shows [look] (see [ownSettings]); the unit, nudge step and own layer (v1.9) stay the user's. */
     private fun showLook(look: CurveSettings) {
         if (reopened != null) return
         val own = ownSettings ?: userClosed?.let { settings.copy(closed = it) } ?: settings
         userClosed = null
         ownSettings = own
-        settings = look.copy(unit = own.unit, nudgeStepPx = own.nudgeStepPx).sanitized(fallback = own)
+        settings = look.copy(unit = own.unit, nudgeStepPx = own.nudgeStepPx, ownLayer = own.ownLayer).sanitized(fallback = own)
     }
 
     /** The pending path is gone: the tool's own settings come back (see [ownSettings], [userClosed]). */
@@ -3042,6 +3044,28 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         layer.isVectorLayer && controller.editTargetOf(layer) == EditTarget.CONTENT
 
     /**
+     * v1.9 (R14, D22; CurveLabels19.OWN_LAYER): ✓ puts the new path drawn on [layer] into a
+     * vector layer of its own ("Curves N" above it: [commitOwnLayer]) instead of painting it into
+     * [layer]'s pixels. Only with "Editable (own layer)" on, for a NEW path (never a reopened one,
+     * never while erasing: the erase comes first), on the active layer when it is a plain pixel
+     * layer whose content is edited: not a vector, text, shape or adjustment layer, a folder or a
+     * mask. A line with a brush that needs pixels (smudge, blur, watercolor) is painted into
+     * [layer] as before, as the Shape tool does (on a vector layer it would be a plain line).
+     */
+    private fun ownLayerTarget(layer: Layer): Boolean =
+        settings.ownLayer && !eraseState && reopened == null && layer === controller.doc.activeLayer &&
+            !layer.isFolder && !layer.isVectorLayer && !layer.isTextLayer && !layer.isShapeLayer && !layer.isAdjustmentLayer &&
+            controller.editTargetOf(layer) == EditTarget.CONTENT &&
+            (settings.stroke != CurveStroke.BRUSH || brushFitsVector())
+
+    /**
+     * What this tool draws on [layer] becomes an object, of [layer] ([vectorTarget]) or of a layer
+     * of its own ([ownLayerTarget]): its preview is neither clipped by the selection nor by alpha
+     * lock, and its copies are drawn one by one, as the object will be.
+     */
+    private fun objectTarget(layer: Layer): Boolean = vectorTarget(layer) || ownLayerTarget(layer)
+
+    /**
      * A path object of the active vector layer under [p] that a tap reopens, and the kind of tool
      * that edits it ([editorKindOf]): this one, or Path for a Curve / Polyline tapping a spline
      * path, or Curve / Polyline for Path tapping a plain path. v1.9 (R14): Curve and Polyline
@@ -3130,6 +3154,8 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
     private var opening = false
     /** True while ✓ applies the path (live-stroke callbacks are ignored then). */
     private var inCommit = false
+    /** v1.9 (R14): true while ✓ adds the path's own vector layer ([commitOwnLayer]). */
+    private var addingOwnLayer = false
     /** Document regions the reopened preview drew last (redrawn when it changes). */
     private var sessionRegions: List<Rect> = emptyList()
     private var sessionSpecs: List<VectorPaintSpec> = emptyList()
@@ -3475,8 +3501,8 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         val brushLine = path != null && mode == CurveStroke.BRUSH && layer === controller.doc.activeLayer
         val copies = copyMaps
         // v1.8 (item 1a): a raster layer's copies are one translucent group (the items opaque in it);
-        // a vector layer draws an object's copies one by one.
-        val alpha = if (copies.isNotEmpty() && !vectorTarget(layer)) groupAlpha(mode) else 255
+        // a vector layer draws an object's copies one by one (v1.9: as does a path's own layer).
+        val alpha = if (copies.isNotEmpty() && !objectTarget(layer)) groupAlpha(mode) else 255
         val specs = if (path != null) buildSpecs(path, mode, opaque = alpha < 255) else emptyList()
         if (brushLine && path != null) {
             preview.release()
@@ -3497,8 +3523,8 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
                 // v1.8 (item 1a): the path and its copies, on every frame of the edit.
                 preview.release()
                 hideUnclipped()
-                showCopies(layer, specs, copies, alpha, clipped = !vectorTarget(layer))
-            } else if (vectorTarget(layer) && (controller.selection != null || layer.alphaLocked)) {
+                showCopies(layer, specs, copies, alpha, clipped = !objectTarget(layer))
+            } else if (objectTarget(layer) && (controller.selection != null || layer.alphaLocked)) {
                 // An object is neither clipped by the selection nor by alpha lock.
                 hideCopies()
                 preview.release()
@@ -3748,6 +3774,8 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         if (eraseState) { commitErase(layer); return }
         if (!controller.checkEditable(layer)) return
         if (vectorTarget(layer)) { commitObject(layer); return }
+        // v1.9 (R14, D22): "Editable (own layer)" on a pixel layer.
+        if (ownLayerTarget(layer)) { commitOwnLayer(); return }
         val s = settings
         val path = path()
         val mode = strokeMode(layer)
@@ -3832,6 +3860,51 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         } finally {
             inCommit = false
         }
+        brushPreview.end()
+        brushOverride = null
+        endLook()
+        controller.invalidateOverlay()
+    }
+
+    /**
+     * v1.9 (R14, D22): ✓ of a new path with "Editable (own layer)" on a pixel layer
+     * ([ownLayerTarget]). A new vector layer "Curves N" goes in above it and becomes the active
+     * layer, so the next paths join it as objects ([vectorTarget]). The path becomes its object,
+     * drawn by the layer (a brush line too, as on a vector layer that is not the active one). The
+     * layer and the object are ONE undo step named after the tool; the pixel layer is left as it
+     * was. Adding the layer pauses this tool (`withToolPaused`): [addingOwnLayer] keeps the
+     * pending path through that pause, so at the layer limit (the controller's message) the path
+     * stays pending. Out of memory for the object, the empty layer goes again in the same step.
+     */
+    private fun commitOwnLayer() {
+        val vp = buildVPath()?.let { checkedGenerator(it) } ?: run { discard(); return }
+        val label = stepLabel
+        // v1.8 (item 1a, D2): perspective copies become plain paths of their own, as on a vector layer.
+        val bake = perspectiveCopies
+        val bakeMaps = maps.orEmpty()
+        var placed = false
+        inCommit = true
+        addingOwnLayer = true
+        try {
+            // The live brush stroke drew on the pixel layer: its pixels come back first.
+            brushPreview.cancel()
+            controller.groupUndo(label) {
+                val v = controller.addVectorLayer(label = label, baseName = CurveLabels19.LAYER_BASE) ?: return@groupUndo
+                val objects = if (bake) ObjectCopies.baked(vp, bakeMaps, ObjectCopies.bakeCanvas(controller.doc, v)) else listOf(vp)
+                placed = controller.vectors.addObjects(v, objects, label).isNotEmpty()
+                if (!placed) controller.structure.delete(v, keepChildren = false, label)
+            }
+        } finally {
+            addingOwnLayer = false
+            inCommit = false
+        }
+        if (!placed) {
+            // The path stays pending, previewed on the pixel layer again.
+            changed()
+            return
+        }
+        if (bake) toastOncePerSession(MirrorLabels18.PERSPECTIVE_BAKED)
+        resetPath()
         brushPreview.end()
         brushOverride = null
         endLook()
@@ -3978,6 +4051,8 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
     }
 
     override fun onDeactivate() {
+        // v1.9 (R14): the pause while ✓ adds the path's own layer ([commitOwnLayer]) keeps the path.
+        if (addingOwnLayer) return
         observeJob?.cancel()
         observeJob = null
         drag = Drag.NONE
@@ -4010,7 +4085,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         if (overlaySpecs.isNotEmpty()) {
             val layer = targetLayer ?: controller.doc.activeLayer
             specOverlay.draw(
-                canvas, t, controller, layer, overlaySpecs, keepBandFree = brushPreview.isLive, ignoreSelection = vectorTarget(layer),
+                canvas, t, controller, layer, overlaySpecs, keepBandFree = brushPreview.isLive, ignoreSelection = objectTarget(layer),
                 copies = copyMaps, groupAlpha = overlayAlpha,
             )
         }
@@ -4368,7 +4443,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
             reopenedState = true
             pristine = false
             // The strip shows the path's look (the unit and nudge step stay the user's).
-            settings = h.look.copy(unit = settings.unit, nudgeStepPx = settings.nudgeStepPx).sanitized(settings)
+            settings = h.look.copy(unit = settings.unit, nudgeStepPx = settings.nudgeStepPx, ownLayer = settings.ownLayer).sanitized(settings)
             r.session.drawPreview = { canvas -> drawSessionPreview(canvas) }
         } else {
             // A new path keeps its look while it is pending; this tool's own settings (what its

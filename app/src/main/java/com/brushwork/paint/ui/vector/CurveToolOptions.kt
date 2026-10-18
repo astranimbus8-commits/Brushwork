@@ -67,6 +67,7 @@ import com.brushwork.paint.ui.points.ThicknessRow
 import com.brushwork.paint.ui.points.ThicknessRowDefaults
 import com.brushwork.paint.ui.points.groupSliderTouches
 import com.brushwork.paint.ui.common.V19Tags
+import com.brushwork.paint.ui.common.CurveLabels19
 import com.brushwork.paint.ui.theme.IbisColors
 import com.brushwork.paint.ui.theme.IbisDims
 import com.brushwork.paint.vector.VSpline
@@ -732,6 +733,14 @@ internal fun CurveSettingsSheet(tool: CurveTool, onDismiss: () -> Unit) {
                     " Undo takes back the last point edit." +
                     (if (controller.isVectorMode) " On this vector layer, tap the line of a ${if (tool.polyline) "polyline" else "curve"} to edit its points again." else ""),
                 Modifier.padding(top = 8.dp),
+            )
+        }
+
+        // v1.9 (R14, D22): where new paths on a pixel layer go (off: painted into it, as in v1.8).
+        if (!tool.isReopened) {
+            ToggleRow(
+                CurveLabels19.OWN_LAYER, s.ownLayer, { v -> set { it.copy(ownLayer = v) } },
+                Modifier.padding(top = 8.dp), description = CurveLabels19.OWN_LAYER_DESC,
             )
         }
     }

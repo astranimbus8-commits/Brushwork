@@ -1377,6 +1377,26 @@ counter the bottom bar may key a `SLOT_FLASH_MS` (200 ms) tool-slot flash on (le
 `BottomBar.kt` is A5's). The reopened edit commits as one controller step. Old projects open as
 they were (compat rows `row10MixedCurves`, `row10BevelledCurvePoints`).
 
+**Editable (own layer) (R14, D22).** The last row of each curve tool's settings sheet is
+`CurveLabels19.OWN_LAYER` with `OWN_LAYER_DESC` (`CurveSettings.ownLayer`, per tool, off by default
+and never written while off; hidden while a path is reopened). On, ✓ of a NEW path on a pixel
+layer (`ownLayerTarget`: the active layer, content not mask, not a vector, text, shape or
+adjustment layer or a folder, and not a brush that needs pixels, which paints into the layer as
+Shape does) runs `commitOwnLayer`: inside one `groupUndo` named after the tool it adds
+`addVectorLayer(baseName = CurveLabels19.LAYER_BASE)` ("Curves N", N = vector layers + 1, above the
+pixel layer, active) and the path as its object (`vectors.addObjects`, synchronous inside the step;
+perspective copies baked as on a vector layer). The pixel layer stays byte-identical (the live
+brush stroke is cancelled first). The next paths of any kind join that layer as v1.8 objects.
+`checkEditable` on the pixel layer runs first, so a locked or hidden layer refuses as before.
+Deviation from addLayerWith's rule that pending work commits before the pause: `addingOwnLayer`
+makes the nested `onDeactivate` a no-op, so the path survives the insert and simply stays pending
+at the layer limit (out of memory for the object, the empty layer is deleted in the same step).
+The preview treats such a path as an object (`objectTarget`: no selection or alpha-lock clip,
+copies drawn one by one); it is still drawn inside the pixel layer, so that layer's opacity, blend
+mode or mask show on the preview but not on the result (a device check). Ignored while erasing,
+on a vector layer (paths join it) and for a reopened path. `update`, `showLook` and `adopt` keep
+`ownLayer` the user's, like the unit and nudge step.
+
 **Erase mode (R11 a).** `CurveTool` is an `ErasableTool`: slot 1 reads `EraseLabels19.WITH_CURVE`
 (`WITH_POLYLINE`, `WITH_PATH`) or the `ERASING_*` twin, and the last row of the "Stroke kind" menu,
 `EraseLabels19.INSTEAD_OF_PAINT`, is the same switch (the menu's face shows the eraser glyph while
@@ -1405,8 +1425,9 @@ for the next path. While on, the pending outline is drawn dashed and erases live
 Tests: `v19/a1/` (`GroupThicknessControlTest`, `GroupWeightControlTest`, `ThicknessRowGoldenTest`,
 `ThicknessFromZeroTest`, `CurveWidthConstantsTest`, `PolylineBevelRobolectricTest`,
 `CurvePolylineReopenTest`, `CurveEraseRobolectricTest` on raster, text, vector and legacy shape
-layers, `CurveStripInventoryTest` every strip state at 392 and 360 dp with the label scan; Timing
-`GroupThicknessBudgetTest`), `qa19/Qa19ThicknessUiTest`, `qa19/Qa19PolylineBevelUiTest`.
+layers, `CurveStripInventoryTest` every strip state at 392 and 360 dp with the label scan,
+`CurveOwnLayerTest`; Timing `GroupThicknessBudgetTest`), `qa19/Qa19ThicknessUiTest` (also the own
+layer row of each settings sheet), `qa19/Qa19PolylineBevelUiTest`.
 
 <!-- /v19-A1 -->
 

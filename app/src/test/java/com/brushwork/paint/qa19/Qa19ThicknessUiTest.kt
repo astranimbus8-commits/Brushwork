@@ -9,12 +9,15 @@ import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.points.PointSelection
 import com.brushwork.paint.tools.vector.CurveTool
 import com.brushwork.paint.ui.color.RobolectricUi
+import com.brushwork.paint.ui.common.CurveLabels19
 import com.brushwork.paint.ui.common.PointLabels
 import com.brushwork.paint.ui.common.V19Tags
 import com.brushwork.paint.ui.points.ThicknessRowDefaults
 import com.brushwork.paint.ui.points.ThicknessRowLabels
 import com.brushwork.paint.ui.vector.POINT_THICKNESS_LABEL
 import com.brushwork.paint.ui.vector.POINT_WEIGHT_LABEL
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -29,7 +32,8 @@ import org.robolectric.annotation.Config
  * (‹, the value box reading "Mixed", ›, the slider) whole inside its 260 dp cell, the slider at
  * least 96 dp (128 dp at font scale 1), the value box at most its largest width, and no text of
  * the new controls overflows. Path's group weight popup shows the orange group control. One
- * class: the widths and font scales are sections (`RuntimeEnvironment.setQualifiers`).
+ * class: the widths and font scales are sections (`RuntimeEnvironment.setQualifiers`). v1.9 R14
+ * (A1 step 10): a last section per tool turns on "Editable (own layer)" in its settings sheet.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = Qa19Ui.Q392, instrumentedPackages = ["com.brushwork.paint.qa19.thicknesssandbox"])
@@ -48,6 +52,37 @@ class Qa19ThicknessUiTest {
         } finally {
             RuntimeEnvironment.setQualifiers(Qa19Ui.Q392)
         }
+        for (id in listOf(ToolId.CURVE, ToolId.POLYLINE, ToolId.PATH)) {
+            h.section("$id: ${CurveLabels19.OWN_LAYER} in the settings sheet") { checkTheOwnLayerRow(h, id) }
+        }
+    }
+
+    /**
+     * v1.9 (R14, D22; A1 step 10): the tool's settings sheet has the "Editable (own layer)" row,
+     * off by default; turned on there, ✓ puts the pending path on the pixel layer into a new
+     * vector layer "Curves 1" (the first vector layer of the drawing).
+     */
+    private fun checkTheOwnLayerRow(h: Qa19Harness, id: ToolId) {
+        val s = h.editor()
+        s.c.selectTool(id)
+        val t = s.c.tools.getValue(id) as CurveTool
+        for (p in listOf(Vec2(60f, 200f), Vec2(130f, 90f), Vec2(200f, 160f))) assertTrue(t.addAnchor(p))
+        Qa19Ui.settle()
+        assertFalse("$id: off by default", t.settings.ownLayer)
+        Qa19Ui.click("${id.label} settings", exact = true)
+        Qa19Ui.click(CurveLabels19.OWN_LAYER, exact = true)
+        assertTrue("$id: the row turns it on", t.settings.ownLayer)
+        assertTrue("$id: with its description", Qa19Ui.has(CurveLabels19.OWN_LAYER_DESC, exact = true))
+        s.activity.onBackPressedDispatcher.onBackPressed()
+        Qa19Ui.settle()
+        val layers = s.c.doc.layers.size
+        val raster = s.c.doc.activeLayer
+        assertFalse(raster.isVectorLayer)
+        t.commit()
+        Qa19Ui.settle()
+        assertEquals("$id: one new layer", layers + 1, s.c.doc.layers.size)
+        assertEquals("$id: the path's own layer", "${CurveLabels19.LAYER_BASE} 1", s.c.doc.activeLayer.name)
+        assertEquals(1, s.c.doc.activeLayer.vector?.objects?.size)
     }
 
     private fun checkTheGroupRow(h: Qa19Harness, id: ToolId, scale: Float, where: String) {
