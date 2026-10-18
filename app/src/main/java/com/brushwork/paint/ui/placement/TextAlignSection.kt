@@ -34,28 +34,31 @@ import com.brushwork.paint.ui.theme.BrushworkColors
 
 /**
  * The text sheet's Alignment section (v1.9, R4): the three alignment buttons ("Left", "Center",
- * "Right"; vertical text "Top", "Center", "Bottom") and, for horizontal text, the switch rows
- * “Justify lines” and “Justify the last line too” (enabled only while the first is on).
+ * "Right"; vertical text "Top", "Center", "Bottom") and the switch rows “Justify lines” and
+ * “Justify the last line too” (enabled only while the first is on); vertical text “Justify
+ * columns” and “Justify the last column too” (A3 step 12).
  *
  * With “Justify lines” on, the buttons set the LAST line's alignment, which gives Illustrator's
  * seven modes: the caption “Last line:” stands before them and each button's stateDescription
  * reads "Last line: <its label>". With “Justify the last line too” on, every line is justified
- * and the buttons are disabled (they would change nothing). Vertical text keeps the three buttons
- * only (v1.9 justifies horizontal text); text on a path has no Alignment section (C23). [style]
- * applies a change to the text's look, as the sheet's other rows do.
+ * and the buttons are disabled (they would change nothing). Vertical text reads the same with
+ * columns: the caption “Last column:” and the stateDescription "Last column: <its label>". Text
+ * on a path has no Alignment section (C23). [style] applies a change to the text's look, as the
+ * sheet's other rows do.
  */
 @Composable
 internal fun TextAlignSection(spec: TextSpec, style: ((TextSpec) -> TextSpec) -> Unit) {
     val vertical = spec.vertical
-    val justify = if (vertical) TextJustify.OFF else spec.justify
+    val justify = spec.justify
     val on = justify != TextJustify.OFF
     val all = justify == TextJustify.ALL
+    val last = if (vertical) TextLabels19.LAST_COLUMN else TextLabels19.LAST_LINE
     SectionHeader(if (vertical) "Column alignment" else "Alignment")
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
         if (on) {
             // Shrinks (and wraps) before it pushes a button off a narrow sheet at a large font scale.
             Text(
-                TextLabels19.LAST_LINE,
+                last,
                 style = MaterialTheme.typography.bodyMedium,
                 color = BrushworkColors.OnChromeDim,
                 modifier = Modifier.weight(1f, fill = false).padding(end = 4.dp),
@@ -73,17 +76,15 @@ internal fun TextAlignSection(spec: TextSpec, style: ((TextSpec) -> TextSpec) ->
                 onClick = { style { it.copy(align = a) } },
                 selected = spec.align == a,
                 enabled = !all,
-                modifier = if (on) Modifier.semantics { stateDescription = "${TextLabels19.LAST_LINE} $label" } else Modifier,
+                modifier = if (on) Modifier.semantics { stateDescription = "$last $label" } else Modifier,
             )
         }
     }
-    if (!vertical) {
-        JustifyRow(TextLabels19.JUSTIFY, on, enabled = true) { v ->
-            style { it.copy(justify = if (v) TextJustify.ON else TextJustify.OFF) }
-        }
-        JustifyRow(TextLabels19.JUSTIFY_LAST, all, enabled = on) { v ->
-            style { it.copy(justify = if (v) TextJustify.ALL else TextJustify.ON) }
-        }
+    JustifyRow(if (vertical) TextLabels19.JUSTIFY_COLUMNS else TextLabels19.JUSTIFY, on, enabled = true) { v ->
+        style { it.copy(justify = if (v) TextJustify.ON else TextJustify.OFF) }
+    }
+    JustifyRow(if (vertical) TextLabels19.JUSTIFY_LAST_COLUMN else TextLabels19.JUSTIFY_LAST, all, enabled = on) { v ->
+        style { it.copy(justify = if (v) TextJustify.ALL else TextJustify.ON) }
     }
 }
 

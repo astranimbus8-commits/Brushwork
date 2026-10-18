@@ -33,7 +33,9 @@ import org.robolectric.annotation.Config
  * - with "Justify lines" on the caption "Last line:" stands before the buttons, which then read
  *   "Last line: Left" (and so on); with "Justify the last line too" on the buttons are disabled;
  *   every button stays a 40 dp target inside the sheet;
- * - vertical text shows its "Column alignment" buttons without the justify rows (step 12);
+ * - vertical text (step 12) shows its "Column alignment" buttons with "Justify columns" and
+ *   "Justify the last column too", the same way: the caption "Last column:" and the buttons
+ *   "Last column: Top" (and so on) under justify, disabled under the last column too;
  * - the five placeholder amounts ("3 words" first, "Fill the box" last) wrap inside the sheet
  *   instead of hiding behind a scroll edge (R6);
  * - no text on screen overflows its box in any of these states.
@@ -97,14 +99,35 @@ class Qa19TextAlignUiTest {
             assertFalse(SmokeUi.isEnabled(TextLabels19.JUSTIFY_LAST))
             assertButtons(s, where, lastLine = false, enabled = true)
 
-            // Vertical text: its column buttons, no justify rows until step 12.
-            t.updateSpec { it.copy(vertical = true, justify = TextJustify.ON) }
+            // Vertical text (step 12): its column buttons and the column rows, the same way.
+            t.updateSpec { it.copy(vertical = true) }
             Qa19Ui.settle()
             assertTrue("$where: the column alignment header", Qa19Ui.has("Column alignment".uppercase(), exact = true))
-            assertFalse("$where: vertical text shows no justify row", Qa19Ui.has(TextLabels19.JUSTIFY, exact = true))
-            assertFalse(Qa19Ui.has(TextLabels19.LAST_LINE, exact = true))
-            assertTrue(Qa19Ui.has(TextAlign.START.verticalLabel, exact = true))
+            assertFalse("$where: no line rows on vertical text", Qa19Ui.has(TextLabels19.JUSTIFY, exact = true) || Qa19Ui.has(TextLabels19.JUSTIFY_LAST, exact = true))
+            assertFalse(Qa19Ui.has(TextLabels19.LAST_COLUMN, exact = true))
+            assertFalse(SmokeUi.isEnabled(TextLabels19.JUSTIFY_LAST_COLUMN))
+            for (label in listOf(TextLabels19.JUSTIFY_COLUMNS, TextLabels19.JUSTIFY_LAST_COLUMN)) {
+                val row = s.dp(box(clickableOf(label)))
+                assertTrue("$where: \"$label\" is a 48 dp row: $row", row.height >= 47.5f)
+                assertTrue("$where: \"$label\" inside the screen: $row", row.left >= -0.5f && row.right <= s.widthDp + 0.5f)
+            }
+            assertButtons(s, where, lastLine = false, enabled = true, vertical = true)
             assertSheetFits("vertical text, $where")
+            SmokeUi.click(TextLabels19.JUSTIFY_COLUMNS, exact = true)
+            assertEquals(TextJustify.ON, t.item!!.spec.justify)
+            assertFalse(Qa19Ui.has(TextLabels19.LAST_LINE, exact = true))
+            val columnCaption = s.dp(box(Qa19Ui.find(TextLabels19.LAST_COLUMN, exact = true)?.node ?: throw AssertionError("$where: no \"Last column:\"")))
+            val top = s.dp(box(clickableOf(TextAlign.START.verticalLabel)))
+            assertTrue("$where: the column caption before the first button: $columnCaption, $top", columnCaption.right <= top.left + 0.5f)
+            assertButtons(s, where, lastLine = true, enabled = true, vertical = true)
+            assertSheetFits("vertical text with justify on, $where")
+            SmokeUi.click(TextLabels19.JUSTIFY_LAST_COLUMN, exact = true)
+            assertEquals(TextJustify.ALL, t.item!!.spec.justify)
+            assertButtons(s, where, lastLine = true, enabled = false, vertical = true)
+            assertSheetFits("vertical text with the last column justified too, $where")
+            SmokeUi.click(TextLabels19.JUSTIFY_COLUMNS, exact = true)
+            assertEquals(TextJustify.OFF, t.item!!.spec.justify)
+            assertFalse(SmokeUi.isEnabled(TextLabels19.JUSTIFY_LAST_COLUMN))
 
             t.cancelEditor()
             Qa19Ui.settle()
@@ -112,9 +135,13 @@ class Qa19TextAlignUiTest {
         }
     }
 
-    /** The three alignment buttons: each 40 dp at least, inside the screen, named for the last line when [lastLine], enabled as [enabled]. */
-    private fun assertButtons(s: ChromeScreen, where: String, lastLine: Boolean, enabled: Boolean) {
-        val labels = TextAlign.entries.map { it.horizontalLabel }
+    /**
+     * The three alignment buttons (of [vertical] text: "Top", "Center", "Bottom"): each 40 dp at
+     * least, inside the screen, named for the last line (column) when [lastLine], enabled as [enabled].
+     */
+    private fun assertButtons(s: ChromeScreen, where: String, lastLine: Boolean, enabled: Boolean, vertical: Boolean = false) {
+        val labels = TextAlign.entries.map { if (vertical) it.verticalLabel else it.horizontalLabel }
+        val last = if (vertical) TextLabels19.LAST_COLUMN else TextLabels19.LAST_LINE
         for (label in labels) {
             val n = clickableOf(label)
             val r = s.dp(box(n))
@@ -123,9 +150,9 @@ class Qa19TextAlignUiTest {
             assertEquals("$where: \"$label\" enabled", enabled, !n.config.contains(SemanticsProperties.Disabled))
             val state = n.config.getOrNull(SemanticsProperties.StateDescription)
             if (lastLine) {
-                assertEquals("$where: \"$label\" names the last line", "${TextLabels19.LAST_LINE} $label", state)
+                assertEquals("$where: \"$label\" names the last line", "$last $label", state)
             } else {
-                assertFalse("$where: \"$label\" names no last line: $state", state?.startsWith(TextLabels19.LAST_LINE) == true)
+                assertFalse("$where: \"$label\" names no last line: $state", state?.startsWith(last) == true)
             }
         }
     }

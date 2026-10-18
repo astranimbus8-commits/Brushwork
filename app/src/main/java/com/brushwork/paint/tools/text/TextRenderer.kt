@@ -377,12 +377,13 @@ object TextRenderer {
      * v1.9 (R4): whether straight text with [spec] may have a justified line ([Justify]):
      * horizontal text with “Justify the last line too”, or with “Justify lines” in a fixed-width
      * box (without one, every line is the last of its paragraph and keeps `align`). Vertical text
-     * keeps `align` (v1.9 justifies horizontal text only); text on a path never gets here.
+     * spreads its columns in [VerticalTextLayout] instead (A3 step 12); text on a path never gets
+     * here.
      */
     internal fun justifies(spec: TextSpec): Boolean =
         !spec.vertical && (spec.justify == TextJustify.ALL || (spec.justify == TextJustify.ON && spec.box.width > 0f))
 
-    /** [lines] of [wt] justified as [spec] asks (v1.9, R4; none for vertical text). */
+    /** [lines] of [wt] justified as [spec] asks (v1.9, R4; vertical text spreads its columns in [VerticalTextLayout]). */
     private fun justified(spec: TextSpec, wt: WrapText, lines: List<WrapLine>): Justified =
         Justify.apply(wt, lines, if (spec.vertical) TextJustify.OFF else spec.justify, toWidest = spec.box.width <= 0f)
 
@@ -1013,6 +1014,7 @@ object TextRenderer {
             wrapLength = spec.box.height,
             leftToRight = spec.columnsLeftToRight,
             factors = ramp?.factors,
+            justify = spec.justify,
         )
         val height = if (res.height > 0f) res.height else em
         // A fixed-size text box: at least this wide; columns start at its right (or left) edge.
