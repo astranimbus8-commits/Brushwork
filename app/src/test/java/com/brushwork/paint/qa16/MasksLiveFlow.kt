@@ -7,9 +7,9 @@ import com.brushwork.paint.smoke.SmokeUi.click
 import com.brushwork.paint.smoke.SmokeUi.settle
 import com.brushwork.paint.testing.PerfBudget
 import com.brushwork.paint.tools.ToolId
-import com.brushwork.paint.tools.mask.AdjustmentEdit
 import com.brushwork.paint.tools.mask.MaskHandles
 import com.brushwork.paint.tools.mask.MaskTool
+import com.brushwork.paint.ui.common.FilterLabels19
 import com.brushwork.paint.ui.layers.LayerLabels
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -71,6 +71,11 @@ internal class MasksLiveFlow(private val live: LiveCanvas, private val w: Int, p
     val costs = mutableListOf<DragCost>()
     val notes = mutableListOf<String>()
 
+    companion object {
+        /** The Exposure drag's step: v1.9 (R8) names an Adjust-sheet change after its control (v1.8: "Edit adjustment"). */
+        val EXPOSURE_STEP: String = String.format(FilterLabels19.CHANGE_STEP, "Exposure")
+    }
+
     private fun x(f: Float) = w * f
     private fun y(f: Float) = h * f
 
@@ -96,7 +101,7 @@ internal class MasksLiveFlow(private val live: LiveCanvas, private val w: Int, p
         live.assertConverged("$tag + Linear")
     }
 
-    /** Adjust… → a finger drag on Exposure, a frame per move; one "Edit adjustment" step when the sheet closes. */
+    /** Adjust… → a finger drag on Exposure, a frame per move; one "Change Exposure" step at the release (v1.9, R8). */
     fun exposureDrag(from: Float = 0.5f, to: Float = 0.85f) {
         // The red overlay of the last mask edit fades first (1.2 s), as it would before a finger finds the slider.
         live.s.touch.idle(1300)
@@ -106,11 +111,11 @@ internal class MasksLiveFlow(private val live: LiveCanvas, private val w: Int, p
         val frames = dragFrames("$tag Exposure") { each -> live.sliderDrag(live.sliderUnder("Exposure"), from, to, moves = 10, each = each) }
         val exposure = adj.adjustment!!.values["exposure"]?.toString()?.toFloatOrNull() ?: 0f
         assertNotEquals("Exposure moved", 0f, exposure)
-        assertEquals("the sheet's edit is pending: no step under the finger", before, live.steps())
+        assertEquals("v1.9 (R8): the released drag is one step", before + 1, live.steps())
         click("Close", exact = true)
         settle()
         assertFalse(tool.adjustOpen)
-        assertOneStep("Exposure drag (one sheet session)", before, AdjustmentEdit.LABEL)
+        assertOneStep("Exposure drag (one step at the release)", before, EXPOSURE_STEP)
         live.assertConverged("$tag Exposure drag")
         costs += DragCost("Exposure slider", frames.first, live.exactFrameMs(), live.v15StageMs(), frames.second)
     }

@@ -42,9 +42,12 @@ import com.brushwork.paint.model.Layer
 import com.brushwork.paint.tools.mask.AdjustmentEdit
 import com.brushwork.paint.tools.mask.MaskTool
 import com.brushwork.paint.ui.common.BwSheet
+import com.brushwork.paint.ui.common.FilterLabels19
 import com.brushwork.paint.ui.common.LabeledSlider
 import com.brushwork.paint.ui.common.LocalSheetHost
+import com.brushwork.paint.ui.common.PointLabels19
 import com.brushwork.paint.ui.common.SliderTyping
+import com.brushwork.paint.ui.common.V19Tags
 import com.brushwork.paint.ui.common.closeOnSecondFinger
 import com.brushwork.paint.ui.filters.FilterParamControl
 import com.brushwork.paint.ui.filters.LuminanceHistogram
@@ -58,6 +61,9 @@ import com.brushwork.paint.ui.theme.BrushworkColors
  * (generated like a filter's) and Amount (the layer's opacity). Half-height and non-modal: the
  * canvas stays usable. Changes show at once with no undo step; ONE step "Edit adjustment" is
  * recorded when the sheet closes or is minimized, when the tool goes, or before any other step.
+ * v1.9 (R8): every finished change is its own step "Change <label>", and every control has the
+ * reset icon ("Reset <label>", one step) while it differs from the effect's default; "Reset the
+ * effect" stays.
  */
 @Composable
 internal fun AdjustmentSheet(tool: MaskTool) {
@@ -99,8 +105,9 @@ private fun AdjustmentBody(c: EditorController, layer: Layer, edit: AdjustmentEd
             modifier = Modifier.padding(vertical = 8.dp),
         )
     }
-    // Picking an effect or resetting it is a discrete change: the canvas refines at once.
-    EffectPicker(c, layer, filter, enabled) { s, o, n -> edit.preview(s, o, n); edit.settled() }
+    // Picking an effect or resetting it is a discrete change: the canvas refines at once (v1.9:
+    // one step "Edit adjustment" now, after the step of a change still pending).
+    EffectPicker(c, layer, filter, enabled) { s, o, n -> edit.flush(); edit.preview(s, o, n); edit.record(AdjustmentEdit.LABEL) }
     if (filter == null) {
         Text(
             "This adjustment uses an effect this version doesn't have (${spec.filterId}), so it shows no effect. Pick another effect to use it.",
@@ -110,52 +117,82 @@ private fun AdjustmentBody(c: EditorController, layer: Layer, edit: AdjustmentEd
         )
     } else {
         if (showsHistogram(filter.id)) BelowHistogram(c, layer)
-        // Settings refused because they can't be live (said once per setting while the sheet is up).
-        val refused = remember(layer, filter) { mutableSetOf<String>() }
-        val paramHost = remember(layer, filter) {
-            ParamHost(
-                valuesOf = {
-                    // Read in composition: the controls follow every change.
-                    if (edit.version < 0 || c.layersVersion < 0) filter.defaultValues()
-                    else layer.adjustment?.takeIf { it.filterId == filter.id }?.let { AdjustmentEffects.valuesOf(it, filter) } ?: filter.defaultValues()
-                },
-                update = { key, value ->
-                    val cur = layer.adjustment?.takeIf { it.filterId == filter.id }?.let { AdjustmentEffects.valuesOf(it, filter) } ?: filter.defaultValues()
-                    val next = cur.copy().set(key, value)
-                    // A setting that looks at neighbours or the whole picture (Levels' Auto, Black &
-                    // White's smoothing) would turn the live effect off without a word: refused.
-                    if (!AdjustmentEffects.isLive(filter, next)) {
-                        if (refused.add(key)) c.toast(AdjustmentEffects.notLiveMessage(filter, filter.params.firstOrNull { it.key == key }?.label))
-                        return@ParamHost
-                    }
-                    preview(AdjustmentEffects.spec(filter, next), layer.opacity, layer.name)
-                },
-                resetParam = { key ->
-                    val p = filter.params.firstOrNull { it.key == key } ?: return@ParamHost
-                    val cur = layer.adjustment?.let { AdjustmentEffects.valuesOf(it, filter) } ?: filter.defaultValues()
-                    val def = AdjustmentEffects.defaultValues(filter, c.color).raw(p.key) ?: p.defaultValue()
-                    preview(AdjustmentEffects.spec(filter, cur.copy().set(key, def)), layer.opacity, layer.name)
-                    edit.settled()
-                },
-                // A slider let go: the canvas refines to the exact image at once (§3.1a).
-                onChangeFinished = edit::settled,
-            )
-        }
+        val paramHost = remember(layer, filter) { adjustmentParamHost(c, layer, filter, edit) }
         if (filter.params.isEmpty()) {
             Text("${filter.name} has no settings.", style = MaterialTheme.typography.bodyMedium, color = BrushworkColors.OnChromeDim, modifier = Modifier.padding(vertical = 8.dp))
         }
         filter.params.forEach { p -> FilterParamControl(paramHost, p, enabled = enabled) }
     }
     LabeledSlider(
-        label = "Amount",
+        label = PointLabels19.AMOUNT,
         value = layer.opacity,
-        onValueChange = { preview(layer.adjustment, it.coerceIn(0f, 1f), layer.name) },
-        onValueChangeFinished = edit::settled,
+        onValueChange = { edit.changing(PointLabels19.AMOUNT); preview(layer.adjustment, it.coerceIn(0f, 1f), layer.name) },
+        // v1.9 (R8): one step "Change Amount" (the canvas refines to the exact image at once).
+        onValueChangeFinished = { edit.finish(PointLabels19.AMOUNT) },
         valueRange = 0f..1f,
         valueText = "${(layer.opacity * 100f).toInt()}%",
         typing = SliderTyping.Percent,
         enabled = enabled,
         modifier = Modifier.padding(top = 4.dp),
+        onReset = if (layer.opacity == 1f) null else ({ resetAmount(layer, edit) }),
+        resetTag = V19Tags.FILTER_RESET_PREFIX + AMOUNT_KEY,
+    )
+}
+
+/** The Amount slider's reset tag ([V19Tags.FILTER_RESET_PREFIX] + it); no filter parameter uses the key. */
+internal const val AMOUNT_KEY = "layer.amount"
+
+/** v1.9 (R8): Amount back to 100 %: one step "Reset Amount". */
+internal fun resetAmount(layer: Layer, edit: AdjustmentEdit) {
+    // A change still pending is its own step first (as a control's reset).
+    edit.flush()
+    edit.preview(layer.adjustment, 1f, layer.name)
+    edit.record(String.format(FilterLabels19.RESET_ONE, PointLabels19.AMOUNT))
+}
+
+/**
+ * The controls' host for [layer]'s [filter] in its Adjust sheet (v1.9: built outside composition so
+ * a test can drive it). v1.9 (R8): a finished change is one step "Change <label>" ([AdjustmentEdit.finish]),
+ * a run of − / + presses one step ([AdjustmentEdit.changing]) and a control's reset one step "Reset
+ * <label>"; the reset icon shows while a value differs from the effect's default.
+ */
+internal fun adjustmentParamHost(c: EditorController, layer: Layer, filter: Filter, edit: AdjustmentEdit): ParamHost {
+    // Settings refused because they can't be live (said once per setting while the sheet is up).
+    val refused = mutableSetOf<String>()
+    fun labelOf(key: String) = filter.params.firstOrNull { it.key == key }?.label ?: key
+    fun current() = layer.adjustment?.takeIf { it.filterId == filter.id }?.let { AdjustmentEffects.valuesOf(it, filter) } ?: filter.defaultValues()
+    return ParamHost(
+        valuesOf = {
+            // Read in composition: the controls follow every change.
+            if (edit.version < 0 || c.layersVersion < 0) filter.defaultValues() else current()
+        },
+        update = { key, value ->
+            val next = current().copy().set(key, value)
+            // A setting that looks at neighbours or the whole picture (Levels' Auto, Black &
+            // White's smoothing) would turn the live effect off without a word: refused.
+            if (!AdjustmentEffects.isLive(filter, next)) {
+                if (refused.add(key)) c.toast(AdjustmentEffects.notLiveMessage(filter, filter.params.firstOrNull { it.key == key }?.label))
+                return@ParamHost
+            }
+            edit.changing(labelOf(key))
+            edit.preview(AdjustmentEffects.spec(filter, next), layer.opacity, layer.name)
+        },
+        resetParam = { key ->
+            val p = filter.params.firstOrNull { it.key == key } ?: return@ParamHost
+            val cur = layer.adjustment?.let { AdjustmentEffects.valuesOf(it, filter) } ?: filter.defaultValues()
+            val def = AdjustmentEffects.defaultValues(filter, c.color).raw(p.key) ?: p.defaultValue()
+            // A change still pending (a run of − / + presses, of this control too) is its own
+            // step first: Undo of the reset goes back to where the run ended (A2 review).
+            edit.flush()
+            edit.preview(AdjustmentEffects.spec(filter, cur.copy().set(key, def)), layer.opacity, layer.name)
+            edit.record(String.format(FilterLabels19.RESET_ONE, p.label))
+        },
+        // A control finished its change: one step now, and the canvas refines to the exact image
+        // at once (§3.1a).
+        onChangeFinished = { key -> edit.finish(labelOf(key)) },
+        // A − / + press let go: the run goes on until another control changes or the sheet flushes.
+        onNudgeFinished = { edit.settled() },
+        defaultOf = { p -> AdjustmentEffects.defaultValues(filter, c.color).raw(p.key) ?: p.defaultValue() },
     )
 }
 

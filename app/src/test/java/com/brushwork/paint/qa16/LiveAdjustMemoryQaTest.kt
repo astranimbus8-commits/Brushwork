@@ -10,7 +10,7 @@ import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.click
 import com.brushwork.paint.smoke.SmokeUi.settle
-import com.brushwork.paint.tools.mask.AdjustmentEdit
+import com.brushwork.paint.ui.common.FilterLabels19
 import com.brushwork.paint.ui.editor.chrome.ChromeHarness
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -91,7 +91,8 @@ class LiveAdjustMemoryQaTest {
                 click("Close", exact = true)
                 settle()
                 assertEquals("the sheet's one step", before + 1, live.steps())
-                assertEquals(AdjustmentEdit.LABEL, c.undoManager.undoLabel)
+                // v1.9 (R8): the released Exposure drag is its own step, named after its control.
+                assertEquals(String.format(FilterLabels19.CHANGE_STEP, "Exposure"), c.undoManager.undoLabel)
                 return liveFrames
             }
 

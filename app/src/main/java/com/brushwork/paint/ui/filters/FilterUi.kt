@@ -73,7 +73,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.PointerEvent
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.node.ModifierNodeElement
+import androidx.compose.ui.node.PointerInputModifierNode
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
@@ -82,6 +86,7 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.engine.EditTarget
@@ -263,7 +268,7 @@ fun FilterSessionPanel(session: FilterSession, modifier: Modifier = Modifier) {
         shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
         // No elevation shadow: it would show through the translucent panel as a dark smear.
         // Edge-to-edge window: keep text parameters above the keyboard.
-        modifier = modifier.fillMaxWidth().imePadding(),
+        modifier = modifier.fillMaxWidth().imePadding().historyTapGuard(session),
     ) {
         Column(Modifier.heightIn(max = maxHeight).navigationBarsPadding()) {
             PanelHeader(session)
@@ -295,6 +300,39 @@ fun FilterSessionPanel(session: FilterSession, modifier: Modifier = Modifier) {
     }
 }
 
+/**
+ * v1.9 (R8): tells [session] when a two- or three-finger history tap claims a touch in the panel
+ * ([FilterSession.heldByTap]). The editor's history taps consume a claimed gesture's events at
+ * the window root's Initial pass, before any control sees them, so a consumed change here is the
+ * claim; the first touch of a new gesture clears it. Only observes: it consumes nothing.
+ */
+private fun Modifier.historyTapGuard(session: FilterSession): Modifier = this then HistoryTapGuardElement(session)
+
+private data class HistoryTapGuardElement(val session: FilterSession) : ModifierNodeElement<HistoryTapGuardNode>() {
+    override fun create() = HistoryTapGuardNode(session)
+    override fun update(node: HistoryTapGuardNode) {
+        node.session = session
+    }
+}
+
+/** Synchronous and allocation-free: one look per Initial pass. */
+private class HistoryTapGuardNode(var session: FilterSession) : Modifier.Node(), PointerInputModifierNode {
+    override fun onPointerEvent(pointerEvent: PointerEvent, pass: PointerEventPass, bounds: IntSize) {
+        if (pass != PointerEventPass.Initial) return
+        val changes = pointerEvent.changes
+        var claimed = false
+        var newGesture = true
+        for (i in changes.indices) {
+            val c = changes[i]
+            if (c.isConsumed) claimed = true
+            if (c.previousPressed) newGesture = false
+        }
+        if (claimed) session.heldByTap = true else if (newGesture) session.heldByTap = false
+    }
+
+    override fun onCancelPointerInput() = Unit
+}
+
 @Composable
 private fun PanelHeader(session: FilterSession) {
     val controller = session.controller
@@ -322,7 +360,7 @@ private fun PanelHeader(session: FilterSession) {
         }
         RenderingIndicator(session.isRendering && !busy)
         IconButton(onClick = { session.reset() }, enabled = !busy) {
-            Icon(Icons.Filled.RestartAlt, contentDescription = "Reset to defaults")
+            Icon(Icons.Filled.RestartAlt, contentDescription = FilterSession.RESET_ALL)
         }
         CompareButton(session, enabled = !busy)
         FilledIconButton(

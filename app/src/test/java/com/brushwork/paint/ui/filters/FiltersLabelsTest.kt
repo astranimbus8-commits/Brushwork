@@ -2,6 +2,7 @@ package com.brushwork.paint.ui.filters
 
 import com.brushwork.paint.filters.Filter
 import com.brushwork.paint.filters.FilterParam
+import com.brushwork.paint.filters.art.CaBlend
 import com.brushwork.paint.filters.art.ChromaticAberrationMovingFilter
 import com.brushwork.paint.filters.art.ChromaticAberrationZoomingFilter
 import com.brushwork.paint.filters.art.FringeColors
@@ -89,8 +90,9 @@ class FiltersLabelsTest {
             assertEquals(f.name, mine.distinct(), mine)
         }
         assertEquals(FringeLabels18.STATIC_COLOR, GlitchFilter().params.single { it.key == GlitchFilter.STATIC_COLOR_KEY }.label)
-        // No v1.7 "Color order" left on the Chromatic aberration panels: the fringes replace it.
-        for (f in chromatic) assertTrue(f.name, f.params.none { it is FilterParam.Choice })
+        // No v1.7 "Color order" left on the Chromatic aberration panels: the fringes replace it (v1.9:
+        // "Blend mode" is their one Choice).
+        for (f in chromatic) assertTrue(f.name, f.params.none { it is FilterParam.Choice && !CaBlend.isModeChoice(it) })
     }
 
     @Test

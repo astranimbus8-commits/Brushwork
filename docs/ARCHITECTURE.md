@@ -1569,6 +1569,84 @@ object's field as v1.9 does.
 
 <!-- v19-A2 -->
 
+R8 and R10. Files: `filters/FilterSession.kt` (outside A7b's `apply` region),
+`filters/FilterSessionMath.kt`, `filters/art/CaBlend.kt` (new), `filters/art/ChromaticAberration.kt`,
+`ui/filters/**` (`FilterUi`, `FilterParamControls`, `ChoiceDropdown` (new), `FringeControl`, the
+curve and gradient editors), `ui/common/NumberControls.kt`, `tools/mask/AdjustmentEdit.kt`,
+`ui/mask/AdjustmentSheet.kt`. Labels: `FilterLabels19` (`RESET_ONE`, `CHANGE_STEP`,
+`SESSION_AT_START`); tag `V19Tags.FILTER_RESET_PREFIX` + the parameter key.
+
+**The session's steps.** `FilterSession.history: ToolHistory<FilterValues>` starts at the opening
+values (cap 100, I22). The session is `controller.inToolHistory` from `start()` until it closes,
+so the hotbar's Undo and Redo and the two- and three-finger taps walk its steps first
+(`HistoryLabels` reads "Undo: <control label>"). Labels live beside the history
+(`undoLabels`, `redoLabels`), trimmed with it. Nothing is persisted; ✓ records one document step
+exactly as in v1.8 and drops the session's steps; ✕ drops them too.
+- A step is a *finished* change: `commitStep(key)` from the control (a slider released, a typed
+  value, a chip, switch, dropdown row, colour, seed, curve point or gradient stop dragged, a point
+  dragged on the canvas or typed, a text field left or its dialog confirmed, a fringe preset or
+  swatch). `update(key, value)` alone is live. A change never finished (text typed without leaving
+  the field, a run of − / + presses) becomes its own step when another control changes, when the
+  panel is undone or redone, or before ✓ (`settle()`; `pendingParam()` names it, so Undo of a
+  pending change reads "Undo: <its label>"). Equal values never make a step
+  (`FilterSessionMath.sameValue(s)`: arrays by content, numbers by value).
+- At the opening state `undoStep()` returns false and the controller cancels the panel, as in v1.8;
+  landing there shows "Back at the start: Undo again closes the effect" once. A new step drops the
+  redo steps; Redo while a change is pending records it and redoes nothing. While the apply runs
+  (`isApplying`) `canUndo`, `canRedo` and the labels are off, so the labels read "Filter cancelled"
+  and "Finish the filter first": Undo then stops the apply and closes the panel, as in v1.8.
+- A history tap whose first finger landed in the panel (`EditorHistoryTaps`' light mark):
+  `historyTapGuard` sets `heldByTap` when the editor's root consumes the claimed gesture, so the
+  control's own end of that gesture (a slider's `onValueChangeFinished`, a − / + release) is not a
+  step; the mark puts the values back before the undo.
+- "Reset to defaults" is one step `RESET_ALL`; a control's reset (`resetParam`) is one step
+  "Reset <label>". `sessionDefault(p)` is the drawing colour for a drawing-colour parameter.
+
+**Reset icons.** Every control's label row ends with `ResetSlot` (`ResetValueButton`: 24 dp icon,
+40 dp target, `ResetGap` = 8 dp after the value, description "Reset <label>"), shown only while
+`ParamHost.isDefault(p)` is false (fringes compare as drawn, a v1.7 "order" included).
+`LabeledSlider(onReset, resetTag)` carries it for sliders; other callers pass nothing and are
+unchanged. The curve editor's own "Reset" button gave way to the label row's icon. A row that
+can hold the icon is always at least `MinTouchTarget` (40 dp) tall (`LabelRow`, the point row; the
+slider, switch, colour, seed, text and dropdown rows already are), so the icon showing or going
+never moves what is below: a curve point added at a touch's DOWN or a gradient stop dragged stays
+under the finger (A2 review; `Qa19FilterUndo` checks the fringe chips stay put).
+
+**Adjustment sheets.** `ParamHost` is shared: `adjustmentParamHost` (`AdjustmentSheet.kt`) drives the
+Adjust sheet's controls through `AdjustmentEdit`. `changing(label)` marks the step's name (a pending
+change of another control is pushed first), `finish(label)` pushes "Change <label>" at once (so the
+next Undo's toast names it; a deferred push would be named after the previous step), and `record`
+pushes a reset ("Reset <label>"), a new effect or "Reset the effect" (v1.8's "Edit adjustment").
+A run of − / + presses stays one pending step until another control, Close, an Undo or a reset
+(`resetParam`, `resetAmount`; that control's own too) flushes it.
+Amount (the layer's opacity) is a control like the others (`AMOUNT_KEY`).
+
+**CA blend (R10).** Both Chromatic aberration filters end with `CaBlend.modeParam` ("Blend mode", the
+17 `LayerBlendMode` labels by reference, default Normal) and `CaBlend.opacityParam` ("Opacity",
+0-100 %, default 100). `FilterParamControl` shows a `Choice` that `CaBlend.isModeChoice` accepts as
+`ChoiceDropdown` (one 44 dp row; the modes are menu rows shown only while it is open). `apply` is
+`CaBlend.over(src, aberrate(src), values)`: Normal at 100 % (also values without the two keys)
+returns the aberrated picture untouched, so v1.8's output is byte-identical (`FringeGoldenTest`);
+otherwise one pass per pixel, the mode resolved once per pass. The twelve modes `DrawBlend` has are
+`DrawBlend.composite` itself; Exclusion and the W3C non-separable modes (Lum, ClipColor, SetLum,
+Sat, SetSat as one scale) are `CaBlend`'s own, in non-premultiplied floats, source-over where the
+backdrop is. No platform blend mode (fact V8). Measured on the JVM proxy (`CaBlendPerfTest`,
+192 x 144, one thread): the blend pass about 0.23 x the CA pass with Multiply (budget 0.4) and
+about 0.30 x with Color (0.6); the whole filter about 1.3 x v1.8 with Multiply at 60 % (1.4) and
+about 1.5 x with Color (1.6); a checkpoint under 0.001 ms (0.1). The non-separable modes take
+channel minima and maxima with `Math.min` / `Math.max` (branch-free; one instruction on ARM64):
+with comparisons, the random channels of the test picture mispredicted and the Color pass cost
+0.56 x.
+
+**Tests.** `v19/a2/`: `FilterSessionHistoryTest`, `AllFiltersUndoTest` (every registered filter, every
+parameter; an exhaustive `when` over `FilterParam`), `FilterResetPerControlTest`,
+`AdjustmentPerChangeStepTest`, `ChromaticAberrationBlendTest` (an independent double-precision W3C
+reference, within 1/255), `FilterPanelLabelsTest` (a reset meets another text only where its label
+already did), `CaBlendPerfTest` (Timing); `qa19/Qa19FilterUndoUiTest`
+(392 dp) and `Qa19FilterUndoNarrowUiTest` (360 dp), at font scales 1, 1.3 and 2.0, through
+`Qa19FilterUndo` (touches found by label or tag; the overflow check skips only v1.8 texts that end
+in "…" on purpose: the panel title, its adjustment note, the Masks strip chips, the slider rows).
+
 <!-- /v19-A2 -->
 
 ### Several objects per layer and merges (A4)

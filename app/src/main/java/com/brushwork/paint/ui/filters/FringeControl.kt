@@ -64,12 +64,12 @@ internal fun FringeControl(host: ParamHost, p: FilterParam.Fringes, enabled: Boo
     val chipColors = FilterChipDefaults.filterChipColors(selectedContainerColor = BrushworkColors.AccentDim, selectedLabelColor = Color.White)
     fun store(n: IntArray) {
         host.update(p.key, n)
-        host.onChangeFinished()
+        host.onChangeFinished(p.key)
     }
     fun set(i: Int, c: Int) = store(FringeColors.resolve(host.values, p).also { it[i] = c })
 
     Column(Modifier.fillMaxWidth()) {
-        Text(p.label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(bottom = 4.dp))
+        LabelRow(host, p, enabled)
         if (p.presets.isNotEmpty()) {
             // Scroll only when the width is bounded (as ChoiceChips: a nested horizontal scroll crashes).
             BoxWithConstraints(Modifier.fillMaxWidth()) {

@@ -27,7 +27,10 @@ import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.Selection
 import com.brushwork.paint.segmentation.SegmentationService
+import com.brushwork.paint.tools.InToolHistoryOwner
+import com.brushwork.paint.tools.ToolHistory
 import com.brushwork.paint.tools.ToolPoint
+import com.brushwork.paint.ui.common.FilterLabels19
 import com.brushwork.paint.ui.common.StabilityLabels19
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
@@ -56,9 +59,12 @@ import kotlin.math.hypot
  * Apply: runs the filter at full resolution in the background, masks the result by the
  * selection (and alpha lock / mask rules), writes only the changed pixels and records undo.
  *
+ * v1.9 (R8): while open, the session is the controller's [EditorController.inToolHistory]: Undo
+ * and Redo walk its own steps ([history]) first; at the bottom v1.8's Undo cancels it.
+ *
  * All public members must be called on the main thread.
  */
-class FilterSession(val controller: EditorController, val filter: Filter) {
+class FilterSession(val controller: EditorController, val filter: Filter) : InToolHistoryOwner {
 
     /** The layer being filtered (fixed for the session, even if another layer becomes active). */
     val layer: Layer = controller.activeLayer
@@ -116,6 +122,27 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
     /** Preview width / full width (1 for small canvases). */
     var previewScale: Float = 1f
         private set
+
+    // ------------------------------------------------------------------ v1.9 steps (R8)
+
+    /**
+     * v1.9 (R8, I22): the panel's own steps. Its bottom is the opening state ([start]); each
+     * finished change of a control and each reset adds one ([record]). The states are [values]
+     * instances, which are never mutated. Dropped with the session: ✓ records one document step,
+     * as in v1.8. At most 100 steps can be taken back.
+     */
+    val history: ToolHistory<FilterValues> = ToolHistory(values)
+
+    /** The label of each step [history] can take back, oldest first (as many as its depth). */
+    private val undoLabels = ArrayDeque<String>()
+
+    /** The labels of the steps [history] can bring back, the next redo last. */
+    private val redoLabels = ArrayDeque<String>()
+
+    /** [pendingParam]'s answer for the pair of states [pendingValues] and [pendingBase]. */
+    private var pendingValues: FilterValues? = null
+    private var pendingBase: FilterValues? = null
+    private var pendingAnswer: FilterParam? = null
 
     // ------------------------------------------------------------------ preview internals
 
@@ -225,6 +252,11 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
             }
             return
         }
+        // v1.9 (R8): the opening state is the bottom of the panel's steps; Undo and Redo walk them.
+        history.reset(values)
+        undoLabels.clear()
+        redoLabels.clear()
+        controller.inToolHistory = this
         runCatching { FilterRecents.record(controller.appContext, filter.id) }
         analyzeSourceAsync(firstTime = true)
         if (filter.livePreview) requestPreview(0L)
@@ -280,6 +312,8 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
         clearOverride()
         if (hasPreview) controller.invalidateDoc(shownRegion)
         if (controller.filterSession === this) controller.filterSession = null
+        // v1.9 (R8): the panel's steps go with it.
+        if (controller.inToolHistory === this) controller.inToolHistory = null
         previewBitmap?.recycle()
         previewBitmap = null
         previewSrc = null
@@ -289,28 +323,63 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
 
     // ------------------------------------------------------------------ parameters
 
-    /** Sets one parameter value and schedules a preview. */
+    /**
+     * Sets one parameter value and schedules a preview. The change is live: it becomes a step of
+     * [history] when its control finishes it ([commitStep]). v1.9: a change of another control
+     * that was never finished (text typed without leaving its field, a run of − / + taps) becomes
+     * its own step first, so each step names one control.
+     */
     fun update(key: String, value: Any) {
         if (isClosed || isApplying) return
+        if (!heldByTap) FilterSessionMath.firstDifference(filter.params, values, history.current, except = key)?.let { record(it.label) }
         values = values.copy().set(key, value)
         onValuesChanged()
     }
 
-    /** Restores every parameter to its default (drawing-color parameters to the current drawing color). */
-    fun reset() {
-        if (isClosed || isApplying) return
-        values = sessionDefaults()
-        onValuesChanged()
+    /**
+     * v1.9 (R8 (a)): a control finished its change of [key] (a slider released, a value typed, a
+     * chip, switch, colour or seed chosen, a curve point, gradient stop or point dragged, a text
+     * field left, a fringe preset or swatch chosen): the values become one step, labelled with
+     * the control's label. Nothing when they equal the last step. Ignored while a history tap
+     * holds the panel ([heldByTap]).
+     */
+    fun commitStep(key: String) {
+        if (isClosed || isApplying || heldByTap) return
+        val p = filter.params.firstOrNull { it.key == key }
+        if (p != null) record(p.label) else settle()
     }
 
-    /** Restores one parameter to its default. */
+    /**
+     * v1.9 (R8): a two- or three-finger history tap claimed a touch that started in the panel
+     * (set by the panel, cleared when the tap undoes or redoes and when the next touch starts).
+     * The controls then end what the first finger started (a slider's drag stops, a − / + is
+     * released) and the tap puts the values back before it undoes: those ends are not steps.
+     */
+    internal var heldByTap = false
+
+    /**
+     * Restores every parameter to its default (drawing-color parameters to the current drawing
+     * color). v1.9 (R8): one step, [RESET_ALL].
+     */
+    fun reset() {
+        if (isClosed || isApplying) return
+        settle()
+        values = sessionDefaults()
+        onValuesChanged()
+        record(RESET_ALL)
+    }
+
+    /** Restores one parameter to its default. v1.9 (R8): one step, "Reset <label>" ([FilterLabels19.RESET_ONE]). */
     fun resetParam(key: String) {
         val p = filter.params.firstOrNull { it.key == key } ?: return
+        if (isClosed || isApplying) return
+        settle()
         update(key, sessionDefault(p))
+        record(String.format(FilterLabels19.RESET_ONE, p.label))
     }
 
     /** Default of [p] in this session: [FilterParam.Color.useDrawingColor] means the current drawing color. */
-    private fun sessionDefault(p: FilterParam): Any =
+    internal fun sessionDefault(p: FilterParam): Any =
         if (p is FilterParam.Color && p.useDrawingColor) controller.color else p.defaultValue()
 
     /** The filter's defaults with drawing-color parameters set to the current drawing color. */
@@ -330,6 +399,104 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
         previewStale = true
         if (pointParams.isNotEmpty()) controller.invalidateOverlay()
         if (filter.livePreview) requestPreview(debounceMs)
+    }
+
+    // ------------------------------------------------------------------ v1.9 steps (R8)
+
+    // While ✓ applies, the steps wait: Undo stops the apply and closes the panel as in v1.8, so the
+    // labels say so ("Filter cancelled", "Finish the filter first"), not a step's name.
+    override val canUndo: Boolean get() = !isClosed && !isApplying && (history.canUndo || pendingParam() != null)
+
+    override val canRedo: Boolean get() = !isClosed && !isApplying && history.canRedo && pendingParam() == null
+
+    /** The control whose step Undo takes back: a change not recorded yet first ([pendingParam]). */
+    override val undoLabel: String?
+        get() {
+            if (isClosed || isApplying) return null
+            pendingParam()?.let { return it.label }
+            return if (history.depth > 0) undoLabels.lastOrNull() else null
+        }
+
+    override val redoLabel: String? get() = if (canRedo) redoLabels.lastOrNull() else null
+
+    /**
+     * Takes back the panel's last step: a change not recorded yet becomes its step first, so Undo
+     * takes it back. False at the bottom (the opening state): the controller then cancels the
+     * session, as v1.8's Undo did. Landing on the bottom shows [FilterLabels19.SESSION_AT_START].
+     */
+    override fun undoStep(): Boolean {
+        if (isClosed || isApplying) return false
+        heldByTap = false
+        // A point dragged on the canvas when a two-finger tap lands there goes back first.
+        if (draggingPoint != null) onPointerCancel()
+        settle()
+        val state = history.undo() ?: return false
+        undoLabels.removeLastOrNull()?.let { redoLabels.addLast(it) }
+        show(state)
+        if (!history.canUndo) controller.toast(FilterLabels19.SESSION_AT_START)
+        return true
+    }
+
+    /**
+     * Brings back the step the last [undoStep] took back. False at the top, or when a change not
+     * recorded yet is pending: that change is a new step, which drops the redo steps.
+     */
+    override fun redoStep(): Boolean {
+        if (isClosed || isApplying) return false
+        heldByTap = false
+        if (draggingPoint != null) onPointerCancel()
+        if (pendingParam() != null) {
+            settle()
+            return false
+        }
+        val state = history.redo() ?: return false
+        redoLabels.removeLastOrNull()?.let { undoLabels.addLast(it) }
+        show(state)
+        return true
+    }
+
+    /**
+     * Records [values] as one step labelled [label] ("Undo: <label>"), unless they equal the
+     * current step ([FilterSessionMath.sameValues]). The redo steps are dropped; past the cap the
+     * oldest step and its label go.
+     */
+    private fun record(label: String) {
+        val v = values
+        if (FilterSessionMath.sameValues(v, history.current)) return
+        history.record(v)
+        undoLabels.addLast(label)
+        while (undoLabels.size > history.depth) undoLabels.removeFirst()
+        redoLabels.clear()
+    }
+
+    /** A change not recorded yet ([pendingParam]) becomes its step, labelled with its control. */
+    private fun settle() {
+        pendingParam()?.let { record(it.label) }
+    }
+
+    /**
+     * The first parameter whose value differs from [history]'s current step: a change that is not
+     * a step yet. Null when there is none. Cached per pair of states (both are Compose state, so
+     * the chrome reading [canUndo] recomposes when either changes).
+     */
+    private fun pendingParam(): FilterParam? {
+        val v = values
+        val base = history.current
+        if (v === base) return null
+        if (v !== pendingValues || base !== pendingBase) {
+            pendingAnswer = FilterSessionMath.firstDifference(filter.params, v, base)
+            pendingValues = v
+            pendingBase = base
+        }
+        return pendingAnswer
+    }
+
+    /** Shows a step's [state] (Undo, Redo): the preview renders at once, without the debounce (R8 (c)). */
+    private fun show(state: FilterValues) {
+        values = state
+        previewStale = true
+        if (pointParams.isNotEmpty()) controller.invalidateOverlay()
+        if (filter.livePreview) requestPreview(0L)
     }
 
     // ------------------------------------------------------------------ compare
@@ -691,6 +858,7 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
     fun onPointerDown(p: ToolPoint): Boolean {
         if (isClosed || isApplying || pointParams.isEmpty()) return false
         if (draggingPoint != null) onPointerCancel() // the previous gesture never ended
+        heldByTap = false
         val t = controller.viewTransform
         val finger = t.docToScreen(p.x, p.y)
         var best = pointParams.first()
@@ -715,12 +883,14 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
         if (draggingPoint != null) movePointTo(p)
     }
 
+    /** The drag ended: v1.9 (R8), the point's new place is one step. */
     fun onPointerUp(p: ToolPoint) {
-        if (draggingPoint == null) return
+        val key = draggingPoint ?: return
         movePointTo(p)
         draggingPoint = null
         dragStartValue = null
         controller.invalidateOverlay()
+        commitStep(key)
     }
 
     /**
@@ -777,10 +947,13 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
         }
     }
 
-    private companion object {
+    companion object {
+        /** v1.9 (R8): the header's reset button, and the label of the step it records ("Undo: Reset to defaults"). */
+        const val RESET_ALL = "Reset to defaults"
+
         /** A render slower than this is restarted (not queued) when parameters change. */
-        const val SLOW_RENDER_MS = 250L
-        const val HANDLE_GRAB_DP = 36f
-        const val ACCENT = 0xFF4DA3FF.toInt()
+        private const val SLOW_RENDER_MS = 250L
+        private const val HANDLE_GRAB_DP = 36f
+        private const val ACCENT = 0xFF4DA3FF.toInt()
     }
 }

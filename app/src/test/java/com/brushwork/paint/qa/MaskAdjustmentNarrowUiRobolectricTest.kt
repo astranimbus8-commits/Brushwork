@@ -12,6 +12,7 @@ import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
 import com.brushwork.paint.ui.color.RobolectricUi
+import com.brushwork.paint.ui.common.FilterLabels19
 import com.brushwork.paint.ui.common.LocalIncrements
 import com.brushwork.paint.ui.mask.FAST_ADJUST_PREVIEW_LABEL
 import com.brushwork.paint.ui.theme.BrushworkTheme
@@ -101,7 +102,8 @@ class MaskAdjustmentNarrowUiRobolectricTest {
         assertTrue("the slider shows +0.25 EV: ${SmokeUi.shown()}", SmokeUi.shown().any { "0.25" in it && "EV" in it })
         SmokeUi.click("Close", exact = true)
         assertEquals("I2: one step for the press", before + 1, c.undoManager.undoCount)
-        assertEquals("Edit adjustment", c.undoManager.undoLabel)
+        // v1.9 (R8): a finished change in the sheet is its own step, named after its control.
+        assertEquals(String.format(FilterLabels19.CHANGE_STEP, "Exposure"), c.undoManager.undoLabel)
         c.liveAdjust.release()
         Smoke.assertQuiet(c, "mask adjustment at 360 dp")
     }

@@ -57,7 +57,9 @@ class FringeLegacyOrderTest {
             assertEquals(FringeColors.LEGACY_ORDER_KEY, p.legacyOrderKey)
             assertEquals(FringeColors.PRESETS, p.presets)
             assertArrayEquals(intArrayOf(R, G, B), p.default)
-            assertEquals("no Choice param left", 0, f.params.count { it is FilterParam.Choice })
+            // v1.9 (R10): "Blend mode" is a Choice; the order's Choice stays gone.
+            assertEquals("no order Choice left", 0, f.params.count { it is FilterParam.Choice && !CaBlend.isModeChoice(it) })
+            assertEquals("no param under the legacy key", 0, f.params.count { it.key == FringeColors.LEGACY_ORDER_KEY })
         }
     }
 

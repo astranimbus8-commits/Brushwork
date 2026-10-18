@@ -51,8 +51,8 @@ class MasksLivePhoneQaTest {
             flow.brushStroke()
             flow.layerOpacityDrag()
             val history = flow.undoRedo(
-                listOf("Opacity", "Mask: brush", "Move mask", "Edit mask", "Mask: radial", "Edit adjustment"),
-                viaSession = setOf("Opacity", "Move mask", "Edit mask", "Mask: radial", "Edit adjustment"),
+                listOf("Opacity", "Mask: brush", "Move mask", "Edit mask", "Mask: radial", MasksLiveFlow.EXPOSURE_STEP),
+                viaSession = setOf("Opacity", "Move mask", "Edit mask", "Mask: radial", MasksLiveFlow.EXPOSURE_STEP),
             )
             println("[qa16] 1080x2408 canvas ${live.width} x ${live.height} at zoom ${s.c.viewTransform.zoom}")
             flow.costs.forEach { println("[qa16] 1080x2408 $it") }

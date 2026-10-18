@@ -76,7 +76,8 @@ class MaskToolOptionsUiRobolectricTest {
         SmokeUi.click("Close", exact = true)
         assertFalse(tool.componentsOpen)
 
-        // Adjust: another effect shows at once; one step when the sheet closes.
+        // Adjust: another effect shows at once. v1.9 (R8): a finished change is its step at once
+        // (a new effect keeps v1.8's name); closing the sheet adds none.
         SmokeUi.click("Adjust…", exact = true)
         assertTrue(SmokeUi.has("Adjust: Tone 1", exact = true))
         assertTrue("Tone's sliders", SmokeUi.has("Exposure", exact = true))
@@ -85,7 +86,7 @@ class MaskToolOptionsUiRobolectricTest {
         SmokeUi.click("Invert Color", exact = true)
         assertEquals("adjust.invert", adj.adjustment!!.filterId)
         assertEquals("the default name follows the effect", "Invert Color 1", adj.name)
-        assertEquals("live, no step yet", before, c.undoManager.undoCount)
+        assertEquals("the pick is one step", before + 1, c.undoManager.undoCount)
         SmokeUi.click("Close", exact = true)
         assertEquals(before + 1, c.undoManager.undoCount)
         assertEquals("Edit adjustment", c.undoManager.undoLabel)

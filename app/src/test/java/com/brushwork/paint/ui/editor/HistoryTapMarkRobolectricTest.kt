@@ -32,6 +32,8 @@ import org.robolectric.RuntimeEnvironment
  *   parameters on the first finger's DOWN, and a `UiMark` does not hold an open filter. The light
  *   mark keeps the parameters the filter had: a three-finger redo leaves the filter open as it was
  *   before the gesture; a two-finger undo then cancels it, as the hotbar's Undo does.
+ *   v1.9 (R8): a two-finger undo takes back the panel's last step, as the hotbar's Undo now does;
+ *   the filter is cancelled only by an undo at the start of its history.
  */
 @RunWith(RobolectricTestRunner::class)
 class HistoryTapMarkRobolectricTest {
@@ -120,14 +122,25 @@ class HistoryTapMarkRobolectricTest {
         session.update("contrast", 10f)
         assertEquals(10f, session.values.float("contrast"), 0f)
 
-        // ------------------------------------------------ two fingers: undo cancels the filter
+        // ------------------------------------------------ two fingers: undo takes back the panel's last step
+        // v1.9 (R8): the open filter has its own history; Undo walks it and cancels only at the start.
         taps.openMark()
         session.update("contrast", 70f)
         taps.claimMark()
         taps.historyTap(redo = false)
         taps.releaseMark()
+        assertEquals("Undo: Contrast", feedback)
+        assertSame("the filter stays open", session, c.filterSession)
+        assertEquals("the contrast change taken back", 0f, session.values.float("contrast"), 0f)
+        assertEquals("the step before stays", 20f, session.values.float("brightness"), 0f)
+
+        // ------------------------------------------------ the next undo reaches the start, the last one cancels
+        taps.openMark(); taps.claimMark(); taps.historyTap(redo = false); taps.releaseMark()
+        assertEquals("Undo: Brightness", feedback)
+        assertSame(session, c.filterSession)
+        assertEquals(0f, session.values.float("brightness"), 0f)
+        taps.openMark(); taps.claimMark(); taps.historyTap(redo = false); taps.releaseMark()
         assertEquals("Filter cancelled", feedback)
         assertNull("the filter closed", c.filterSession)
-        assertEquals("closed with the values it had before the gesture", 10f, session.values.float("contrast"), 0f)
     }
 }
