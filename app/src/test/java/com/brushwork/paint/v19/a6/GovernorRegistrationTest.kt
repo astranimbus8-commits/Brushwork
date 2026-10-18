@@ -45,7 +45,8 @@ import org.robolectric.RuntimeEnvironment
  * proxies (priority 10) are entries of the [MemoryGovernor] registry: their bytes are what they
  * hold, a pressure above NORMAL frees them (the canvas then draws the same pixels again), and the
  * proxies' entry lives only while they do. The default policy trims nothing (v1.8, I8). The
- * entries hold their owners weakly. The "Fast adjustment preview" switch reads R13's note.
+ * entries hold their owners weakly; `EditorController.dispose` closes the display tiles' entry
+ * (the lead, at A6's merge). The "Fast adjustment preview" switch reads R13's note.
  * Step 9 (P3): a stroke's below-cache (priority 20) while it holds tiles.
  */
 @RunWith(RobolectricTestRunner::class)
@@ -132,6 +133,9 @@ class GovernorRegistrationTest {
         made.remove(c)
         c.dispose()
         assertEquals("a disposed editor holds nothing", 0L, entry.bytes())
+        // v1.9 (A6 merge, the lead): dispose() closes the entry; it does not wait for the editor to be collected.
+        assertTrue("dispose closed the entry", MemoryGovernor.entries().none { it === entry })
+        assertTrue(mine().none { it.name == "display tiles" })
     }
 
     @Test

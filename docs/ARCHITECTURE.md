@@ -1942,7 +1942,7 @@ move previews at once at v1.8's scale and the release renders at once (I8).
 - "display tiles", priority 0, one per editor (region `v19-A6 invalidate`): the bytes of the tile
   bitmaps held (`DisplayTiles.heldBytes`). At any pressure above NORMAL its trim frees them all
   (`DisplayTiles.freeBitmaps`) and invalidates the canvas, which renders them again on its next
-  frame; NORMAL frees nothing.
+  frame; NORMAL frees nothing. `EditorController.dispose` closes it.
 - "live proxies", priority 10, while a `LiveAdjust` holds proxies (registered with its
   ComponentCallbacks2, closed with them): `LiveAdjust.proxyBytes`. Above NORMAL, proxies kept
   after a session (2 s) are freed; at LOW or worse a running session ends (its next frame renders
@@ -2032,6 +2032,14 @@ timing a laid-out `CanvasView`): `LiftPerfTest` (the brush lift and the raster E
 frame within 1.5x A6's checkpoint), `MaskFramePerfTest` (the mask tool's work per frame, live
 at most 0.6x v1.8's, for Linear, Radial and Brush; 512 px everywhere, A4 at fit locally) and
 `StrokeBelowBench` (local only: the composite and the frame with the below-cache on and off).
+
+**At the merge (the lead).** `EditorController.dispose` closes the "display tiles" entry
+(`GovernorRegistrationTest`); the weak hold stays for an editor that is never disposed. P4
+(`StrokePreview.SHIPPED`), P3 (`StrokeBelowCache.FOR_STROKES`) and R11a (`FOR_ERASER`) stay off
+until the device A/B of Gate 3 (D5 and D6, D8, D10: p95 frame time, at least 60 samples per side,
+a release-like APK pair); the JVM numbers above cannot decide them. `WeakRegistration` stays in
+`engine/live` (A7b may use it from there). `LayerToolRules` still allows the watercolor brush on
+an adjustment layer's mask, whose lift redraws its tiles (above).
 
 <!-- /v19-A6 -->
 
