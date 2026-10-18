@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Matrix
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.Rect
 import android.os.Looper
 import com.brushwork.paint.AppSettings
@@ -22,10 +23,12 @@ import com.brushwork.paint.vector.VStrokeStyle
 import com.brushwork.paint.vector.VSubpath
 import com.brushwork.paint.vector.VectorContent
 import com.brushwork.paint.vector.draw.DoomPreview
+import com.brushwork.paint.vector.draw.EraseCut
 import com.brushwork.paint.vector.draw.VectorDrawState
 import com.brushwork.paint.vector.draw.VectorEraseMode
 import com.brushwork.paint.vector.draw.VectorEraserModes
 import com.brushwork.paint.vector.draw.VectorEraserRecorder
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -40,6 +43,7 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -92,8 +96,8 @@ class CrossMemoryEraseCutTimeoutTest {
 
     private fun pixels(b: Bitmap): IntArray = IntArray(w * h).also { b.getPixels(it, 0, w, 0, 0, w, h) }
 
-    private fun box(l: Float, t: Float, r: Float, b: Float) = VPath(
-        0, subpaths = listOf(VSubpath(listOf(VAnchor(l, t, true), VAnchor(r, t, true), VAnchor(r, b, true), VAnchor(l, b, true)), closed = true)),
+    private fun box(l: Float, t: Float, r: Float, b: Float, id: Long = 0) = VPath(
+        id, subpaths = listOf(VSubpath(listOf(VAnchor(l, t, true), VAnchor(r, t, true), VAnchor(r, b, true), VAnchor(l, b, true)), closed = true)),
         fill = VPaint.Solid(blue), stroke = VStrokeStyle(color = 0xFF802000.toInt(), width = 3f),
     )
 
@@ -216,5 +220,26 @@ class CrossMemoryEraseCutTimeoutTest {
         assertEquals(3, c.deferredWaitTimeouts)
         assertNull(c.renderOverride)
         assertNull(c.inToolHistory)
+    }
+
+    /**
+     * Review (G2): a cut cancelled while it runs on its worker (its wait hit the limit) stops at its
+     * next object instead of running on to the end, as the vector and array renders stop: the cut
+     * asks the background job's state ([EraseCut.cutAll]'s `active`) before each object.
+     */
+    @Test
+    fun aCancelledCutStopsAtItsNextObject() {
+        val boxes = (0 until 6).map { k -> box(10f + 45f * k, 60f, 45f + 45f * k, 140f, id = k + 1L) }
+        val band = Path().apply { addRect(0f, 90f, w.toFloat(), 110f, Path.Direction.CW) }
+        val all = EraseCut.cutAll(boxes, band)
+        assertEquals("not cancelled: every box is cut", (1L..6L).toSet(), all.pieces.keys)
+        assertTrue("in two", all.pieces.values.all { it.size == 2 })
+        var asked = 0
+        try {
+            EraseCut.cutAll(boxes, band) { ++asked <= 2 }
+            fail("a cancelled cut stops")
+        } catch (e: CancellationException) {
+            assertEquals("asked before each object, stopped before the third", 3, asked)
+        }
     }
 }

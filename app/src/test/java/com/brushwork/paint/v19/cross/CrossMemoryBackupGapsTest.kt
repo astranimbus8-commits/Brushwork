@@ -143,7 +143,8 @@ class CrossMemoryBackupGapsTest {
         }
 
         // An open editor; the settings change in it (no save: the backup keeps the ones above).
-        val editor = EditorPrefs(AppSettings(app))
+        var redraws = 0
+        val editor = EditorPrefs(AppSettings(app)) { redraws++ }
         assertTrue(editor.leftHanded)
         editor.twoFingerUndo = true
         editor.threeFingerRedo = true
@@ -154,6 +155,11 @@ class CrossMemoryBackupGapsTest {
         editor.safeCompositing = false
         AppSettings(app).newCanvasCustomColor = 0xFFC03020.toInt()
         assertFalse(AdjustmentStage.safeCompositing)
+        // (G2 review) the editor's own switch is no followed change: it redraws by itself.
+        val redrawsBefore = redraws
+        editor.safeCompositing = true
+        editor.safeCompositing = false
+        assertEquals(redrawsBefore, redraws)
 
         // (b) The settings alone come back (no artwork chosen), off the main thread as from the
         // Backup section (its coroutine; the main thread runs meanwhile).
@@ -170,6 +176,7 @@ class CrossMemoryBackupGapsTest {
         assertFalse(editor.longPressEyedropper)
         assertEquals(120, editor.autosaveSeconds)
         assertTrue("the compositor's switch", editor.safeCompositing && AdjustmentStage.safeCompositing)
+        assertEquals("(G2 review) and the canvas is redrawn for it, once", redrawsBefore + 1, redraws)
         assertEquals("(c) restored with the settings", cyan, AppSettings(app).newCanvasCustomColor)
         assertTrue(app.getSharedPreferences(BackupSettings.SETTINGS_PREFS, Context.MODE_PRIVATE).contains("newCanvas.customColor"))
         assertEquals("the artwork untouched", artworkFiles, BackupKit.local(id).listFiles().orEmpty().associate { it.name to it.readBytes().toList() })
@@ -179,5 +186,6 @@ class CrossMemoryBackupGapsTest {
         shadowOf(Looper.getMainLooper()).idle()
         assertFalse(editor.leftHanded)
         assertFalse(AppSettings(app).leftHanded)
+        assertEquals("no redraw for another setting", redrawsBefore + 1, redraws)
     }
 }

@@ -64,6 +64,9 @@ class NoRunBlockingOnMainTest {
         assertTrue(File(root, "vector/VectorLayers.kt").readText().contains("c.awaitDeferredJob(job)"))
         assertTrue(File(root, "array/ArrayRenders.kt").readText().contains("c.awaitDeferredJob(job)"))
         assertTrue(File(root, "vector/draw/EraseLanding.kt").readText().contains("c.awaitDeferredJob(job)"))
+        // (G2 review) and the cut a timed-out wait cancels stops, as the renders' workers do
+        // (`CrossMemoryEraseCutTimeoutTest.aCancelledCutStopsAtItsNextObject`).
+        assertTrue(File(root, "vector/draw/EraseLanding.kt").readText().contains("EraseCut.cutAll(targets, region) { isActive }"))
     }
 
     @Test

@@ -51,7 +51,8 @@ internal interface EraseFootprint {
  * waited for good before). When the cut is not done by then it is cancelled ([timedOut]): the
  * layer keeps its data and pixels, no step is recorded, and the editor says "… took too long and
  * was cancelled"; or, when it must land (`EditorController.mustLandDeferredWork`: closing,
- * leaving, an export...), it is cut again here at once, as one step. While a cut is pending,
+ * leaving, an export...), it is cut again here at once, as one step. A cancelled cut stops at its
+ * next object ([EraseCut.cutAll]'s `active`), as the renders' workers do. While a cut is pending,
  * Undo and Redo reach the editor's wait guard ([VectorDrawState.hasPendingCut]): an Undo whose
  * wait cancelled the cut is that Undo.
  *
@@ -192,7 +193,8 @@ internal class EraseLanding(
     }
 
     private fun cutInBackground(p: Cutting, targets: List<VObject>, region: Path) {
-        val job = c.scope.async(state.cutDispatcher ?: Dispatchers.Default) { PerfTrace.span(PerfTrace.CUT) { EraseCut.cutAll(targets, region) } }
+        // (Cancelled, [timedOut], it stops at its next object: G2.)
+        val job = c.scope.async(state.cutDispatcher ?: Dispatchers.Default) { PerfTrace.span(PerfTrace.CUT) { EraseCut.cutAll(targets, region) { isActive } } }
         p.job = job
         c.addDeferredStep(p)
         state.cutsPending++
