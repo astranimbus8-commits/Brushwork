@@ -522,9 +522,9 @@ by hand outside `engine/`) and rule L (no v1.8 label retyped as a literal outsid
       shows again; the "More options" menu still closes on an outside tap; a relaunch shows the
       row from the start, the first fit and "Fit to screen" leave room for it, and opening or
       closing it never moves the canvas. `Qa19StickyRowsNarrowUiTest` runs the canvas touches at
-      360 dp at font scales 1, 1.3 and 2.0, with no text overflow in the open row except the Shape
-      strip's angle cell (`ShapeStripItems.ANGLE_LABEL`, area A9's; `StripFontScaleTest` checks it,
-      I27).
+      360 dp at font scales 1, 1.3 and 2.0, with no text overflow in the open row (the Shape
+      strip's angle cell `ShapeStripItems.ANGLE_LABEL` was left out until A9 fitted the Shape cells
+      at 2.0, I27).
     - `Smoke.controller` clears the `UiPrefs` file, so each test's editors start with no
       remembered row (otherwise a row one editor opened shows in the next).
 - **The vector object bar (`ui/vector/VectorObjectBar.kt`, H).**
