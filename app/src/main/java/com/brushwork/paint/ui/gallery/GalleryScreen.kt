@@ -80,7 +80,6 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -107,7 +106,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
-import com.brushwork.paint.diagnostics.ErrorReporter
+import com.brushwork.paint.diagnostics.rememberSupervisedScope
 import com.brushwork.paint.storage.ExportFormat
 import com.brushwork.paint.storage.ProjectInfo
 import com.brushwork.paint.storage.ProjectRepository
@@ -135,7 +134,7 @@ private enum class ProjectAction(val label: String, val icon: ImageVector) {
 @Composable
 fun GalleryScreen(repository: ProjectRepository, onOpenProject: (id: String) -> Unit) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope { ErrorReporter.handler }
+    val scope = rememberSupervisedScope()
     val snackbar = remember { SnackbarHostState() }
 
     val changes by repository.changes.collectAsState()

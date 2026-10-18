@@ -9,6 +9,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.test.core.app.ApplicationProvider
 import com.brushwork.paint.diagnostics.CrashLog
 import com.brushwork.paint.diagnostics.ErrorReporter
+import com.brushwork.paint.diagnostics.rememberSupervisedScope
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.ui.common.StabilityLabels19
 import kotlinx.coroutines.CoroutineScope
@@ -44,14 +45,17 @@ import java.util.concurrent.atomic.AtomicReference
  * v1.9 A7a review (design 2.4.13 and 3.2 A7a, R9): a release build goes on after an error only
  * where its scope survives it.
  * - A scope that is no supervisor is ended by its job's error before the handler sees it (and so
- *   is the scope above it). Every composable's `rememberCoroutineScope` is such a scope, a plain
- *   child of the window's Recomposer: going on there would leave a screen that never draws or
- *   takes a touch again, so even a release build hands the error on (the app stops with a report,
- *   v1.8's outcome). Shown with a real composition: its Recomposer shuts down, also when the job
- *   throws as it unwinds after the composable has left.
+ *   is the scope above it). A plain `rememberCoroutineScope` is such a scope, a plain child of the
+ *   window's Recomposer: going on there would leave a screen that never draws or takes a touch
+ *   again, so even a release build hands the error on (the app stops with a report, v1.8's
+ *   outcome). Shown with a real composition: its Recomposer shuts down, also when the job throws
+ *   as it unwinds after the composable has left.
  * - A supervisor scope (the app, editor and font scopes) stays: its job's error is kept, said and
  *   survived, a nested job's too; and a supervisor scope closed by its owner (the editor closing)
  *   is never ended by a job that throws as it unwinds: that error is kept and said too.
+ * - Gate 2: the composables' scope, [rememberSupervisedScope], is such a supervisor: its job's
+ *   error is kept and said, its other jobs and the Recomposer go on, and it ends when the
+ *   composable leaves.
  *
  * The jobs run on a thread of their own whose uncaught-exception handler stands in for the app's.
  */
@@ -175,6 +179,53 @@ class ErrorReporterScopeTest {
             while (recomposer.currentState.value > Recomposer.State.ShuttingDown && System.currentTimeMillis() < deadline) Thread.sleep(10)
             assertTrue("the Recomposer shuts down: ${recomposer.currentState.value}", recomposer.currentState.value <= Recomposer.State.ShuttingDown)
         } finally {
+            recomposer.cancel()
+        }
+    }
+
+    @Test
+    fun aComposablesSupervisedScopeKeepsItsJobsErrorItsOtherJobsAndTheRecomposerGoOn() {
+        val recomposer = Recomposer(thread + BroadcastFrameClock())
+        val composition = Composition(UnitApplier, recomposer)
+        val scope = AtomicReference<CoroutineScope?>()
+        try {
+            runBlocking {
+                withContext(thread) {
+                    composition.setContent {
+                        val s = rememberSupervisedScope()
+                        scope.set(s)
+                    }
+                }
+            }
+            val s = requireNotNull(scope.get()) { "composed" }
+            val waiting = CountDownLatch(1)
+            val sibling = s.launch {
+                waiting.countDown()
+                awaitCancellation()
+            }
+            assertTrue("the other job runs", waiting.await(5, TimeUnit.SECONDS))
+            val failed = s.launch { throw IllegalStateException("a composable's job") }
+            runBlocking { failed.join() }
+            assertTrue(failed.isCancelled)
+            assertNull("nothing handed on: ${handedOn.get()}", handedOn.get())
+            assertTrue("the other job goes on", sibling.isActive)
+            assertTrue("the scope stays", s.isActive)
+            assertTrue("the Recomposer goes on: ${recomposer.currentState.value}", recomposer.currentState.value > Recomposer.State.ShuttingDown)
+            var ran = false
+            runBlocking { s.launch { ran = true }.join() }
+            assertTrue("and runs the next job", ran)
+            Smoke.pump(100)
+            assertEquals(StabilityLabels19.ERROR_TOAST.format("IllegalStateException"), ShadowToast.getTextOfLatestToast())
+            CrashLog.drain()
+            assertEquals(listOf("Handled error: IllegalStateException in coroutine"), CrashLog.reports(app).map { it.summary })
+            // The composable leaves: its scope ends, and its jobs with it.
+            runBlocking { withContext(thread) { composition.dispose() } }
+            runBlocking { sibling.join() }
+            assertTrue("the other job is cancelled", sibling.isCancelled)
+            assertFalse("the scope ended with the composable", s.isActive)
+            assertNull("still nothing handed on: ${handedOn.get()}", handedOn.get())
+        } finally {
+            runCatching { runBlocking { withContext(thread) { composition.dispose() } } }
             recomposer.cancel()
         }
     }

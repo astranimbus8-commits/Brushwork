@@ -9,14 +9,16 @@ import java.io.File
 /**
  * v1.9 A7a step 4 (design 2.4.13 and 3.2 A7a, R9): no coroutine of the main sources runs outside
  * `ErrorReporter.handler`, so in a release build an error in any job is kept as a report: in a
- * supervisor scope it is said and survived; in a composable's `rememberCoroutineScope` (no
- * supervisor: the error has ended the window's Recomposer) it is handed on and the app stops with
- * the report instead of leaving a dead screen (`ErrorReporterScopeTest`).
+ * supervisor scope it is said and survived; in a plain `rememberCoroutineScope` (no supervisor:
+ * the error has ended the window's Recomposer) it would be handed on and the app would stop with
+ * the report instead of leaving a dead screen (`ErrorReporterScopeTest`). Gate 2: so the
+ * composables use `rememberSupervisedScope()`, whose failed job ends only itself.
  *
  * Read from the sources (comments left out, a call followed across lines):
  * - every `CoroutineScope(...)` carries the handler and a `SupervisorJob()` (one failed job never
  *   ends the scope: the release handler goes on with it);
- * - every `rememberCoroutineScope` has the handler in its block (`rememberCoroutineScope { ErrorReporter.handler }`);
+ * - a composable's scope is `rememberSupervisedScope()`; `rememberCoroutineScope` only inside it
+ *   ([SUPERVISED_SCOPE_FILE]), with the handler in its block (`rememberCoroutineScope { ErrorReporter.handler }`);
  * - `MainScope()` only with `+ ErrorReporter.handler`; never `GlobalScope`;
  * - a root `launch` or `async` on `lifecycleScope` or `viewModelScope` only with the handler.
  */
@@ -28,15 +30,19 @@ class UnguardedLaunchGateTest {
         assertNotNull("the main sources are found from ${System.getProperty("user.dir")}", root)
         val found = ArrayList<Site>()
         for (f in root!!.walkTopDown().filter { it.isFile && it.extension == "kt" }.sortedBy { it.path }) {
-            found += scan(f.readText()).map { it.copy(where = "${f.relativeTo(root).invariantSeparatorsPath}:${it.line}") }
+            val path = f.relativeTo(root).invariantSeparatorsPath
+            found += scan(f.readText(), path).map { it.copy(where = "$path:${it.line}") }
         }
         val unguarded = found.filter { it.problem != null }.map { "${it.where}: ${it.problem}: ${it.code}" }
         assertTrue("coroutines outside ErrorReporter.handler (design 2.4.13):\n${unguarded.joinToString("\n")}", unguarded.isEmpty())
         // The app, editor and font scopes and the composables' scopes are all found.
         val scopes = found.count { it.kind == Kind.SCOPE }
-        val remembered = found.count { it.kind == Kind.REMEMBERED }
+        val supervised = found.count { it.kind == Kind.SUPERVISED }
+        val remembered = found.filter { it.kind == Kind.REMEMBERED }.map { it.where.substringBefore(':') }
         assertTrue("CoroutineScope( sites: $scopes\n$found", scopes >= 3)
-        assertTrue("rememberCoroutineScope sites: $remembered\n$found", remembered >= 10)
+        assertTrue("rememberSupervisedScope sites: $supervised\n$found", supervised >= 10)
+        assertEquals("rememberCoroutineScope only in the helper", listOf(SUPERVISED_SCOPE_FILE), remembered)
+        assertTrue("the helper's scope is found: $found", found.any { it.kind == Kind.SCOPE && it.where.startsWith(SUPERVISED_SCOPE_FILE) })
         for (name in listOf("BrushworkApp.kt", "EditorSession.kt", "fonts/FontStore.kt")) {
             assertTrue("$name's scope is found: $found", found.any { it.kind == Kind.SCOPE && it.where.startsWith(name) })
         }
@@ -55,7 +61,15 @@ class UnguardedLaunchGateTest {
         assertEquals(listOf(NO_HANDLER), problems("val s = CoroutineScope(\n    SupervisorJob() +\n    Dispatchers.Default\n)\nval h = ErrorReporter.handler"))
         assertEquals(listOf(NO_SUPERVISOR), problems("val s = CoroutineScope(Job() + ErrorReporter.handler)"))
         assertEquals(listOf(NO_HANDLER), problems("val scope = rememberCoroutineScope()"))
-        assertEquals(emptyList<String>(), problems("val scope = rememberCoroutineScope { ErrorReporter.handler }"))
+        // Gate 2: a composable's scope is the supervised one; the plain one only inside its helper.
+        assertEquals(listOf(UNSUPERVISED), problems("val scope = rememberCoroutineScope { ErrorReporter.handler }"))
+        assertEquals(emptyList<String>(), scan("val scope = rememberCoroutineScope { ErrorReporter.handler }", SUPERVISED_SCOPE_FILE).mapNotNull { it.problem })
+        assertEquals(listOf(NO_HANDLER), scan("val scope = rememberCoroutineScope()", SUPERVISED_SCOPE_FILE).mapNotNull { it.problem })
+        assertEquals(emptyList<String>(), problems("val scope = rememberSupervisedScope()"))
+        assertEquals(
+            listOf(Kind.SUPERVISED),
+            scan("import com.brushwork.paint.diagnostics.rememberSupervisedScope\nfun rememberSupervisedScope(): CoroutineScope = x\nval s =\n    rememberSupervisedScope( )").map { it.kind },
+        )
         assertEquals(listOf(NO_HANDLER), problems("val scope = rememberCoroutineScope { Dispatchers.Main }"))
         assertEquals(listOf(GLOBAL), problems("GlobalScope.launch { work() }"))
         assertEquals(listOf(NO_HANDLER), problems("MainScope().launch { work() }"))
@@ -76,11 +90,12 @@ class UnguardedLaunchGateTest {
 
     // ------------------------------------------------------------------ the scanner
 
-    private enum class Kind { SCOPE, REMEMBERED, MAIN_SCOPE, GLOBAL, LIFECYCLE }
+    private enum class Kind { SCOPE, REMEMBERED, SUPERVISED, MAIN_SCOPE, GLOBAL, LIFECYCLE }
 
     private data class Site(val kind: Kind, val line: Int, val code: String, val problem: String?, val where: String = "")
 
-    private fun scan(source: String): List<Site> {
+    /** The sites of [source], the main source file at [path] (relative to the package root). */
+    private fun scan(source: String, path: String = ""): List<Site> {
         val code = stripCommentsAndStrings(source)
         val out = ArrayList<Site>()
         fun lineOf(i: Int) = code.substring(0, i).count { it == '\n' } + 1
@@ -106,7 +121,17 @@ class UnguardedLaunchGateTest {
                 while (i < code.length && code[i].isWhitespace()) i++
             }
             val block = if (i < code.length && code[i] == '{') code.substring(i, closing(code, i, '{', '}') + 1) else ""
-            out += Site(Kind.REMEMBERED, lineOf(m.range.first), excerpt(m.range.first, i + block.length), if (block.contains(HANDLER)) null else NO_HANDLER)
+            val problem = when {
+                !block.contains(HANDLER) -> NO_HANDLER
+                path != SUPERVISED_SCOPE_FILE -> UNSUPERVISED
+                else -> null
+            }
+            out += Site(Kind.REMEMBERED, lineOf(m.range.first), excerpt(m.range.first, i + block.length), problem)
+        }
+        // Gate 2: the composables' supervised scope (its declaration and imports are no site).
+        for (m in Regex("""(?<!fun )\brememberSupervisedScope\s*\(""").findAll(code)) {
+            if (isImport(m.range.first)) continue
+            out += Site(Kind.SUPERVISED, lineOf(m.range.first), excerpt(m.range.first, m.range.last + 2), null)
         }
         for (m in Regex("""(?<![\w.])MainScope\s*\(\s*\)""").findAll(code)) {
             val after = code.substring(m.range.last + 1).trimStart()
@@ -196,6 +221,10 @@ class UnguardedLaunchGateTest {
         const val HANDLER = "ErrorReporter.handler"
         const val NO_HANDLER = "no ErrorReporter.handler"
         const val NO_SUPERVISOR = "no SupervisorJob()"
+        const val UNSUPERVISED = "no supervisor: rememberSupervisedScope()"
         const val GLOBAL = "GlobalScope"
+
+        /** The one file where `rememberCoroutineScope` is used: the helper `rememberSupervisedScope` builds on it. */
+        const val SUPERVISED_SCOPE_FILE = "diagnostics/SupervisedScope.kt"
     }
 }

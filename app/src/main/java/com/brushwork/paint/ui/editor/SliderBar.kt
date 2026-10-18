@@ -24,7 +24,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -57,7 +56,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.brush.BrushPresetStore
-import com.brushwork.paint.diagnostics.ErrorReporter
+import com.brushwork.paint.diagnostics.rememberSupervisedScope
 import com.brushwork.paint.model.IncrementKind
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.ui.common.stepOnLongPress
@@ -387,7 +386,7 @@ private fun RelativeTrack(
 private fun StepButton(label: String, plus: Boolean, onStep: () -> Unit, onDone: () -> Unit, glyphCenter: Dp, modifier: Modifier) {
     val step by rememberUpdatedState(onStep)
     val done by rememberUpdatedState(onDone)
-    val scope = rememberCoroutineScope { ErrorReporter.handler }
+    val scope = rememberSupervisedScope()
     Box(
         modifier
             .size(IbisDims.SliderButtonTouch)
