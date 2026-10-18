@@ -1,11 +1,13 @@
 package com.brushwork.paint.qa19
 
+import android.graphics.Path
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.unit.toSize
+import com.brushwork.paint.model.Selection
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.testing.StripTestKit
@@ -53,12 +55,15 @@ import org.robolectric.annotation.Config
  * - the More row with no text open holds “New layer each time”, its strip key's width, inside
  *   the screen, its label not cut;
  * - the text sheet: "Justify lines" and "Justify the last line too", the caption "Last line:"
- *   before the three 40 dp alignment buttons; the four "Pair kerning" chips; the list chips and
+ *   before the three 40 dp alignment buttons; on vertical text the two column rows and "Last
+ *   column:" before "Top", "Center", "Bottom"; the four "Pair kerning" chips; the list chips and
  *   the six bullets; the five placeholder amounts; the path's three node entries: each inside the
  *   screen, in order, and no text of the sheet overflows its box;
  * - node editing: the node bar 6 dp under the X / Y pill, inside the screen, its buttons 40 dp;
  * - a text of a layer of several: Duplicate, Bring forward and Send backward in the More row,
- *   each its strip key's width, inside the screen; Duplicate is one step.
+ *   each its strip key's width, inside the screen; with a selection the selection bar shows
+ *   Duplicate and the More row leaves its own out (I10), the arrange items stay; Duplicate is one
+ *   step.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = Qa19Ui.Q392, instrumentedPackages = ["com.brushwork.paint.qa19.textwidesandbox"])
@@ -110,6 +115,27 @@ class Qa19TextWideUiTest {
             }
             assertSheetFits("with justify on, $where")
 
+            // Vertical text (step 12): the column rows, then "Last column:" before the three buttons.
+            t.updateSpec { it.copy(vertical = true) }
+            Qa19Ui.settle()
+            for (label in listOf(TextLabels19.JUSTIFY_COLUMNS, TextLabels19.JUSTIFY_LAST_COLUMN)) {
+                val row = s.dp(box(clickableOf(where, label)))
+                assertTrue("$where: \"$label\" is a 48 dp row: $row", row.height >= 47.5f)
+                assertInside(s, where, label, row)
+            }
+            assertEquals("$where: justify kept on vertical text", TextJustify.ON, t.item!!.spec.justify)
+            val columnCaption = s.dp(box(Qa19Ui.find(TextLabels19.LAST_COLUMN, exact = true)?.node ?: throw AssertionError("$where: no \"Last column:\"")))
+            val columnButtons = TextAlign.entries.map { s.dp(box(clickableOf(where, it.verticalLabel))) }
+            assertTrue("$where: the column caption before the first button: $columnCaption, ${columnButtons.first()}", columnCaption.right <= columnButtons.first().left + 0.5f)
+            for ((i, r) in columnButtons.withIndex()) {
+                val label = TextAlign.entries[i].verticalLabel
+                assertTrue("$where: \"$label\" a 40 dp target: $r", r.width >= 39.5f && r.height >= 39.5f)
+                assertInside(s, where, label, r)
+            }
+            assertSheetFits("vertical text with justify on, $where")
+            t.updateSpec { it.copy(vertical = false) }
+            Qa19Ui.settle()
+
             // Pair kerning (R5): four chips in order, Auto chosen.
             val kern = KERN_TAGS.map { tagged(where, V19Tags.KERN_PREFIX + it) }
             assertInOrder(s, where, kern, KERN_LABELS, minWidth = 75.5f)
@@ -151,14 +177,31 @@ class Qa19TextWideUiTest {
             tap(s, 80f, 80f)
             assertEquals("$where: the bottom text of the layer", 0, t.openIndex)
             if (!StripTestKit.moreRowShown()) Qa19Ui.openMoreRow()
-            val dup = tagged(where, V19Tags.TEXT_DUPLICATE)
-            assertTrue("$where: Duplicate labelled", LayerLabels19.DUPLICATE in texts(dup))
-            assertStripItem(s, where, dup, StripKeysV19.DUPLICATE.widthDp.toFloat())
+            val dupItem = tagged(where, V19Tags.TEXT_DUPLICATE)
+            assertTrue("$where: Duplicate labelled", LayerLabels19.DUPLICATE in texts(dupItem))
+            assertStripItem(s, where, dupItem, StripKeysV19.DUPLICATE.widthDp.toFloat())
             for ((label, key) in listOf(ObjectEdits.Arrange.FORWARD.label to StripKeysV19.FORWARD, ObjectEdits.Arrange.BACKWARD.label to StripKeysV19.BACKWARD)) {
                 val n = clickableOf(where, label)
                 assertTrue("$where: \"$label\" in the More row", generateSequence(n) { it.parent }.any(StripTestKit::isStripMoreRow))
                 assertStripItem(s, where, n, key.widthDp.toFloat())
             }
+            // A selection (I10): the selection bar shows its Duplicate, so the More row leaves its
+            // own out; Bring forward and Send backward are on no bar and stay.
+            val area = Path().apply { addRect(40f, 40f, 200f, 160f, Path.Direction.CW) }
+            c.setSelection(Selection.fromPath(area, c.doc.width, c.doc.height, antiAlias = false), recordUndo = false)
+            Qa19Ui.settle()
+            if (!StripTestKit.moreRowShown()) Qa19Ui.openMoreRow()
+            assertNull("$where: no Duplicate in the More row beside the selection bar's", Qa19Ui.tagged(V19Tags.TEXT_DUPLICATE))
+            val barDup = clickableOf(where, LayerLabels19.DUPLICATE)
+            assertTrue("$where: the selection bar's Duplicate", generateSequence(barDup) { it.parent }.none(StripTestKit::isStripMoreRow))
+            for (label in listOf(ObjectEdits.Arrange.FORWARD.label, ObjectEdits.Arrange.BACKWARD.label)) {
+                assertTrue("$where: \"$label\" stays in the More row", generateSequence(clickableOf(where, label)) { it.parent }.any(StripTestKit::isStripMoreRow))
+            }
+            c.setSelection(null, recordUndo = false)
+            Qa19Ui.settle()
+            if (!StripTestKit.moreRowShown()) Qa19Ui.openMoreRow()
+            assertEquals("$where: the text is still open", 0, t.openIndex)
+            val dup = tagged(where, V19Tags.TEXT_DUPLICATE)
             val steps = c.undoManager.undoCount
             click(dup)
             assertEquals("$where: Duplicate is one step", steps + 1, c.undoManager.undoCount)

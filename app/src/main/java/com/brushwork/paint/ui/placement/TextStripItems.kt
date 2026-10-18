@@ -30,6 +30,7 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.tools.frame.FrameDividerTool
+import com.brushwork.paint.tools.select.SelectionDuplicate
 import com.brushwork.paint.tools.text.TextTool
 import com.brushwork.paint.ui.common.LayerLabels19
 import com.brushwork.paint.ui.common.PlaceLabels19
@@ -57,16 +58,18 @@ import com.brushwork.paint.vector.select.ObjectEdits
  * While the path's points are edited (R12) row 1 keeps "Edit text", the switch and "Letters",
  * and [TextPathNodeBar] shows where the selection bar does.
  *
- * v1.9 (A3 step 11, I10): while the selection bar or the object bar shows
- * (`StripContext.selectionBarShown`) the More row leaves out Duplicate, Bring forward and Send
- * backward, which those bars show (as the Shape strip does: `ShapeObjectItems.kt`). The items
- * follow [TextStripFacts] through the pure [textSpec] below, which the label scan builds for
- * every state without a composition.
+ * v1.9 (A3 step 11, I10): the More row leaves out what a bar beside the strip shows itself:
+ * Duplicate while the object bar shows, or the selection bar with its Duplicate (a selection it
+ * can duplicate); Bring forward and Send backward while the object bar shows. The paste bar (a
+ * clipboard, no selection) carries none of them, so they stay. The items follow
+ * [TextStripFacts] through the pure [textSpec] below, which the label scan builds for every
+ * state without a composition.
  */
 @Composable
 internal fun textSpec(tool: TextTool): StripSpec {
     val c = tool.controller
-    // The active layer isn't Compose state: follow the counters that change with it.
+    // The active layer isn't Compose state: follow the counters that change with it (the facts'
+    // SelectionDuplicate.kindOf reads the active layer too).
     val activeText = remember(c.layersVersion, c.editCount) { c.activeLayer.takeIf { it.isTextLayer } }
     val facts = TextStripFacts.of(tool, activeText != null, LocalStripContext.current.selectionBarShown)
     return textSpec(tool, facts, activeText)
@@ -92,16 +95,29 @@ internal data class TextStripFacts(
     val arrange: Boolean = false,
     /** The active layer is a text layer: "Edit text" works with no text open. */
     val activeText: Boolean = false,
-    /** The selection bar or the object bar shows (`StripContext.selectionBarShown`). */
-    val barShown: Boolean = false,
+    /**
+     * A bar beside the strip shows [LayerLabels19.DUPLICATE]: the object bar, or the selection bar
+     * with a selection it can duplicate (`SelectionDuplicate.kindOf`); not the paste bar.
+     */
+    val barDuplicate: Boolean = false,
+    /** The object bar shows, with Bring forward and Send backward (and its Duplicate). */
+    val objectBar: Boolean = false,
 ) {
     /** The open text can't wrap (v1.7: vertical, or on a path). */
     val wrapRefused: Boolean get() = open && (vertical || onPath)
 
     companion object {
+        /**
+         * The facts of [tool] now. [barShown] is `StripContext.selectionBarShown` (the selection
+         * bar, the paste bar or the object bar shows): which of them it is, and what it carries,
+         * follows EditorScreen and SelectionActionBar (the object bar while objects are selected,
+         * the selection bar's Duplicate with a selection [SelectionDuplicate.kindOf] accepts).
+         */
         fun of(tool: TextTool, activeText: Boolean, barShown: Boolean): TextStripFacts {
             val item = tool.item
             val onPath = item?.path?.isActive == true
+            val c = tool.controller
+            val objectBar = barShown && c.vectors.selectedIds.isNotEmpty()
             return TextStripFacts(
                 open = item != null,
                 onPath = onPath,
@@ -111,7 +127,8 @@ internal data class TextStripFacts(
                 boxed = item != null && item.spec.box.wrapFor(item.spec.vertical) > 0f,
                 arrange = item != null && tool.arrangeShown,
                 activeText = activeText,
-                barShown = barShown,
+                barDuplicate = objectBar || (barShown && SelectionDuplicate.kindOf(c) != null),
+                objectBar = objectBar,
             )
         }
     }
@@ -124,8 +141,9 @@ internal data class TextStripFacts(
 internal fun textSpec(tool: TextTool, f: TextStripFacts, activeText: Layer? = null): StripSpec {
     val T = TextStripItems
     val hint = T.hint(f)
-    // I10: the bars carry their own Duplicate (and the object bar its arrange items).
-    val objectItems = f.open && !f.barShown
+    // I10: a bar that carries its own Duplicate (the object bar its arrange items too) takes them.
+    val duplicate = f.open && !f.barDuplicate
+    val arrange = f.open && f.arrange && !f.objectBar
     val items = listOfNotNull(
         StripItem(T.EDIT, T.EDIT_LABEL, T.EDIT_DP.dp) {
             val strip = LocalStripContext.current
@@ -157,7 +175,7 @@ internal fun textSpec(tool: TextTool, f: TextStripFacts, activeText: Layer? = nu
         // Snap: Snap, then Numbers while a text is open, end the More row as in v1.8 (the v1.8
         // pins Qa18PolishChromeVerifyTest keeps; StripKeysV19's ranks would put them after it,
         // which the lead decides: a LeadRequest).
-        if (!objectItems) null else StripItem(T.DUPLICATE.key, LayerLabels19.DUPLICATE, T.DUPLICATE.widthDp.dp, row = StripRow.MORE) {
+        if (!duplicate) null else StripItem(T.DUPLICATE.key, LayerLabels19.DUPLICATE, T.DUPLICATE.widthDp.dp, row = StripRow.MORE) {
             ToolIconButton(
                 icon = Icons.Outlined.ControlPointDuplicate,
                 contentDescription = LayerLabels19.DUPLICATE,
@@ -167,7 +185,7 @@ internal fun textSpec(tool: TextTool, f: TextStripFacts, activeText: Layer? = nu
                 size = T.DUPLICATE.widthDp.dp,
             )
         },
-        if (!objectItems || !f.arrange) null else StripItem(T.FORWARD.key, ObjectEdits.Arrange.FORWARD.label, T.FORWARD.widthDp.dp, row = StripRow.MORE) {
+        if (!arrange) null else StripItem(T.FORWARD.key, ObjectEdits.Arrange.FORWARD.label, T.FORWARD.widthDp.dp, row = StripRow.MORE) {
             ToolIconButton(
                 icon = Icons.Outlined.FlipToFront,
                 contentDescription = ObjectEdits.Arrange.FORWARD.label,
@@ -176,7 +194,7 @@ internal fun textSpec(tool: TextTool, f: TextStripFacts, activeText: Layer? = nu
                 size = T.FORWARD.widthDp.dp,
             )
         },
-        if (!objectItems || !f.arrange) null else StripItem(T.BACKWARD.key, ObjectEdits.Arrange.BACKWARD.label, T.BACKWARD.widthDp.dp, row = StripRow.MORE) {
+        if (!arrange) null else StripItem(T.BACKWARD.key, ObjectEdits.Arrange.BACKWARD.label, T.BACKWARD.widthDp.dp, row = StripRow.MORE) {
             ToolIconButton(
                 icon = Icons.Outlined.FlipToBack,
                 contentDescription = ObjectEdits.Arrange.BACKWARD.label,

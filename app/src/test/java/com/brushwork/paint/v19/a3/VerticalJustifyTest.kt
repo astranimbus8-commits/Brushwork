@@ -35,6 +35,7 @@ import org.robolectric.RobolectricTestRunner
  * - Text without a fixed height (each line one column, the last of its line) does not change
  *   under ON; under ALL its columns reach the tallest one. Opening spaces stay an indent, spaces
  *   after the last letter hang past the end.
+ * - Scaled letters (letter scaling) spread with their own advances; scales and advances stay.
  * - [TextRenderer] draws (and outlines, for export) the justified columns: the last letter of a
  *   spread column moves down by exactly the free space; the last column draws the same pixels.
  */
@@ -121,6 +122,32 @@ class VerticalJustifyTest {
         assertEquals("line 1's last column", column(off, 1).map { it.cy }, column(two, 1).map { it.cy })
         assertEquals(50f, bottom(column(two, 2).last()), 1e-3f)
         assertEquals("line 2's last column", column(off, 3).map { it.cy }, column(two, 3).map { it.cy })
+    }
+
+    /** Scaled letters (v1.6 letter scaling, the renderer's scaled block) spread the same way: their own advances, the block height. */
+    @Test
+    fun scaledLettersSpreadToo() {
+        val text = "ab cd ef gh ij kl mn op"
+        val factors = FloatArray(text.length) { if (it < 6) 1f else 0.5f }
+        fun scaled(j: TextJustify) = VerticalTextLayout.layout(text, em, 0f, 1.5f, TextAlign.CENTER, latin, wrapLength = 30f, factors = factors, justify = j)
+        val off = scaled(TextJustify.OFF)
+        val on = scaled(TextJustify.ON)
+        assertTrue("several columns: ${off.columns}", off.columns >= 2)
+        assertEquals(off.columns, on.columns)
+        assertEquals(off.height, on.height, 1e-4f)
+        assertEquals("the scales stay", off.glyphs.map { it.scale }, on.glyphs.map { it.scale })
+        assertEquals("the advances stay", off.glyphs.map { it.advance }, on.glyphs.map { it.advance })
+        var spread = 0
+        for (c in 0 until on.columns - 1) {
+            val ls = letters(column(on, c))
+            val inner = column(on, c).dropWhile { it.text.isBlank() }.dropLastWhile { it.text.isBlank() }
+            if (inner.none { it.text.isBlank() }) continue
+            assertEquals("column $c starts at the top", 0f, top(ls.first()), 1e-3f)
+            assertEquals("column $c ends at the bottom", on.height, bottom(ls.last()), 1e-3f)
+            spread++
+        }
+        assertTrue("a column spread", spread >= 1)
+        assertEquals("the last column keeps its alignment", column(off, on.columns - 1).map { it.cy }, column(on, on.columns - 1).map { it.cy })
     }
 
     @Test

@@ -1831,19 +1831,24 @@ to insert a point).
   time" (no text open) or Duplicate, Bring forward and Send backward (a text open) stand before
   Snap; Snap, then Numbers, end the row as in v1.8. The v1.8 pins in
   `Qa18PolishChromeVerifyTest` require this order. `StripKeysV19`'s ranks would put the v1.9
-  items after Snap; the lead decides which order stays. While the selection bar or the object
-  bar shows (`StripContext.selectionBarShown`), Duplicate, Bring forward and Send backward leave
-  the More row, because the bars carry them (I10, as A9's `ShapeObjectItems`). The strip is a
-  pure `textSpec(tool, TextStripFacts)`, and the composable only reads the facts.
+  items after Snap; the lead decides which order stays. The More row leaves out only what a bar
+  beside the strip shows itself (I10). While the object bar shows, Duplicate, Bring forward and
+  Send backward leave it. While the selection bar shows a Duplicate (a selection that
+  `SelectionDuplicate.kindOf` can copy), only Duplicate leaves. The paste bar (a clipboard, no
+  selection) carries none of them, so they stay. `TextStripFacts.of` reads which bar shows from
+  the controller under `StripContext.selectionBarShown`. A9's `ShapeObjectItems` still hides its
+  items under any bar. The strip is a pure `textSpec(tool, TextStripFacts)`, and the composable
+  only reads the facts.
 - **Merged texts and the label scan (step 11).** `MergedNumberedTextsTest` (C22, after A4's merge):
   "Merge down" and "Merge folder" keep each text's own numbers and pixels (I1). A text edited
   after the merge renumbers only itself. A frame of a story merges as pixels (`WHY_FRAMES`).
-  `TextStripLabelScanTest` checks the Text strip in all 200 states. Each state keeps
-  `StripInventory.rules` at 360 and 392 dp. No label repeats or holds another, within the strip
-  and hint or against the bars, the node bar and the sheets' labels. One configuration is left
-  out, and the test pins it: a two-line hint at 360 dp with the VECTOR cell, where an open text
-  of a layer of several would take 388 dp. It cannot occur, because that text's text layer is
-  active, so `isVectorMode` is false and the cell does not show.
+  `TextStripLabelScanTest` checks the Text strip in all 300 states (no bar, the selection bar,
+  the object bar). Each state keeps `StripInventory.rules` at 360 and 392 dp. No label repeats
+  or holds another, within the strip and hint or against the bars, the node bar and the sheets'
+  labels. One configuration is left out, and the test pins it: a two-line hint at 360 dp with
+  the VECTOR cell, where an open text of a layer of several would take 388 dp (344 dp beside
+  the selection bar). It cannot occur, because that text's text layer is active, so
+  `isVectorMode` is false and the cell does not show.
 - **Path nodes (R12).** `TextPathSpec.nodes` (frozen) holds a `VSpline`; `TextPathNodes` converts
   a guide. `asPath` gives a curve's 4 control points, a circle's 8 nodes, or a rectangle's exact
   arcs. `asPolyline` gives `CUBIC_POLYLINE_SEGMENTS + 1` points. The edits are

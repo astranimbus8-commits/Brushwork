@@ -2,12 +2,14 @@ package com.brushwork.paint.v19.a3
 
 import android.content.Context
 import android.graphics.Matrix
+import android.graphics.Path
 import androidx.test.core.app.ApplicationProvider
 import com.brushwork.paint.AppSettings
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.Layer
+import com.brushwork.paint.model.Selection
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
 import com.brushwork.paint.tools.text.TextCodec
@@ -40,11 +42,13 @@ import java.lang.reflect.Modifier
  * ([textSpec] for [TextStripFacts]; no composition, so not one of A3's Robolectric UI classes).
  * - Every state keeps the lead's rules ([StripInventory.rules]) at 392 and 360 dp, with and
  *   without the VECTOR cell, with a one-line and a two-line hint.
- * - While the selection bar or the object bar shows, Duplicate, Bring forward and Send backward
- *   leave the More row (the bars carry them); nothing else changes.
+ * - A bar beside the strip takes what it shows itself, and nothing else: the selection bar (with
+ *   a selection) takes Duplicate, the object bar Duplicate, Bring forward and Send backward; the
+ *   paste bar (a clipboard, no selection) takes none ([theFactsFollowTheTool] reads which bar it
+ *   is from the controller).
  * - Label scan: no label repeats on the strip, and none holds another (the case-sensitive
- *   `contains` of SmokeUi, LabelsV18Test rule 4), within the strip and its hint, against the bars
- *   beside it (the selection bar's and object bar's labels, the node bar's while points are
+ *   `contains` of SmokeUi, LabelsV18Test rule 4), within the strip and its hint, against the bar
+ *   beside it (the selection bar's or the object bar's labels, the node bar's while points are
  *   edited) and against the Text sheets' labels (TextLabels19, KernLabels19). Rule L (no label
  *   retyped as a literal) is `LabelsV19Test`'s over every main source.
  */
@@ -71,24 +75,40 @@ class TextStripLabelScanTest {
         const val WITH_THE_CELL = "with the VECTOR cell"
     }
 
+    private val objectKeys = listOf(StripKeysV19.DUPLICATE, StripKeysV19.FORWARD, StripKeysV19.BACKWARD).map { it.key }
+    private val objectLabels = listOf(LayerLabels19.DUPLICATE, ObjectEdits.Arrange.FORWARD.label, ObjectEdits.Arrange.BACKWARD.label)
+
+    /**
+     * What shows beside the strip, as [TextStripFacts] sees it, with the labels of that bar a strip
+     * could share: no bar or the paste bar (its v1.6 items only); the selection bar with a
+     * selection (its v1.7 items and v1.9's Duplicate); the object bar (Duplicate and the arrange items).
+     */
+    private enum class Bar(val duplicate: Boolean, val objects: Boolean, val labels: List<String>) {
+        NONE(false, false, emptyList()),
+        SELECTION(true, false, listOf(LayerLabels19.DUPLICATE, ArrayLabels.BUTTON, SavedSelectionLabels.SAVE_BUTTON)),
+        OBJECTS(true, true, listOf(LayerLabels19.DUPLICATE, ObjectEdits.Arrange.FORWARD.label, ObjectEdits.Arrange.BACKWARD.label)),
+    }
+
+    private fun TextStripFacts.with(bar: Bar) = copy(barDuplicate = bar.duplicate, objectBar = bar.objects)
+
+    private val TextStripFacts.bar: Bar get() = when {
+        objectBar -> Bar.OBJECTS
+        barDuplicate -> Bar.SELECTION
+        else -> Bar.NONE
+    }
+
     /** Every consistent state: nothing open (the switch, an active text layer or not), or a text open in every combination. */
     private val states: List<TextStripFacts> = buildList {
-        for (vertical in bools) for (active in bools) for (bar in bools) {
-            add(TextStripFacts(vertical = vertical, activeText = active, barShown = bar))
+        for (vertical in bools) for (active in bools) for (bar in Bar.entries) {
+            add(TextStripFacts(vertical = vertical, activeText = active).with(bar))
         }
         for (onPath in bools) for (nodes in if (onPath) bools else listOf(false)) for (vertical in bools) for (wrapOn in bools)
-            for (boxed in bools) for (arrange in bools) for (active in bools) for (bar in bools) {
-                add(TextStripFacts(true, onPath, nodes, vertical, wrapOn, boxed, arrange, active, bar))
+            for (boxed in bools) for (arrange in bools) for (active in bools) for (bar in Bar.entries) {
+                add(TextStripFacts(true, onPath, nodes, vertical, wrapOn, boxed, arrange, active).with(bar))
             }
     }
 
     private fun spec(f: TextStripFacts): StripSpec = textSpec(tool, f)
-
-    private val objectKeys = listOf(StripKeysV19.DUPLICATE, StripKeysV19.FORWARD, StripKeysV19.BACKWARD).map { it.key }
-    private val objectLabels = listOf(LayerLabels19.DUPLICATE, ObjectEdits.Arrange.FORWARD.label, ObjectEdits.Arrange.BACKWARD.label)
-
-    /** The labels of the selection bar and the object bar that a strip could share (the object bar's arrange items, the selection bar's v1.7 and v1.9 items). */
-    private val barLabels = objectLabels + listOf(ArrayLabels.BUTTON, SavedSelectionLabels.SAVE_BUTTON)
 
     /** The node bar's labels and hint, shown while the path's points are edited. */
     private val nodeBar = listOf(
@@ -112,7 +132,7 @@ class TextStripLabelScanTest {
 
     @Test
     fun everyStateKeepsTheLeadsRules() {
-        assertEquals(8 + 3 * 64, states.size)
+        assertEquals((8 + 3 * 64) / 2 * Bar.entries.size, states.size)
         val problems = mutableListOf<String>()
         val leftOut = sortedSetOf<String>()
         for (f in states) {
@@ -124,32 +144,47 @@ class TextStripLabelScanTest {
         }
         assertTrue("the rules:\n" + problems.take(40).joinToString("\n"), problems.isEmpty())
         // What is left out: a two-line hint at 360 dp with the cell, where Wrap, the three object
-        // items, Snap and Numbers would take one 388 dp line.
-        assertEquals(sortedSetOf("a hint of 2 lines: rule 5: at 360 dp $WITH_THE_CELL More line 3 takes 388.0 dp, over 332.0 (over 3 lines)"), leftOut)
+        // items, Snap and Numbers would take one 388 dp line (344 dp beside the selection bar,
+        // which takes Duplicate).
+        assertEquals(
+            sortedSetOf(
+                "a hint of 2 lines: rule 5: at 360 dp $WITH_THE_CELL More line 3 takes 344.0 dp, over 332.0 (over 3 lines)",
+                "a hint of 2 lines: rule 5: at 360 dp $WITH_THE_CELL More line 3 takes 388.0 dp, over 332.0 (over 3 lines)",
+            ),
+            leftOut,
+        )
     }
 
     @Test
-    fun theBarsTakeTheObjectItemsAndNothingElse() {
+    fun theBarsTakeWhatTheyShowAndNothingElse() {
         var shown = 0
-        for (f in states.filter { !it.barShown }) {
+        for (f in states.filter { it.bar == Bar.NONE }) {
             val alone = spec(f).items
-            val withBars = spec(f.copy(barShown = true)).items
-            assertTrue("$f with the bars: ${withBars.map { it.key }}", withBars.none { it.key in objectKeys || it.label in objectLabels })
-            assertEquals("$f: the bars take the object items only", alone.filter { it.key !in objectKeys }.map { it.key }, withBars.map { it.key })
             val objects = alone.filter { it.key in objectKeys }
             val expected = when {
                 !f.open || f.nodes -> emptyList()
                 f.arrange -> objectKeys
                 else -> objectKeys.take(1)
             }
-            assertEquals("$f: the object items without the bars", expected, objects.map { it.key })
+            assertEquals("$f: the object items without a bar", expected, objects.map { it.key })
             assertTrue("$f: in the More row", objects.all { it.row == StripRow.MORE })
             if (objects.isNotEmpty()) shown++
+            // The object bar takes all three; the selection bar its Duplicate only.
+            val withObjectBar = spec(f.with(Bar.OBJECTS)).items
+            assertTrue("$f with the object bar: ${withObjectBar.map { it.key }}", withObjectBar.none { it.key in objectKeys || it.label in objectLabels })
+            assertEquals("$f: the object bar takes the object items only", alone.filter { it.key !in objectKeys }.map { it.key }, withObjectBar.map { it.key })
+            val withSelectionBar = spec(f.with(Bar.SELECTION)).items
+            assertTrue("$f with the selection bar: ${withSelectionBar.map { it.key }}", withSelectionBar.none { it.label == LayerLabels19.DUPLICATE })
+            assertEquals("$f: the selection bar takes Duplicate only", alone.filter { it.key != StripKeysV19.DUPLICATE.key }.map { it.key }, withSelectionBar.map { it.key })
         }
         assertTrue("states with object items: $shown", shown >= 32)
     }
 
-    /** The strip as the editor builds it now ([TextStripFacts.of]) matches its facts. */
+    /**
+     * The strip as the editor builds it now ([TextStripFacts.of]) matches its facts, and which bar
+     * shows (`StripContext.selectionBarShown`) is read from the controller: with no selection it is
+     * the paste bar, which takes nothing; with a selection the selection bar takes Duplicate.
+     */
     @Test
     fun theFactsFollowTheTool() {
         val c = tool.controller
@@ -159,13 +194,22 @@ class TextStripLabelScanTest {
         assertTrue(tool.editorOpen)
         tool.setText("Facts")
         tool.confirmEditor()
-        val open = TextStripFacts.of(tool, activeText = false, barShown = true)
+        val open = TextStripFacts.of(tool, activeText = false, barShown = false)
         assertTrue(open.open)
         assertFalse(open.onPath || open.nodes || open.arrange || open.wrapOn)
-        assertTrue(open.barShown)
         assertEquals("the wrap label of the tool and of its facts", TextStripItems.wrapLabel(tool), TextStripItems.wrapLabel(open))
-        assertTrue(spec(open).items.none { it.key in objectKeys })
-        assertTrue(spec(open.copy(barShown = false)).items.any { it.key == StripKeysV19.DUPLICATE.key })
+        // The paste bar (no selection): Duplicate stays in the More row.
+        val paste = TextStripFacts.of(tool, activeText = false, barShown = true)
+        assertEquals("the paste bar takes nothing", open, paste)
+        assertTrue(spec(paste).items.any { it.key == StripKeysV19.DUPLICATE.key })
+        // A selection: the selection bar shows its Duplicate, so the strip leaves it out.
+        select(c)
+        val selection = TextStripFacts.of(tool, activeText = false, barShown = true)
+        assertTrue(selection.barDuplicate)
+        assertFalse(selection.objectBar)
+        assertTrue(spec(selection).items.none { it.key in objectKeys })
+        assertEquals("only while the bar shows", open, TextStripFacts.of(tool, activeText = false, barShown = false))
+        c.setSelection(null, recordUndo = false)
         assertTrue(tool.commitItem())
 
         // A second text joins the layer; a tap opens the first one: the arrange items apply, and
@@ -183,12 +227,27 @@ class TextStripLabelScanTest {
         assertFalse("no VECTOR cell", c.isVectorMode)
         assertFalse(cellPossible(arranged))
         assertEquals(objectKeys, spec(arranged).items.filter { it.key in objectKeys }.map { it.key })
+        assertEquals("the paste bar takes nothing", arranged, TextStripFacts.of(tool, activeText = true, barShown = true))
+        // The selection bar on the text layer (its Duplicate copies the texts in the selection):
+        // Bring forward and Send backward stay, they are on no bar.
+        select(c)
+        val both = TextStripFacts.of(tool, activeText = true, barShown = true)
+        assertTrue(both.barDuplicate && !both.objectBar)
+        assertEquals(objectKeys.drop(1), spec(both).items.filter { it.key in objectKeys }.map { it.key })
+        c.setSelection(null, recordUndo = false)
         tool.discard()
     }
 
     private fun tap(x: Float, y: Float) {
         tool.controller.pointerDown(ToolPoint(x, y))
         tool.controller.pointerUp(ToolPoint(x, y))
+    }
+
+    /** A rectangle selection, no step of its own. */
+    private fun select(c: EditorController) {
+        val p = Path().apply { addRect(20f, 20f, 200f, 160f, Path.Direction.CW) }
+        c.setSelection(Selection.fromPath(p, c.doc.width, c.doc.height, antiAlias = false), recordUndo = false)
+        assertNotNull(c.selection)
     }
 
     @Test
@@ -202,7 +261,7 @@ class TextStripLabelScanTest {
             val texts = labels + listOfNotNull(spec.hint)
             for (i in texts.indices) for (j in i + 1 until texts.size) if (holds(texts[i], texts[j])) problems += "the strip: \"${texts[i]}\" and \"${texts[j]}\""
             val beside = buildList {
-                if (f.barShown) addAll(barLabels)
+                addAll(f.bar.labels)
                 if (f.nodes) addAll(nodeBar)
                 addAll(sheetLabels)
             }
