@@ -20,6 +20,7 @@ import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.remove.ContentAwareFillJob
 import com.brushwork.paint.ui.color.RobolectricUi
 import com.brushwork.paint.ui.common.ArrayLabels
+import com.brushwork.paint.ui.common.LayerLabels19
 import com.brushwork.paint.ui.common.MenuLabels18
 import com.brushwork.paint.ui.common.MirrorLabels18
 import com.brushwork.paint.ui.common.PillLabels
@@ -50,7 +51,8 @@ import org.robolectric.shadows.ShadowLog
  * v1.8 I10 (labels are an API, design §3.9 item 9) over the chrome area H changed, on the user's
  * phone (392 × 873 dp), with real touch events:
  * - every control keeps its v1.7 name and visible text, in its v1.7 order: the top row's eight
- *   circles ("More options" under its three-dots glyph), the selection bar's ten items, the object
+ *   circles ("More options" under its three-dots glyph), the selection bar's ten items (and v1.9's
+ *   "Duplicate" after them), the object
  *   bar's nine buttons plus "Detach mirror copies"; the v1.8 toggles carry `StripLabels18`'s
  *   names and states ("Show more tool options", "Show more object actions", "Expanded" /
  *   "Collapsed");
@@ -70,12 +72,16 @@ class ChromeLabelsTest {
     /** The top row's circles, left to right (v1.6 I10). */
     private val circles = listOf("Undo", "Redo", "Vector", "Selection", "Stabilizer", "Grid", "Ruler", "More options")
 
-    /** The selection bar with a selection: (click label, visible text), left to right (v1.7). */
+    /**
+     * The selection bar with a selection: (click label, visible text), left to right (v1.7), with
+     * v1.9's "Duplicate" after "Save" (R14, design 2.8: the v1.7 items keep their order).
+     */
     private val selectionBar = listOf(
         "Copy selection" to "Copy", "Cut selection" to "Cut", "Paste as a new layer" to "Paste",
         "Clear the selection" to "Deselect", "Delete the selected pixels" to "Clear", ContentAwareFillJob.FILL_LABEL to "Content\naware",
         "Invert the selection" to "Invert", "Selection menu" to "More",
         ArrayLabels.FROM_SELECTION to ArrayLabels.BUTTON, SavedSelectionLabels.SAVE to SavedSelectionLabels.SAVE_BUTTON,
+        LayerLabels19.DUPLICATE_DESC to LayerLabels19.DUPLICATE,
     )
 
     /** The object bar's row 1 at 392 dp: (click label, visible text), left to right. */
@@ -218,7 +224,8 @@ class ChromeLabelsTest {
             assertEquals("$label: a long press does nothing else", before, snapshot(s))
             assertTrue("$label: the selection is untouched", c.selection === selection)
         }
-        // The last two sit past the bar's end at 392 dp: scrolled into view, as a finger does.
+        // The last two v1.7 items (and v1.9's Duplicate) sit past the bar's end at 392 dp: scrolled
+        // into view, as a finger does.
         val scroller = tagged(s, ChromeTags.SELECTION_BAR).subtree().first { it.config.getOrNull(SemanticsProperties.HorizontalScrollAxisRange) != null }
         scroller.config[SemanticsActions.ScrollBy].action!!.invoke(10_000f, 0f)
         Smoke.pump(300); SmokeUi.settle()
