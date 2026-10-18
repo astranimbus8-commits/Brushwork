@@ -19,11 +19,20 @@ import kotlinx.coroutines.withContext
  * horizontal / vertical lines drawn in them ([LineDetector], looked for inside the bounds, as
  * the mask shows them).
  * Cached per layer by its content version (and bitmap / mask), computed lazily: tiny layers
- * right away, others one after another on a background thread (the main thread only reads the
- * cache). Bounds of a small layer are known at once while its lines may still be found in the
- * background ([SYNC_PIXELS] / [LINES_SYNC_PIXELS]). A result is dropped if the layer changed
- * while it was being scanned. Everything here is called on the main thread; [onUpdated] runs
- * there whenever new bounds or lines arrived.
+ * right away, others one after another on a background thread. Bounds of a small layer are known
+ * at once while its lines may still be found in the background ([SYNC_PIXELS] /
+ * [LINES_SYNC_PIXELS]). A result is dropped if the layer changed while it was being scanned.
+ * Everything here is called on the main thread; [onUpdated] runs there whenever new bounds or
+ * lines arrived.
+ *
+ * v1.9 (A7b step 6, design 2.8 R9c, risk H4): the background thread never reads a layer's own
+ * pixels. Undo history trimmed meanwhile (`LayerTreeAction.dispose`) recycles the bitmaps of the
+ * layers it removed, on the main thread, and a native read of a recycled bitmap can crash the app
+ * where no exception is caught. So each background scan reads immutable copies of the layer and
+ * its mask, taken on the main thread just before ([copyPixels]) and recycled once it ends (also
+ * when it is cancelled). One layer is scanned at a time: at most one copy (and its mask's) exists.
+ * A copy that cannot be made (out of memory) is like a scan that ran out of memory: nothing to
+ * snap to in this content, not retried until it changes.
  */
 class LayerBoundsCache(
     private val scope: CoroutineScope,
@@ -113,13 +122,31 @@ class LayerBoundsCache(
                     if (bmp.isRecycled) continue
                     // Bounds already known (a small layer): only its lines are missing.
                     val known = current(layer)
-                    val scan = withContext(Dispatchers.Default) {
-                        val bounds = if (known != null) Scan(known.bounds) else scanBounds(bmp, mask) { !isActive }
-                        if (bounds == null || !detectLines || bounds.bounds == null) bounds
-                        else scanLines(bmp, bounds.bounds, mask) { !isActive }?.let { Scan(bounds.bounds, it) }
-                    } ?: continue
-                    // Changed (or replaced) while it was being scanned: scan it again when asked.
-                    if (layer.contentVersion != version || layer.bitmap !== bmp || activeMask(layer) !== mask) continue
+                    // v1.9 (H4): what the background reads, copied here on the main thread.
+                    val copies = copies(bmp, mask)
+                    if (copies == null) {
+                        // Out of memory for the copy: nothing to snap to in this content.
+                        store(layer, version, bmp, mask, known?.bounds, emptyList())
+                        onUpdated()
+                        continue
+                    }
+                    val (src, srcMask) = copies
+                    val scan: Scan?
+                    try {
+                        scan = withContext(Dispatchers.Default) {
+                            val bounds = if (known != null) Scan(known.bounds) else scanBounds(src, srcMask) { !isActive }
+                            if (bounds == null || !detectLines || bounds.bounds == null) bounds
+                            else scanLines(src, bounds.bounds, srcMask) { !isActive }?.let { Scan(bounds.bounds, it) }
+                        }
+                    } finally {
+                        // withContext returns (or throws) only once its block has ended: nothing reads them now.
+                        src.recycle()
+                        srcMask?.recycle()
+                    }
+                    if (scan == null) continue
+                    // Changed (replaced, or recycled with a removed layer) while it was being scanned:
+                    // scan it again when asked.
+                    if (layer.contentVersion != version || layer.bitmap !== bmp || bmp.isRecycled || activeMask(layer) !== mask) continue
                     store(layer, version, bmp, mask, scan.bounds, if (detectLines) scan.lines ?: emptyList() else emptyList())
                     onUpdated()
                 }
@@ -130,6 +157,37 @@ class LayerBoundsCache(
     }
 
     private class Scan(val bounds: Rect?, val lines: List<DetectedLine>? = null)
+
+    /**
+     * v1.9 (H4): immutable copies of [bmp] and [mask] (when there is one) for a background scan,
+     * or null when one could not be made (out of memory; nothing is left allocated then). Main
+     * thread, like every change and recycling of a layer's bitmaps.
+     */
+    private fun copies(bmp: Bitmap, mask: Bitmap?): Pair<Bitmap, Bitmap?>? {
+        val src = try {
+            copyPixels(bmp)
+        } catch (e: OutOfMemoryError) {
+            null
+        } ?: return null
+        if (mask == null) return src to null
+        val srcMask = try {
+            copyPixels(mask)
+        } catch (e: OutOfMemoryError) {
+            null
+        }
+        if (srcMask == null) {
+            src.recycle()
+            return null
+        }
+        return src to srcMask
+    }
+
+    /**
+     * How a layer's (or mask's) pixels are copied for the background (main thread; null or
+     * [OutOfMemoryError] when there is no memory for it; replaceable in tests): an immutable copy
+     * of the same size and config.
+     */
+    internal var copyPixels: (Bitmap) -> Bitmap? = { b -> b.copy(b.config ?: Bitmap.Config.ARGB_8888, false) }
 
     /**
      * Content bounds of [bmp], trimmed by [mask] (the layer's enabled mask, if any) to where it
@@ -151,7 +209,10 @@ class LayerBoundsCache(
     private fun scanLines(bmp: Bitmap, bounds: Rect, mask: Bitmap?, cancelled: () -> Boolean): List<DetectedLine>? =
         guarded(cancelled, { emptyList() }) { findLines(bmp, bounds, mask, cancelled) }
 
-    /** How lines are found (runs on a background thread; replaceable in tests). */
+    /**
+     * How lines are found (runs on a background thread, given the full-size copies of the layer
+     * and its mask, never the layer's own bitmaps; replaceable in tests).
+     */
     internal var findLines: (Bitmap, Rect, Bitmap?, () -> Boolean) -> List<DetectedLine> = { b, r, m, c -> LineDetector.detect(b, r, m, c) }
 
     /**

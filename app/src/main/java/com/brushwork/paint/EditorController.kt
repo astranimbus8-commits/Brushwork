@@ -401,12 +401,18 @@ class EditorController(
      * sources, `pixelLayerCount + ceil(sum of ArrayPixels bytes / layerBytes)`. [canAddLayer],
      * [canAddAdjustmentLayer], `ImportLayers`' room check, `ArrayOps` and the layer window's
      * "n / max" all read it. Without folders and arrays it is `doc.layers.size` (v1.6).
+     *
+     * v1.9 (A7b step 6, design 2.8 R9c): plus one per layer mask (turned off or not: a mask is a
+     * full-size ARGB bitmap, a layer's bytes), so a mask needs room like a layer ([addMask]
+     * checks it) and the layer window's "n / max" counts masks. An artwork already over the
+     * limit still opens; only adding stops.
      */
     val effectiveLayerCount: Int
         get() {
             val per = max(1L, doc.layerBytes)
             val arrayBytes = doc.layers.sumOf { it.array?.pixels?.bytes ?: 0L }
-            return doc.pixelLayerCount + ((arrayBytes + per - 1) / per).toInt()
+            val masks = doc.layers.count { it.mask != null }
+            return doc.pixelLayerCount + masks + ((arrayBytes + per - 1) / per).toInt()
         }
 
     /** The message shown when a new layer would pass [maxLayers]. */
@@ -2323,9 +2329,17 @@ class EditorController(
     // ------------------------------------------------------------------ masks
 
     // region v19-A7b addMask
+    /**
+     * Gives [layer] a mask (from the selection when [fromSelection]) and starts editing it.
+     *
+     * v1.9 (A7b step 6, design 2.8 R9c): a mask is a full-size bitmap, as much memory as a layer,
+     * and [effectiveLayerCount] counts it: at [maxLayers] none is added, [layerLimitMessage]
+     * says so (nothing changes).
+     */
     fun addMask(layer: Layer = activeLayer, fromSelection: Boolean = selection != null) {
         if (layer.isFolder) { toast(FolderLabels.NO_MASK); return }
         if (layer.mask != null) return
+        if (!canAddLayer) { toast(layerLimitMessage()); return }
         val mask = BitmapUtils.createMaskBitmap(doc.width, doc.height, if (fromSelection) 0xFF000000.toInt() else -1)
         val sel = selection
         if (fromSelection && sel != null) Canvas(mask).drawBitmap(sel.mask, 0f, 0f, Paint().apply { color = -1 })
