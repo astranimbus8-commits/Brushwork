@@ -1,6 +1,7 @@
 package com.brushwork.paint.tools.vector
 
 import android.graphics.Canvas
+import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.Rect
@@ -33,6 +34,7 @@ import com.brushwork.paint.model.GridType
 import com.brushwork.paint.model.IncrementKind
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.tools.DeletingTool
+import com.brushwork.paint.tools.ErasableTool
 import com.brushwork.paint.tools.ObjectDeletion
 import com.brushwork.paint.tools.ObjectPosition
 import com.brushwork.paint.tools.ObjectScale
@@ -61,6 +63,7 @@ import com.brushwork.paint.tools.vector.spline.SplineEditing
 import com.brushwork.paint.tools.vector.spline.SplinePresets
 import com.brushwork.paint.ui.common.CurveGenLabels18
 import com.brushwork.paint.ui.common.CurveLabels19
+import com.brushwork.paint.ui.common.EraseLabels19
 import com.brushwork.paint.ui.common.MirrorLabels18
 import com.brushwork.paint.ui.common.PillLabels
 import com.brushwork.paint.ui.common.PointLabels
@@ -81,7 +84,14 @@ import com.brushwork.paint.vector.VStrokeStyle
 import com.brushwork.paint.vector.VSubpath
 import com.brushwork.paint.vector.VectorContent
 import com.brushwork.paint.vector.VectorOps
+import com.brushwork.paint.vector.draw.EraseCut
+import com.brushwork.paint.vector.draw.EraseSource
+import com.brushwork.paint.vector.draw.ToolErase
+import com.brushwork.paint.vector.draw.ToolEraseResult
+import com.brushwork.paint.vector.draw.ToolEraseSession
+import com.brushwork.paint.vector.draw.VectorEraserModes
 import com.brushwork.paint.vector.edit.VectorEditSession
+import com.brushwork.paint.vector.pathfinder.PathConvert
 import com.brushwork.paint.vector.render.VectorLayerRenderer
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.drop
@@ -233,7 +243,7 @@ data class CurveSettings(
  *   With increments off every gesture is exactly v1.5.
  */
 class CurveTool(controller: EditorController, val kind: CurveKind) :
-    Tool(controller), PointEditor, PillPositionTool, ScaledTool, DeletingTool {
+    Tool(controller), PointEditor, PillPositionTool, ScaledTool, DeletingTool, ErasableTool {
     /** v1.5 constructor: the Polyline tool when [polyline], else the Curve tool. */
     constructor(controller: EditorController, polyline: Boolean) : this(controller, if (polyline) CurveKind.POLYLINE else CurveKind.CURVE)
 
@@ -3038,7 +3048,8 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
      * reopen each other's paths too, each in its own tool (up to v1.8 they left them alone).
      */
     private fun reopenablePathAt(p: Vec2): Pair<VPath, CurveKind>? {
-        if (opening) return null
+        // (v1.9: while erasing, a tap starts an outline there.)
+        if (opening || eraseState) return null
         val layer = controller.doc.activeLayer
         if (!vectorTarget(layer) || controller.doc.effectiveLocked(layer) || !controller.doc.effectiveVisible(layer)) return null
         val tol = controller.docLength(PATH_HIT_DP)
@@ -3143,6 +3154,8 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         val layer = controller.doc.activeLayer
         if (!vectorTarget(layer) || layer.vector?.byId(path.id) == null) return false
         if (!controller.checkEditable(layer)) return false
+        // (v1.9: a path opened for editing is painted again.)
+        if (eraseState) setErase(false)
         opening = true
         // (The edit session may be prepared in the background: the path opens when it is ready,
         // unless a new path was started or the tool left meanwhile.)
@@ -3442,6 +3455,12 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         val path = if (anchors.size >= 2) path() else null
         if (path != null) path.toAndroidPath(docPath) else docPath.rewind()
         val layer = targetLayer ?: controller.doc.activeLayer
+        // v1.9 (R11 a): erasing, the outline erases live instead of painting (no reopened path then).
+        if (eraseState && reopened == null) {
+            changedErasing(layer)
+            controller.invalidateOverlay()
+            return
+        }
         val mode = strokeMode(layer)
         if (path != null && settings.stroke == CurveStroke.BRUSH && mode == CurveStroke.PLAIN && !warnedPlain) {
             warnedPlain = true
@@ -3725,6 +3744,8 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         if (anchors.size < 2) { discard(); return }
         val layer = targetLayer ?: controller.doc.activeLayer
         if (controller.doc.indexOf(layer) < 0) { discard(); return }
+        // v1.9 (R11 a): the erase checks the layer itself (one message).
+        if (eraseState) { commitErase(layer); return }
         if (!controller.checkEditable(layer)) return
         if (vectorTarget(layer)) { commitObject(layer); return }
         val s = settings
@@ -3903,6 +3924,8 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         hideCopies()
         thicknessRing = false
         warnedPlain = false
+        endErase()
+        eraseRefused = null
     }
 
     private fun clearHistory() {
@@ -3937,7 +3960,11 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         if (observeJob?.isActive == true) return
         observeJob = controller.scope.launch {
             snapshotFlow {
-                listOf(controller.color, controller.selection, controller.layersVersion, controller.lastPaintTool, controller.presetFor(controller.lastPaintTool))
+                // (v1.9: the Eraser's mode, which an erase on a vector or shape layer follows.)
+                listOf(
+                    controller.color, controller.selection, controller.layersVersion, controller.lastPaintTool, controller.presetFor(controller.lastPaintTool),
+                    VectorEraserModes.mode(controller),
+                )
             }
                 .drop(1)
                 .collect { if (anchors.size >= 2 && !inCommit) changed() }
@@ -3987,7 +4014,8 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
                 copies = copyMaps, groupAlpha = overlayAlpha,
             )
         }
-        if (list.size >= 2) painter.path(canvas, t, docPath)
+        // v1.9 (R11 a): dashed (the accent) while the outline erases.
+        if (list.size >= 2) painter.path(canvas, t, docPath, dashed = eraseState)
         val scale = handleSize
         if (isPath) {
             drawPathPoints(canvas, t, scale)
@@ -4042,6 +4070,190 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         painter.path(canvas, t, ringPath, dashed = true)
     }
 
+    // ------------------------------------------------------------------ erase mode (v1.9, R11 a)
+
+    private var eraseState by mutableStateOf(false)
+
+    /**
+     * v1.9 (R11 a, design 2.4.12): the pending path erases instead of painting (bottom-bar slot 1,
+     * or [EraseLabels19.INSTEAD_OF_PAINT] in the Stroke-kind menu; Compose state). Its footprint
+     * is what the tool would paint ([eraseOutline]), and it erases live as it changes
+     * ([ToolErase]): the pixels of a raster or text layer or of a mask, the objects of a vector or
+     * legacy shape layer in the Eraser's mode. The outline is drawn dashed. ✓ (a tap outside, a
+     * tool switch) makes ONE step ([eraseStepLabel]). Transient: never saved, off when the tool is
+     * chosen again ([onSelected]), on from one path to the next until switched off. Meanwhile a tap
+     * on a path object starts an outline there (no reopening).
+     */
+    override val eraseOn: Boolean get() = eraseState
+
+    override val eraseLabel: String
+        get() = when (kind) {
+            CurveKind.CURVE -> EraseLabels19.WITH_CURVE
+            CurveKind.POLYLINE -> EraseLabels19.WITH_POLYLINE
+            CurveKind.PATH -> EraseLabels19.WITH_PATH
+        }
+
+    override val erasingLabel: String
+        get() = when (kind) {
+            CurveKind.CURVE -> EraseLabels19.ERASING_CURVE
+            CurveKind.POLYLINE -> EraseLabels19.ERASING_POLYLINE
+            CurveKind.PATH -> EraseLabels19.ERASING_PATH
+        }
+
+    private val eraseSource: EraseSource
+        get() = when (kind) {
+            CurveKind.CURVE -> EraseSource.CURVE
+            CurveKind.POLYLINE -> EraseSource.POLYLINE
+            CurveKind.PATH -> EraseSource.PATH
+        }
+
+    /** The pending path's open erase and its layer (null: not erasing, fewer than 2 points, or refused). */
+    private var eraseSession: ToolEraseSession? = null
+    private var eraseLayer: Layer? = null
+
+    /**
+     * Where the erase was refused last (the layer and `layersVersion`): it isn't asked again, with
+     * its message on every point, until the layers change (unlocked, shown...) or ✓.
+     */
+    private var eraseRefused: Pair<Layer, Int>? = null
+
+    /**
+     * Turns erase mode [on] or off. A pending path stays and shows as an erase (or as paint again);
+     * a reopened path is applied first, as a tool switch applies it.
+     */
+    override fun setErase(on: Boolean) {
+        if (on == eraseState) return
+        if (on && reopened != null) commitReopened()
+        eraseState = on
+        eraseRefused = null
+        if (!on) endErase()
+        if (anchors.size >= 2) changed() else controller.invalidateOverlay()
+    }
+
+    /** v1.9 (R11 a): erase mode is off whenever the user picks the tool. */
+    override fun onSelected() {
+        if (eraseState) setErase(false)
+    }
+
+    /** Ends the open erase without a step (the layer shows as before). */
+    private fun endErase() {
+        eraseSession?.cancel()
+        eraseSession = null
+        eraseLayer = null
+    }
+
+    /**
+     * [changed] while erasing: the tool's own previews go (the erase owns the render override; the
+     * overlay draws the outline only) and the erase on [layer] follows the outline.
+     */
+    private fun changedErasing(layer: Layer) {
+        brushPreview.cancel()
+        brushOverride = null
+        preview.release()
+        hideUnclipped()
+        hideCopies()
+        overlaySpecs = emptyList()
+        if (anchors.size < 2) { endErase(); return }
+        val s = eraseSessionOn(layer) ?: return
+        val o = eraseOutline(layer)
+        s.update(o.outline, o.width, o.filled)
+    }
+
+    /** The open erase on [layer], begun when needed; null when [layer] refuses it ([eraseRefused]). */
+    private fun eraseSessionOn(layer: Layer): ToolEraseSession? {
+        eraseSession?.let { if (eraseLayer === layer) return it }
+        endErase()
+        val version = controller.layersVersion
+        val refused = eraseRefused
+        if (refused != null && refused.first === layer && refused.second == version) return null
+        val s = ToolErase.begin(controller, layer, eraseSource)
+        if (s == null) {
+            eraseRefused = layer to version
+            return null
+        }
+        eraseRefused = null
+        eraseSession = s
+        eraseLayer = layer
+        return s
+    }
+
+    /** An erase footprint ([ToolEraseSession.update]): [outline] stroked [width] wide, plus its region when [filled]. */
+    private class EraseOutline(val outline: Path, val width: Float, val filled: Boolean)
+
+    /**
+     * The pending path's footprint on [layer]: what the tool would paint there. The line at its
+     * width ("Current brush": the brush's size; none when every point is at 0 %), plus the fill
+     * when it is on (an open path fills as if closed, as it paints). With varying thickness the
+     * line is its outline ([varyingOutline]); the copies (symmetry rulers) erase too, so a fill or
+     * a varying line is one region, united (a mirrored copy winds the other way). The line keeps
+     * its full width along the brush's taper.
+     */
+    private fun eraseOutline(layer: Layer): EraseOutline {
+        val width = when (strokeMode(layer)) {
+            CurveStroke.NONE -> 0f
+            CurveStroke.BRUSH -> baseBrush()?.size ?: lineWidth
+            CurveStroke.PLAIN -> lineWidth
+        }
+        val fill = settings.fill && canFill
+        val copies = copyMaps
+        val uniform = !(width > 0f) || CurveGeometry.isUniformWidth(anchors)
+        if (uniform && copies.isEmpty()) return EraseOutline(docPath, width, fill)
+        if (uniform && !fill) {
+            // (A line doesn't depend on its contours' direction: the copies' lines join the path's.)
+            val all = Path(docPath)
+            for (m in copies) all.addPath(docPath, matrixOf(m))
+            return EraseOutline(all, width, false)
+        }
+        var own = when {
+            !(width > 0f) -> Path()
+            uniform -> EraseCut.strokeRegion(docPath, width / 2f)
+            else -> varyingOutline(width).toAndroidPath()
+        }
+        if (fill) own = united(own, docPath)
+        var region = own
+        for (m in copies) region = united(region, Path(own).apply { transform(matrixOf(m)) })
+        return EraseOutline(region, 0f, true)
+    }
+
+    private fun united(a: Path, b: Path): Path = PathConvert.op(a, b, Path.Op.UNION) ?: Path(a).apply { addPath(b) }
+
+    private fun matrixOf(m: FloatArray): Matrix = Matrix().apply { setValues(m) }
+
+    /**
+     * The erase's step: [EraseLabels19.STEP_PATH] (Path tool); for Curve and Polyline
+     * [EraseLabels19.STEP_FILL] when no line erases (the fill alone), else [EraseLabels19.STEP_LINE].
+     */
+    private fun eraseStepLabel(layer: Layer): String = when {
+        isPath -> EraseLabels19.STEP_PATH
+        strokeMode(layer) == CurveStroke.NONE -> EraseLabels19.STEP_FILL
+        else -> EraseLabels19.STEP_LINE
+    }
+
+    /**
+     * ✓ while erasing: ONE step ([eraseStepLabel]) when the outline erased something, recorded by
+     * the erase; nothing under it, no step. When [layer] refuses (its message shows) the path
+     * stays, as a painted path stays.
+     */
+    private fun commitErase(layer: Layer) {
+        // (✓ asks again: the refusal's message shows once more.)
+        eraseRefused = null
+        val s = eraseSessionOn(layer) ?: return
+        val o = eraseOutline(layer)
+        s.update(o.outline, o.width, o.filled)
+        eraseSession = null
+        eraseLayer = null
+        if (s.commit(eraseStepLabel(layer)) is ToolEraseResult.Refused) {
+            eraseRefused = layer to controller.layersVersion
+            controller.invalidateOverlay()
+            return
+        }
+        resetPath()
+        brushPreview.end()
+        brushOverride = null
+        endLook()
+        controller.invalidateOverlay()
+    }
+
     // ------------------------------------------------------------------ To Bézier (v1.6, §3.2a)
 
     /**
@@ -4063,6 +4275,8 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         val generator: CurveGenerator? = null,
         /** v1.8 (item 1a): the copies' maps ([maps]; they go along both ways). */
         val maps: List<FloatArray>? = null,
+        /** v1.9 (R11 a): the path erases ([eraseOn]; it goes along both ways). */
+        val erase: Boolean = false,
     )
 
     /**
@@ -4078,9 +4292,9 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         if (curve === this || curve.hasPendingWork) return false
         val mine = detachPending()
         controller.selectTool(ToolId.CURVE)
-        val back = Handoff(emptyList(), mine.spline, mine.targetLayer, mine.look, null, mine.seed, mine.history, mine.generator, mine.maps)
+        val back = Handoff(emptyList(), mine.spline, mine.targetLayer, mine.look, null, mine.seed, mine.history, mine.generator, mine.maps, mine.erase)
         curve.adopt(
-            Handoff(mine.anchors, null, mine.targetLayer, mine.look, mine.reopened, mine.seed, emptyList(), maps = mine.maps),
+            Handoff(mine.anchors, null, mine.targetLayer, mine.look, mine.reopened, mine.seed, emptyList(), maps = mine.maps, erase = mine.erase),
             history = listOf(EditState(emptyList(), null, back = back)),
         )
         return true
@@ -4093,7 +4307,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         val mine = detachPending()
         controller.selectTool(ToolId.PATH)
         path.adopt(
-            Handoff(emptyList(), back.spline, mine.targetLayer, back.look, mine.reopened, mine.seed, emptyList(), back.generator, back.maps),
+            Handoff(emptyList(), back.spline, mine.targetLayer, back.look, mine.reopened, mine.seed, emptyList(), back.generator, back.maps, mine.erase),
             history = back.history,
         )
         // Redo converts it again.
@@ -4113,7 +4327,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         val r = reopened
         val h = Handoff(
             anchors, spline, targetLayer ?: controller.doc.activeLayer, settings.copy(closed = if (isPath) pathCyclic else isClosed), r,
-            brushPreview.sessionSeed, history.toList(), generator, maps,
+            brushPreview.sessionSeed, history.toList(), generator, maps, eraseState,
         )
         if (r != null) {
             reopened = null
@@ -4173,6 +4387,8 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         historyKey = null
         canUndoStep = this.history.isNotEmpty()
         brushPreview.useSeed(h.seed)
+        eraseState = h.erase
+        eraseRefused = null
         changed()
     }
 

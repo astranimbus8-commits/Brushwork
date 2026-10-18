@@ -81,12 +81,14 @@ import com.brushwork.paint.tools.vector.CurveStroke
 import com.brushwork.paint.tools.vector.CurveTool
 import com.brushwork.paint.ui.common.CurveGenLabels18
 import com.brushwork.paint.ui.common.CurveLabels17
+import com.brushwork.paint.ui.common.EraseLabels19
 import com.brushwork.paint.ui.common.MirrorLabels18
 import com.brushwork.paint.ui.common.PointLabels
 import com.brushwork.paint.ui.common.PointLabels19
 import com.brushwork.paint.ui.common.V19Tags
 import com.brushwork.paint.ui.common.closeOnSecondFinger
 import com.brushwork.paint.ui.common.longPressLabel
+import com.brushwork.paint.ui.editor.EditorIcons
 import com.brushwork.paint.ui.theme.BrushworkColors
 import com.brushwork.paint.ui.theme.IbisColors
 import com.brushwork.paint.ui.tools.strip.LocalStripContext
@@ -455,10 +457,13 @@ private const val PATH_SHAPES = "Path shapes"
 private fun strokeKindItem(tool: CurveTool, f: CurveStripFacts, row: StripRow, rank: Int) =
     item(CurveKeys.STROKE_KIND, CurveLabels17.STROKE_KIND, CURVE_STROKE_KIND_DP, row, rank) {
         val mode = tool.paintMode
-        val icon = when (mode) {
-            CurvePaint.FILL -> Icons.Filled.FormatColorFill
-            CurvePaint.BOTH -> Icons.Filled.FormatShapes
-            CurvePaint.STROKE, null -> Icons.Filled.LineWeight
+        val erasing = tool.eraseOn
+        val icon = when {
+            // v1.9 (R11 a): the eraser's glyph while the tool erases.
+            erasing -> EditorIcons.Eraser
+            mode == CurvePaint.FILL -> Icons.Filled.FormatColorFill
+            mode == CurvePaint.BOTH -> Icons.Filled.FormatShapes
+            else -> Icons.Filled.LineWeight
         }
         DropCell(CurveLabels17.STROKE_KIND, CURVE_STROKE_KIND_DP, face = { Icon(icon, contentDescription = null, tint = BrushworkColors.OnChrome, modifier = Modifier.size(22.dp)) }) { close ->
             val fillOk = tool.fillPossible
@@ -482,6 +487,17 @@ private fun strokeKindItem(tool: CurveTool, f: CurveStripFacts, row: StripRow, r
                     leadingIcon = { CheckMark(stroke == k) },
                 )
             }
+            // v1.9 (R11 a): the last row, the same switch as the bottom bar's slot 1.
+            HorizontalDivider(color = BrushworkColors.ChromeBorder)
+            DropdownMenuItem(
+                text = { Text(EraseLabels19.INSTEAD_OF_PAINT) },
+                onClick = {
+                    close()
+                    tool.setErase(!erasing)
+                },
+                leadingIcon = { CheckMark(erasing) },
+                modifier = Modifier.semantics { selected = erasing },
+            )
         }
     }
 
