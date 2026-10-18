@@ -1373,8 +1373,10 @@ or Back ends the session; the canvas tap that closes it adds no point. Only shar
 reopens it in the tool that made it (`reopenablePathAt`): Curve and Polyline now reopen each
 other's lines, as both did with Path's since v1.6. A switch hands the open path over
 (`Handoff`), shows `CurveLabels19.SWITCHED_TO` and raises `CurveTool.slotFlashes(tools)`, the one
-counter the bottom bar may key a `SLOT_FLASH_MS` (200 ms) tool-slot flash on (lead request:
-`BottomBar.kt` is A5's). The reopened edit commits as one controller step. Old projects open as
+counter the bottom bar keys its tool-slot flash on: `BottomBar.kt` (A5's file, written by the lead
+at A1's merge, `toolSlotFlashing`) draws slot 2's open-state box for `SLOT_FLASH_MS` (200 ms),
+timed on the frame clock, each time the counter rises after the bar was shown
+(`EraseSlotRobolectricTest`). The reopened edit commits as one controller step. Old projects open as
 they were (compat rows `row10MixedCurves`, `row10BevelledCurvePoints`).
 
 **Editable (own layer) (R14, D22).** The last row of each curve tool's settings sheet is
