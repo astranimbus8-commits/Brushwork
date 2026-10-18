@@ -16,6 +16,7 @@ import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.LayerBlendMode
 import com.brushwork.paint.model.LayerData
 import com.brushwork.paint.model.LayerProps
+import com.brushwork.paint.model.LayerTree
 import com.brushwork.paint.tools.text.TextCodec
 import com.brushwork.paint.tools.text.TextItem
 import com.brushwork.paint.tools.text.TextRenderer
@@ -42,7 +43,8 @@ enum class MergeKind { TEXT_ITEMS, VECTOR_OBJECTS, RASTER }
  * ([MergeKind.VECTOR_OBJECTS], as v1.8's [VectorLayerOps.mergeVector] did for two vector layers)
  * when the result looks the same ([kindOf]); anything else is
  * flattened into the layer below through a temporary two-layer document, so the result matches
- * the screen. Every kind is ONE step "Merge down". Never draws the paper (I21).
+ * the screen. Every kind is ONE step "Merge down". Never draws the paper (I21). "Merge folder"
+ * (`EditorController.mergeFolder`) asks [folderData] whether its merged layer keeps the type.
  */
 internal class LayerMerge(private val c: EditorController) {
 
@@ -412,6 +414,57 @@ internal class LayerMerge(private val c: EditorController) {
         }
         return why?.takeUnless { it == UNREADABLE }
     }
+
+    /**
+     * R19 (A4 step 8): the data "Merge folder" keeps for [folder], or null when the merged layer is
+     * pixels as in v1.8. The merged layer's pixels stay the folder's composite
+     * (`FolderComposite.renderBlock`), so the type is kept only where that composite is exactly the
+     * rendering of the data: the folder holds no folder, and its shown children (a hidden one is
+     * left out, as the composite leaves it out) are
+     * - all text layers, each Normal and at 100 %, without a mask, clipping or copies, with no
+     *   threaded or wrapped text, [TextCodec.MAX_ITEMS] texts in all at most: their texts, bottom
+     *   first, in one text layer; or
+     * - all shape or vector layers, each Normal, without a mask, clipping or copies, whose opacity
+     *   folds exactly ([foldsExactly]): their objects, bottom first, in one vector layer, each
+     *   layer's opacity folded into its objects ([faded]).
+     * The merged layer carries the folder's name and properties as in v1.8 (its opacity included).
+     */
+    fun folderData(folder: Layer): LayerData? {
+        val doc = c.doc
+        val f = doc.indexOf(folder)
+        if (f < 0 || !folder.isFolder) return null
+        val members = doc.layers.subList(LayerTree.block(doc.layers, f).first, f).toList()
+        if (members.any { it.isFolder }) return null
+        val shown = members.filter { it.visible }
+        if (shown.isEmpty() || shown.any { !keepsInFolder(it) }) return null
+        return when {
+            shown.all { it.isTextLayer } -> {
+                // (Under 100 % the composite holds the texts faded, which a re-render would undo.)
+                if (shown.any { it.opacity < 1f }) return null
+                val items = shown.flatMap { TextCodec.decodeAll(it.textData).ifEmpty { return null } }
+                if (items.size > TextCodec.MAX_ITEMS || items.any { it.threaded || it.wrap.isOn }) return null
+                LayerData(text = TextCodec.encodeAll(items))
+            }
+            shown.all { holdsObjects(it) } -> {
+                // Renders still on their way land first: the composite is that of the objects.
+                c.vectors.flushPending()
+                var merged: VectorContent? = null
+                for (layer in shown) {
+                    val content = objectsOf(layer) ?: return null
+                    if (!foldsExactly(layer, content)) return null
+                    val objects = faded(content, layer.opacity)
+                    merged = merged?.plus(objects.objects)?.first ?: objects
+                }
+                LayerData(vector = merged)
+            }
+            else -> null
+        }
+    }
+
+    /** The conditions a shown child of a folder meets in [folderData] whatever its kind: Normal, no mask, clipping, copies or adjustment. */
+    private fun keepsInFolder(layer: Layer): Boolean =
+        layer.mask == null && layer.maskSpec == null && layer.blendMode == LayerBlendMode.NORMAL && !layer.clipping &&
+            layer.array == null && layer.adjustment == null
 
     /** A layer whose type R19 keeps: text, a legacy shape or vector objects (never a folder or an adjustment layer). */
     private fun isDataLayer(layer: Layer): Boolean =

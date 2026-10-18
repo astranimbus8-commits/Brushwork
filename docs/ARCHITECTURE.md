@@ -1663,9 +1663,10 @@ options on them) and R14 ("a button to duplicate the selection in the same layer
   `V19Tags.MERGE_DIALOG`), `ui/layers/LayersPanel.kt` (the dialog's saveable state),
   `ui/layers/LayerRow.kt` (the derived shape badge), `tools/select/SelectionDuplicate.kt`,
   `ui/editor/SelectionBar.kt`, `vector/select/ObjectActions.kt` (`arrange`'s body).
-  `EditorController.mergeDown` stays a one-line delegate (region `v19-A4 mergeDown`); the other
-  A4 regions are unchanged. `LayerConvert.shapeToVector` (F1b) converts a legacy shape layer on
-  the way.
+  `EditorController.mergeDown` stays a one-line delegate (region `v19-A4 mergeDown`), and region
+  `v19-A4 mergeFolder` asks `LayerMerge.folderData` for the data its merged layer keeps; the
+  other A4 regions are unchanged. `LayerConvert.shapeToVector` (F1b) converts a legacy shape
+  layer on the way.
 - **Merge kinds** (`LayerMerge.kindOf(upper, lower)`, the pair "Merge down" works on: `lower`
   right below `upper`):
   - `TEXT_ITEMS`: two text layers. The texts of the upper layer join the lower layer's on top
@@ -1736,6 +1737,19 @@ options on them) and R14 ("a button to duplicate the selection in the same layer
   object passes the next object that overlaps it, or takes one plain step when none does, so
   "Already in front" and "Already at the back" come only at the top or the bottom. Front and Back
   keep v1.5's `ObjectEdits.arrange`. Each is one step; A9's shape More row calls the same entry.
+- **Merge folder keeps the type** (R19, step 8). `EditorController.mergeFolder` still makes the
+  merged layer from the folder's composite (`FolderComposite.renderBlock`), with the folder's
+  name and props as in v1.8. `LayerMerge.folderData(folder)` adds the data when that composite is
+  exactly the rendering of it. The folder holds no folder, and its shown children are all Normal,
+  without a mask, clipping, live array or adjustment. A hidden child is left out, as the
+  composite leaves it out. Then:
+  - all text layers at 100 %, no threaded or wrapped text, at most `TextCodec.MAX_ITEMS` texts:
+    one text layer of their texts, bottom first;
+  - all shape or vector layers whose opacity folds exactly (`foldsExactly`): one vector layer of
+    their objects, bottom first, each layer's opacity folded in (`faded`), a shape converted;
+  - anything else: one raster layer, as in v1.8, without the R19 merge dialog (v1.8's
+    pass-through question in `LayerOps.mergeFolder` stays).
+  - Either way it is one step `FolderLabels.MERGE` (`MergeFolderKeepsTypeTest`).
 - **Compat** (5.2 row 10). v1.8 reads and edits the fixtures `layers-merged` (a vector merge
   with a folded 50 % layer, and two shape layers merged into a vector layer of shapes) and
   `duplicates` (a raster and a vector Duplicate) as they are: existing kinds and fields only. A
@@ -1743,13 +1757,13 @@ options on them) and R14 ("a button to duplicate the selection in the same layer
 - **Tests.**
   - `v19/a4`: `MergeKeepsTypeTest`, `MergeExactTest`, `MergeRasterReasonTest`,
     `MergeConfirmDialogTest` (UI), `LayerMergePaperTest`, `ShapeBadgeTest`,
-    `SelectionDuplicateRobolectricTest`, `ArrangeOneStepTest`, with `A4Kit`.
+    `SelectionDuplicateRobolectricTest`, `ArrangeOneStepTest`, `MergeFolderKeepsTypeTest`, with
+    `A4Kit`.
   - `qa19`: `Qa19MergeUiTest` and `Qa19DuplicateUiTest` (392 and 360 dp, font scales 1, 1.3 and
     2.0, I27).
   - Forced updates: `LayerMergeExtractionTest`, `VectorLayerOpsRobolectricTest`,
     `ObjectActionsRobolectricTest` (Forward's plain step), `Qa18PolishChromeSelectionBarTest`
     (eleven items; the stroke waits for the tool menu to close).
-- **Not built.** "Merge folder" still makes one raster layer (the cuttable step 8).
 
 <!-- /v19-A4 -->
 
