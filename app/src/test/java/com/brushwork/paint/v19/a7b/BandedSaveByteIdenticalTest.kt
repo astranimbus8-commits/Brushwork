@@ -70,7 +70,7 @@ class BandedSaveByteIdenticalTest {
     private class Saved(val files: Map<String, ByteArray>, val scratch: Int)
 
     private fun save(doc: Document, banded: Boolean, bandBytes: Int = LayerEntries.BAND_BYTES): Saved {
-        val dir = File(app.cacheDir, "banded-${System.nanoTime()}").apply { mkdirs() }
+        val dir = File(app.cacheDir, "banded-${java.util.UUID.randomUUID()}").apply { mkdirs() }
         try {
             LayerEntries.bandedSave = banded
             LayerEntries.bandBytes = bandBytes

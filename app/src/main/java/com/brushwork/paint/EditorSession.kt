@@ -84,14 +84,40 @@ class EditorSession(private val app: BrushworkApp, val projectId: String) {
      * vector or array render, a saved selection compressing) lands first, as on [close], so this
      * save holds it; then [saveNow]. Pending tool work is left as it is (it is still pending on
      * return). ("Save now" and the autosave don't wait: they save what has landed, consistently.)
+     *
+     * v1.9 (A7b step 5, R9, design 3.2 A7b): on the app scope, without holding the main thread
+     * (v1.8 waited on it for good, and Android offers to close an app that does that on the way
+     * out): it waits up to 1.5 s for the renders still running and until the saved selections are
+     * compressed (`EditorController.awaitDeferredWork`), then lands what is still pending on the
+     * spot, through the synchronous path ([EditorController.leavingDeferred]: never cancelled),
+     * and saves. The user's work is never dropped on leaving.
      */
     fun saveOnLeaving(): Job {
-        controller?.let { c ->
-            runCatching { c.settleVectorWork() }
-            runCatching { c.landSavedSelections() }
+        val c = controller ?: return saveNow()
+        return app.appScope.launch {
+            // From the start: a step recorded meanwhile (a saved selection landing) lands the
+            // render too, on the spot, instead of cancelling it.
+            leavingSaves++
+            c.leavingDeferred = true
+            try {
+                try {
+                    c.awaitDeferredWork()
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    kept(e, "leaving: waiting for work")
+                }
+                runCatching { c.settleVectorWork() }.onFailure { kept(it, "leaving: vector work") }
+                runCatching { c.landSavedSelections() }.onFailure { kept(it, "leaving: saved selections") }
+            } finally {
+                if (--leavingSaves == 0) c.leavingDeferred = false
+            }
+            save()
         }
-        return saveNow()
     }
+
+    /** The [saveOnLeaving] calls still landing work (Home pressed twice quickly). Main thread. */
+    private var leavingSaves = 0
     // endregion
 
     suspend fun save() {
