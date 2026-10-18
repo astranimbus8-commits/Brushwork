@@ -1475,7 +1475,9 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
         val label = (if (dir > 0) ObjectEdits.Arrange.FORWARD else ObjectEdits.Arrange.BACKWARD).label
         var done = false
         try {
-            done = controller.updateTextLayer(layer, TextCodec.encodeAll(items), label, dirty.takeUnless { it.isEmpty }) { c ->
+            // An empty [dirty] (a text that draws nothing) moves no pixel: a data-only step. Never
+            // null here: that would clear the whole layer while drawMeeting draws nothing again.
+            done = controller.updateTextLayer(layer, TextCodec.encodeAll(items), label, dirty) { c ->
                 TextLayerDraw.drawMeeting(c, layer, dirty, items, preps)
             }
         } catch (e: OutOfMemoryError) {

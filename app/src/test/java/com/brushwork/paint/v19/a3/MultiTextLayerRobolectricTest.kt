@@ -15,6 +15,9 @@ import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
 import com.brushwork.paint.tools.text.TextCodec
 import com.brushwork.paint.tools.text.TextItem
+import com.brushwork.paint.tools.text.TextPathMode
+import com.brushwork.paint.tools.text.TextPathSpec
+import com.brushwork.paint.tools.text.TextPathType
 import com.brushwork.paint.tools.text.TextRenderer
 import com.brushwork.paint.tools.text.TextTool
 import com.brushwork.paint.tools.text.TextWrapSpec
@@ -506,5 +509,51 @@ class MultiTextLayerRobolectricTest {
         assertEquals(listOf("A", "B", "C"), texts(layer))
         assertEquals(black, TextCodec.decodeAll(layer.textData)[0].spec.color)
         assertRendered(layer, "after undo")
+    }
+
+    /**
+     * Review fix (step 8): a text that draws nothing (a lone soft hyphen bent along a line: not
+     * blank, no ink) moved past the others changes their picture order only, as ONE step; the
+     * other texts keep their pixels (before the fix the whole layer was cleared and nothing was
+     * drawn again). Undo and redo restore the order exactly.
+     */
+    @Test
+    fun arrangeOfATextThatDrawsNothingKeepsTheOtherTextsPixels() {
+        val (c, tool) = newController()
+        place(c, tool, "A", 100f, 100f, size = 60f)
+        val layer = c.activeLayer
+        val a = TextCodec.decodeAll(layer.textData).single()
+        val line = TextPathSpec(type = TextPathType.LINE, mode = TextPathMode.BEND, x1 = 40f, y1 = 200f, x2 = 360f, y2 = 200f)
+        val ghost = a.copy(id = 0, text = SOFT_HYPHEN, path = line)
+        assertFalse("precondition: the text is not blank", ghost.text.isBlank())
+        assertTrue("precondition: the text draws nothing", TextRenderer.prepare(ghost).isEmpty)
+        store(c, layer, listOf(ghost, a, a.copy(id = 0, text = "B", cx = 300f, cy = 220f)))
+        assertRendered(layer, "setup")
+        val before = pixels(layer.bitmap)
+        assertNotEquals("the layer shows the other texts", 0, before.count { it != 0 })
+
+        assertTrue(tool.editLayer(layer, index = 0))
+        assertEquals(SOFT_HYPHEN, tool.item?.text)
+        val steps = c.undoManager.undoCount
+        assertTrue(tool.arrangeOpen(1))
+        assertEquals("one step", steps + 1, c.undoManager.undoCount)
+        assertEquals(ObjectEdits.Arrange.FORWARD.label, c.undoManager.undoLabel)
+        assertEquals(listOf("A", SOFT_HYPHEN, "B"), texts(layer))
+        assertEquals("still open, in its new place", 1, tool.openIndex)
+        assertArrayEquals("no pixel changed", before, pixels(layer.bitmap))
+        assertRendered(layer, "after Bring forward")
+        tool.discard()
+
+        c.undo()
+        assertEquals(listOf(SOFT_HYPHEN, "A", "B"), texts(layer))
+        assertArrayEquals(before, pixels(layer.bitmap))
+        c.redo()
+        assertEquals(listOf("A", SOFT_HYPHEN, "B"), texts(layer))
+        assertRendered(layer, "after redo")
+    }
+
+    private companion object {
+        /** U+00AD: not blank, and bent along a path it draws nothing. */
+        const val SOFT_HYPHEN = "\u00AD"
     }
 }
