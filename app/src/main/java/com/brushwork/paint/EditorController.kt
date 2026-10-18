@@ -355,7 +355,8 @@ class EditorController(
      * v1.9 (A7b step 1, R9, design 2.4.3): the undo history as a `MemoryGovernor` entry
      * ([com.brushwork.paint.engine.GovernorPolicyV19.UNDO_ENTRY], priority 50: trimmed last), held
      * weakly (a closed editor's entry goes by itself). Under CRITICAL pressure it drops the oldest
-     * steps until the Java heap is under 70 % ([trimUndoForMemory]). `UndoManager` keeps its steps'
+     * steps until the memory in use (Java and native heap: bitmap pixels are native) is under 70 %
+     * of `maxMemory` ([trimUndoForMemory]). `UndoManager` keeps its steps'
      * sizes to itself, so the entry reports 0 bytes. [dispose] may close it.
      */
     internal val undoMemoryRegistration: MemoryGovernor.Registration =
@@ -369,10 +370,10 @@ class EditorController(
 
     /**
      * What the governor's undo entry frees: under [com.brushwork.paint.engine.MemoryPressure.CRITICAL]
-     * the oldest steps until the Java heap is under 70 % of its maximum (the newest step stays),
-     * then [StabilityLabels19.UNDO_TRIMMED] when any went; nothing under a lower pressure. Returns
-     * the heap bytes that went (as far as a collection shows them). Main thread (posted there
-     * when called from another).
+     * the oldest steps until the memory in use (Java and native heap) is under 70 % of `maxMemory`
+     * (the newest step stays), then [StabilityLabels19.UNDO_TRIMMED] when any went; nothing under a
+     * lower pressure. Returns the bytes the dropped steps held. Main thread (posted there when
+     * called from another).
      */
     internal fun trimUndoForMemory(pressure: com.brushwork.paint.engine.MemoryPressure): Long {
         if (pressure != com.brushwork.paint.engine.MemoryPressure.CRITICAL) return 0L

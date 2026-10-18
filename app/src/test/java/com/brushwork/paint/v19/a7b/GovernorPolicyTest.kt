@@ -19,9 +19,10 @@ import org.robolectric.RobolectricTestRunner
 /**
  * v1.9 A7b step 1 (design 3.2 A7b, R9): [GovernorPolicyV19], the policy the app runs with. LOW
  * trims the display caches and the proxies; CRITICAL also the below-caches, then the undo history,
- * whose oldest steps go until the Java heap is under 70 % of its maximum (the newest step stays);
- * NORMAL and MODERATE trim nothing. The entries are made here and handed to the policy directly,
- * so other tests' registrations in this JVM never take part.
+ * whose oldest steps go until the memory in use (Java heap and native heap, where the steps' bitmap
+ * tiles live) is under 70 % of `maxMemory` (the newest step stays), counted from the steps' sizes
+ * without a collection on the main thread; NORMAL and MODERATE trim nothing. The entries are made
+ * here and handed to the policy directly, so other tests' registrations in this JVM never take part.
  */
 @RunWith(RobolectricTestRunner::class)
 class GovernorPolicyTest {
@@ -85,30 +86,33 @@ class GovernorPolicyTest {
         assertEquals(listOf("display:CRITICAL", "below:CRITICAL"), seen)
     }
 
-    /** 20 steps of 20 bytes in a 1000-byte heap with 900 in use: the oldest go until under 700. */
+    /**
+     * 20 steps of 20 bytes of native memory; 300 bytes of Java heap and 600 of native heap in use
+     * out of 1000: the Java heap alone is under 70 %, the memory in use is not. The oldest steps go
+     * until under 700 (11 of them: 900 - 220), with no collection.
+     */
     @Test
-    fun theOldestUndoStepsGoUntilTheHeapIsUnder70Percent() {
-        val heap = FakeHeap(1000L, 900L)
+    fun theOldestUndoStepsGoUntilTheMemoryInUseIsUnder70Percent() {
+        val heap = FakeHeap(1000L, 300L, native = 600L)
         GovernorPolicyV19.heap = heap
         val history = UndoManager(Long.MAX_VALUE)
         val steps = (1..20).map { HeapStep("Step $it", heap, 20L) }
         steps.forEach { history.push(it) }
         val trimmed = GovernorPolicyV19.trimUndo(history)
-        assertTrue("under 70 %: ${heap.used}", heap.used < 700L)
-        assertEquals(20 - trimmed.steps, history.undoCount)
-        assertEquals("what the collections showed", 900L - heap.used, trimmed.bytes)
+        assertEquals(11, trimmed.steps)
+        assertEquals("what the dropped steps held", 220L, trimmed.bytes)
+        assertEquals(680L, heap.used + heap.native)
+        assertEquals(9, history.undoCount)
         // Oldest first: the dropped ones are a prefix, the newest are kept.
-        assertTrue(steps.take(trimmed.steps).all { it.disposed })
-        assertTrue(steps.drop(trimmed.steps).none { it.disposed })
+        assertTrue(steps.take(11).all { it.disposed })
+        assertTrue(steps.drop(11).none { it.disposed })
         assertEquals("Step 20", history.undoLabel)
-        // In rounds of half the steps above the kept one, each followed by a collection.
-        assertEquals(listOf(10, 5).sum(), trimmed.steps)
-        assertEquals(2, heap.collections)
+        assertEquals("no collection on the main thread (CRITICAL trim: 50 ms at most)", 0, heap.collections)
     }
 
     @Test
     fun theNewestStepStaysWhateverTheHeap() {
-        val heap = FakeHeap(1000L, 990L)
+        val heap = FakeHeap(1000L, 990L, native = 9L)
         GovernorPolicyV19.heap = heap
         val history = UndoManager(Long.MAX_VALUE)
         (1..9).forEach { history.push(HeapStep("Step $it", heap, 1L)) }
@@ -121,13 +125,13 @@ class GovernorPolicyTest {
 
     @Test
     fun underTheTargetOrWhileAnEditHoldsTheHistoryNothingGoes() {
-        val heap = FakeHeap(1000L, 650L)
+        val heap = FakeHeap(1000L, 150L, native = 500L)
         GovernorPolicyV19.heap = heap
         val history = UndoManager(Long.MAX_VALUE)
         (1..5).forEach { history.push(HeapStep("Step $it", heap, 100L)) }
         assertEquals(0, GovernorPolicyV19.trimUndo(history).steps)
         assertEquals(0, heap.collections)
-        heap.used = 950L
+        heap.used = 450L
         history.holdTrim()
         assertEquals("an edit in progress (I2)", 0, GovernorPolicyV19.trimUndo(history).steps)
         assertEquals(5, history.undoCount)
@@ -137,7 +141,7 @@ class GovernorPolicyTest {
 
     @Test
     fun redoStepsAreKept() {
-        val heap = FakeHeap(1000L, 900L)
+        val heap = FakeHeap(1000L, 300L, native = 600L)
         GovernorPolicyV19.heap = heap
         val history = UndoManager(Long.MAX_VALUE)
         val steps = (1..6).map { HeapStep("Step $it", heap, 100L) }

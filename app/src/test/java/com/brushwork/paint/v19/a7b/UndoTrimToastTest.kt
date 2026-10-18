@@ -20,8 +20,9 @@ import org.robolectric.RobolectricTestRunner
 /**
  * v1.9 A7b step 1 (design 3.2 A7b, R9): an editor's undo history is the governor's last entry.
  * The system's CRITICAL trim (as `BrushworkApp`'s ComponentCallbacks2 delivers it) drops its
- * oldest steps until the Java heap is under 70 % and says "Memory is low: older undo steps were
- * cleared"; a LOW trim, or a heap already under 70 %, leaves the history alone and says nothing.
+ * oldest steps until the memory in use (Java and native heap) is under 70 % and says "Memory is
+ * low: older undo steps were cleared"; a LOW trim, or memory already under 70 %, leaves the
+ * history alone and says nothing.
  */
 @Suppress("DEPRECATION") // the trim levels are what Android still delivers
 @RunWith(RobolectricTestRunner::class)
@@ -44,7 +45,8 @@ class UndoTrimToastTest {
         val c = Smoke.controller(app, Smoke.document(64, 48, layers = 1))
         val entry = MemoryGovernor.entries().filter { it.name == GovernorPolicyV19.UNDO_ENTRY && it.priority == GovernorPolicyV19.PRIORITY_UNDO }
         assertTrue("the editor's history is registered", entry.isNotEmpty())
-        val heap = FakeHeap(1000L, 900L)
+        // The steps' tiles are native (360 of 900 in use): the Java heap alone is under 70 %.
+        val heap = FakeHeap(1000L, 540L, native = 360L)
         GovernorPolicyV19.heap = heap
         val steps = (1..12).map { HeapStep("Step $it", heap, 30L) }
         steps.forEach { c.undoManager.push(it) }
@@ -56,9 +58,10 @@ class UndoTrimToastTest {
 
         MemoryGovernor.onTrimMemory(ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL)
         assertEquals(StabilityLabels19.UNDO_TRIMMED, c.message)
-        assertTrue("under 70 %: ${heap.used}", heap.used < 700L)
+        assertTrue("under 70 %: ${heap.used + heap.native}", heap.used + heap.native < 700L)
         val left = c.undoManager.undoCount
-        assertTrue("some steps went: $left", left in 1 until 12)
+        assertEquals("7 steps of 30 bring 900 under 700", 5, left)
+        assertEquals("no collection on the main thread", 0, heap.collections)
         assertEquals("the newest step stays", "Step 12", c.undoManager.undoLabel)
         assertTrue(c.canUndo)
         assertTrue("oldest first", steps.take(12 - left).all { it.disposed } && steps.drop(12 - left).none { it.disposed })
