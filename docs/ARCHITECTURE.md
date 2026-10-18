@@ -1617,7 +1617,8 @@ Adjust sheet's controls through `AdjustmentEdit`. `changing(label)` marks the st
 change of another control is pushed first), `finish(label)` pushes "Change <label>" at once (so the
 next Undo's toast names it; a deferred push would be named after the previous step), and `record`
 pushes a reset ("Reset <label>"), a new effect or "Reset the effect" (v1.8's "Edit adjustment").
-A run of − / + presses stays one pending step until another control, Close or an Undo flushes it.
+A run of − / + presses stays one pending step until another control, Close, an Undo or a reset
+(`resetParam`, `resetAmount`; that control's own too) flushes it.
 Amount (the layer's opacity) is a control like the others (`AMOUNT_KEY`).
 
 **CA blend (R10).** Both Chromatic aberration filters end with `CaBlend.modeParam` ("Blend mode", the
