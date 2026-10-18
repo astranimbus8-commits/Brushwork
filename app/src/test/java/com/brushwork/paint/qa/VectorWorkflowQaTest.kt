@@ -388,7 +388,9 @@ class VectorWorkflowQaTest {
         r.tool(ToolId.POLYLINE)
         val poly = c.tools.getValue(ToolId.POLYLINE) as CurveTool
         poly.update { it.copy(stroke = CurveStroke.PLAIN, fill = false) }
-        r.tap(330f, 440f); r.tap(370f, 505f); r.tap(405f, 450f)
+        // v1.9 (R14): a first tap on the curve just drawn would reopen it in Curve, so the
+        // polyline starts away from it.
+        r.tap(405f, 450f); r.tap(370f, 505f); r.tap(330f, 440f)
         poly.select(2)
         poly.setWidth(2, 0.4f)
         poly.endNumericEdit()
