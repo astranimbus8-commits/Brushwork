@@ -398,7 +398,10 @@ private fun ObjectBarItem(
         }
         Spacer(Modifier.height(2.dp))
         // The whole word always shows inside the button: a long one ("Transform" is about 49 dp
-        // at 10 sp) is set a little smaller rather than clipped by the button's rounded shape.
+        // at 10 sp) is set a little smaller rather than clipped by the button's rounded shape. v1.9
+        // Gate 2 (I27): the smallest size is [MIN_LABEL_SP] as at font scale 1 (in dp), so a large font
+        // scale never cuts a label.
+        val minLabel = with(LocalDensity.current) { MIN_LABEL_SP.value.dp.toSp() }.let { if (it.value < LABEL_SP.value) it else LABEL_SP }
         BasicText(
             label,
             style = MaterialTheme.typography.labelSmall.copy(
@@ -410,7 +413,7 @@ private fun ObjectBarItem(
             ),
             maxLines = 1,
             softWrap = false,
-            autoSize = TextAutoSize.StepBased(minFontSize = MIN_LABEL_SP, maxFontSize = LABEL_SP, stepSize = 0.25.sp),
+            autoSize = TextAutoSize.StepBased(minFontSize = minLabel, maxFontSize = LABEL_SP, stepSize = 0.25.sp),
             modifier = Modifier.fillMaxWidth().padding(horizontal = 1.dp),
         )
     }

@@ -349,13 +349,13 @@ class StripFontScaleTest {
         check(problems, "an open shape with its X / Y pill, $where")
         Qa19Ui.click(ShapeStripItems.SETTINGS_LABEL, exact = true)
         Smoke.pumpUntil(5_000) { Qa19Ui.has("Corner size", exact = true) }
-        assertTrue("$where: the Shape settings sheet; shown: ${Qa19Ui.shown().take(60)}", Qa19Ui.has("Stroke width", exact = true))
-        check(problems, "the Shape settings sheet, $where")
-        SmokeUi.windows().lastOrNull()?.takeIf { SmokeUi.windows().size > 1 }?.let { top ->
-            top.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_BACK))
-            top.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_BACK))
+        for (field in listOf("Stroke width", "Corner size")) {
+            assertTrue("$where: the Shape settings sheet's $field; shown: ${Qa19Ui.shown().take(60)}", Qa19Ui.has(field, exact = true))
         }
+        check(problems, "the Shape settings sheet, $where")
+        Qa19Ui.click(SHEET_CLOSE, exact = true)
         Qa19Ui.settle()
+        assertTrue("$where: the sheet closed", !Qa19Ui.has("Stroke width", exact = true))
 
         // Points mode: the bevel popup over the strip, the pill on screen.
         tool.setPointEditing(true)
@@ -367,5 +367,10 @@ class StripFontScaleTest {
         tool.discard()
         Qa19Ui.settle()
         failOn(problems, "the editor at $where")
+    }
+
+    private companion object {
+        /** The sheet's close button (`BwSheet`, "Close"). */
+        const val SHEET_CLOSE = "Close"
     }
 }

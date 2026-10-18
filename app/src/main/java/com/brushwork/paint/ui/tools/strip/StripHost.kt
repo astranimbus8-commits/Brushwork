@@ -67,6 +67,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.brushwork.paint.UiPrefs
 import com.brushwork.paint.tools.ToolId
+import com.brushwork.paint.ui.common.FitText
 import com.brushwork.paint.ui.common.HistoryTapSink
 import com.brushwork.paint.ui.common.HistoryTapSlots
 import com.brushwork.paint.ui.common.IconLongPressScope
@@ -565,10 +566,17 @@ internal fun Modifier.passCanvasGesture(state: StripState, taps: HistoryTapSink?
     }
 }
 
-/** The hint's text, [HINT_SP] in the theme's style. */
+/**
+ * The hint's text, [HINT_SP] in the theme's style. v1.9 Gate 2 (I27): in its own block it shrinks
+ * ([FitText]) at a large font scale so it fits its [maxLines] (at most [StripLayout.MAX_HINT_LINES],
+ * as [rememberHintLines] measures it) rather than end in an ellipsis; on a line it shares with
+ * items (the line scrolls sideways) it is whole at [HINT_SP].
+ */
 @Composable
 private fun HintText(hint: String, maxLines: Int, overflow: TextOverflow) {
-    Text(hint, color = Color.White.copy(alpha = 0.8f), fontSize = HINT_SP, maxLines = maxLines, overflow = overflow)
+    val color = Color.White.copy(alpha = 0.8f)
+    if (overflow == TextOverflow.Clip) Text(hint, color = color, fontSize = HINT_SP, maxLines = maxLines, overflow = overflow)
+    else FitText(hint, fontSize = HINT_SP, color = color, maxLines = maxLines, softWrap = true, overflow = overflow)
 }
 
 /**

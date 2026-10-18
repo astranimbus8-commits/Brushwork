@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.sp
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.tools.remove.CafSource
 import com.brushwork.paint.tools.remove.RemoveTool
+import com.brushwork.paint.ui.common.FitText
 import com.brushwork.paint.ui.placement.StripMenu
 import com.brushwork.paint.ui.placement.StripMenuButton
 import com.brushwork.paint.ui.placement.StripTextButton
@@ -107,7 +108,8 @@ private fun RemoveSizeReadout(tool: RemoveTool) {
                 Icon(Icons.Filled.LineWeight, contentDescription = null, tint = BrushworkColors.OnChromeDim, modifier = Modifier.size(14.dp))
             }
             Spacer(Modifier.width(3.dp))
-            Text("$px px", fontSize = 13.sp, color = BrushworkColors.OnChrome, maxLines = 1, softWrap = false)
+            // v1.9 Gate 2 (I27): shrinks at a large font scale rather than be cut.
+            FitText("$px px", fontSize = 13.sp, color = BrushworkColors.OnChrome, maxLines = 1, softWrap = false)
         }
         StripMenu(open, onDismiss = { open = false }) {
             // Fixed width: the menu measures its content's intrinsic width.

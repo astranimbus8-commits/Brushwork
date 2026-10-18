@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.brushwork.paint.tools.pathfinder.PathfinderTool
+import com.brushwork.paint.ui.common.FitText
 import com.brushwork.paint.ui.placement.StripMenu
 import com.brushwork.paint.ui.placement.StripMenuButton
 import com.brushwork.paint.ui.theme.BrushworkColors
@@ -74,7 +75,8 @@ internal fun PathfinderOpsMenu(
             val tint = if (enabled) BrushworkColors.OnChrome else BrushworkColors.OnChromeDim
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Icon(iconOf(last), contentDescription = null, tint = tint, modifier = Modifier.size(20.dp))
-                Text(last.label, color = tint, fontSize = 11.sp, lineHeight = 13.sp, maxLines = 1, softWrap = false, overflow = TextOverflow.Visible)
+                // v1.9 Gate 2 (I27): shrinks at a large font scale rather than run out of the cell.
+                FitText(last.label, color = tint, fontSize = 11.sp, lineHeight = 13.sp, maxLines = 1, softWrap = false, overflow = TextOverflow.Visible)
             }
         }
         StripMenu(open, onDismiss = { onOpen(false) }) {

@@ -32,6 +32,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
@@ -543,7 +544,9 @@ internal fun NumberFieldCore(
                     if (changed) typed(it.text)
                 },
                 // Beside a slider the box is narrow: a long label ends in "…" instead of being cut.
-                label = { Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                // v1.9 Gate 2 (I27): at a large font scale it first shrinks ([FitText]), at the
+                // size the field gives it now (resting or floating).
+                label = { FitText(label, fontSize = LocalTextStyle.current.fontSize, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 suffix = if (suffix.isNotEmpty()) ({ Text(suffix) }) else null,
                 singleLine = true,
                 enabled = enabled,

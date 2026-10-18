@@ -93,6 +93,7 @@ import com.brushwork.paint.ui.editor.blockCanvasTouches
 import com.brushwork.paint.ui.editor.endCanvasGesture
 import com.brushwork.paint.ui.theme.IbisColors
 import com.brushwork.paint.ui.theme.IbisDims
+import com.brushwork.paint.ui.common.FitText
 import kotlinx.serialization.builtins.serializer
 
 /**
@@ -461,9 +462,10 @@ private fun ScaleCell(controller: EditorController, tool: Tool, onX: Boolean, pe
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.Center,
         ) {
-            Text(if (onX) "X" else "Y", style = PrefixStyle, maxLines = 1)
+            // v1.9 Gate 2 (I27): the texts shrink at a large font scale to stay in the 28 dp cell.
+            FitText(if (onX) "X" else "Y", fontSize = IbisDims.PillPrefixText, style = PrefixStyle, maxLines = 1)
             Spacer(Modifier.width(5.dp))
-            Text("$shown %", style = ValueStyle, maxLines = 1, overflow = TextOverflow.Clip)
+            FitText("$shown %", fontSize = IbisDims.PillValueText, style = ValueStyle, maxLines = 1, overflow = TextOverflow.Clip)
         }
         if (fine) FineTag(Modifier.align(Alignment.BottomCenter))
     }
@@ -715,10 +717,12 @@ private fun AxisCell(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.Center,
         ) {
-            Text(axis, style = PrefixStyle, maxLines = 1)
+            // v1.9 Gate 2 (I27): the texts shrink at a large font scale to stay in the 28 dp cell.
+            FitText(axis, fontSize = IbisDims.PillPrefixText, style = PrefixStyle, maxLines = 1)
             Spacer(Modifier.width(5.dp))
-            Text(
+            FitText(
                 if (unit == LengthUnit.PX) shown else "$shown ${unit.short}",
+                fontSize = IbisDims.PillValueText,
                 style = ValueStyle,
                 maxLines = 1,
                 overflow = TextOverflow.Clip,

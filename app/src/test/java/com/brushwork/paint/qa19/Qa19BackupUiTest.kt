@@ -10,7 +10,8 @@ import org.robolectric.annotation.Config
  * restore list on the 392 dp phone, at font scale 1 and at each of [Qa19Ui.FONT_SCALES]
  * ([Qa19Backup.chooseAndRestore]), "Later" putting the notice off ([Qa19Backup.later]), and the
  * other ways in: the empty gallery ([Qa19Backup.emptyGalleryRestore]), the editor Settings'
- * Backup section ([Qa19Backup.settings]) and the gallery's ⋮ menu ([Qa19Backup.menu]).
+ * Backup section ([Qa19Backup.settings]) and the gallery's ⋮ menu ([Qa19Backup.menu], at each font
+ * scale too since Gate 2).
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = Qa19Ui.Q392, instrumentedPackages = ["com.brushwork.paint.qa19.backup392sandbox"])
@@ -28,6 +29,8 @@ class Qa19BackupUiTest {
         for (scale in listOf(1f) + Qa19Ui.FONT_SCALES) h.section("the Settings' Backup section at font scale $scale") {
             Qa19Backup.settings(h, scale, 392f)
         }
-        h.section("the gallery's menu") { Qa19Backup.menu(h, 392f) }
+        for (scale in listOf(1f) + Qa19Ui.FONT_SCALES) h.section("the gallery's menu at font scale $scale") {
+            Qa19Backup.menu(h, 392f, scale)
+        }
     }
 }
