@@ -98,7 +98,7 @@ object SelectionDuplicate {
             Canvas(copy).apply { translate(-src.left.toFloat(), -src.top.toFloat()); SelectionEdits.drawSelected(this, layer.bitmap, sel) }
             moved = shifted(sel, d, doc.width, doc.height)
         } catch (e: OutOfMemoryError) {
-            c.toast(NO_MEMORY); return false
+            c.toast(LayerLabels19.NO_MEMORY); return false
         }
         var done = false
         try {
@@ -120,7 +120,7 @@ object SelectionDuplicate {
         } finally {
             copy.recycle()
         }
-        if (!done) c.toast(NO_MEMORY)
+        if (!done) c.toast(LayerLabels19.NO_MEMORY)
         return done
     }
 
@@ -171,6 +171,4 @@ object SelectionDuplicate {
         c.toast(String.format(LayerLabels19.DUPLICATED, made))
         return true
     }
-
-    private const val NO_MEMORY = "Not enough memory to duplicate this"
 }

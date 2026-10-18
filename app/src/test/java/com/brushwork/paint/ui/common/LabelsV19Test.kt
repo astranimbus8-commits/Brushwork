@@ -377,7 +377,7 @@ class LabelsV19Test {
         // and the button shows it with its own description).
         assertNoSubstrings(
             "selection bar",
-            v19 = pick("LayerLabels19", "DUPLICATE_DESC", "DUPLICATED", "NOTHING_TO_DUPLICATE"),
+            v19 = pick("LayerLabels19", "DUPLICATE_DESC", "DUPLICATED", "NOTHING_TO_DUPLICATE", "NO_MEMORY"),
             older = visible("ui/editor/SelectionBar.kt"),
         )
         assertNoSubstrings(
