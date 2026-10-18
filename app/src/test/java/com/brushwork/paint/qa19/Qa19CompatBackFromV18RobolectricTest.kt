@@ -16,10 +16,14 @@ import com.brushwork.paint.compat18.PayloadV18
 import com.brushwork.paint.compat18.ProjectFileDtoV18
 import com.brushwork.paint.compat18.ProjectFormatV18
 import com.brushwork.paint.compat18.ShapeCodecV18
+import com.brushwork.paint.compat18.ShapeLayerDataV18
+import com.brushwork.paint.compat18.ShapeObjectV18
 import com.brushwork.paint.compat18.ShapeSettingsV18
+import com.brushwork.paint.compat18.ShapeTypeV18
 import com.brushwork.paint.compat18.TextCodecV18
 import com.brushwork.paint.compat18.TextTransformsV18
 import com.brushwork.paint.compat18.ToolSettingsV18
+import com.brushwork.paint.compat18.VObjectV18
 import com.brushwork.paint.compat18.VPathV18
 import com.brushwork.paint.compat18.VShapeV18
 import com.brushwork.paint.compat18.VSplineV18
@@ -47,11 +51,13 @@ import com.brushwork.paint.storage.ProjectRepository
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
 import com.brushwork.paint.tools.points.PointSelection
+import com.brushwork.paint.tools.vector.CornerStyle
 import com.brushwork.paint.tools.vector.CurveSettings
 import com.brushwork.paint.tools.vector.ShapeCodec
 import com.brushwork.paint.tools.vector.ShapeObject
 import com.brushwork.paint.tools.vector.ShapeSettings
 import com.brushwork.paint.tools.vector.ShapeStyle
+import com.brushwork.paint.tools.vector.ShapeTool
 import com.brushwork.paint.tools.vector.ShapeType
 import com.brushwork.paint.v19.a1.A1Tools
 import com.brushwork.paint.v19.a1.A1Tools.curveTool
@@ -64,6 +70,7 @@ import com.brushwork.paint.vector.VShape
 import com.brushwork.paint.vector.VStroke
 import com.brushwork.paint.vector.VStrokeStyle
 import com.brushwork.paint.vector.VSubpath
+import com.brushwork.paint.vector.VectorCodec
 import com.brushwork.paint.vector.VectorContent
 import com.brushwork.paint.vector.draw.VectorDrawState
 import com.brushwork.paint.vector.draw.VectorEraseMode
@@ -78,6 +85,7 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Ignore
@@ -170,6 +178,57 @@ class Qa19CompatBackFromV18RobolectricTest {
     private fun firstText(row: String, layer: String): String =
         requireNotNull(v18Reads(row).layers.single { it.name == layer }.textData) { "$row: $layer is a text layer" }
 
+    /**
+     * The objects of vector layer [layer] of [row] as v1.8 reads them (A9's rows): only kinds and
+     * fields v1.8 knows (a strict reader takes the data), v1.8's sanitizing changes nothing, and
+     * what v1.8 saves after an edit reads back the same.
+     */
+    private fun v18Objects(row: String, layer: String, dto: ProjectFileDtoV18): List<VObjectV18> {
+        val file = requireNotNull(dto.layers.single { it.name == layer }.vectorFile) { "$row: $layer is a vector layer" }
+        val bytes = resource("$row/$file")
+        val strict = STRICT_V18.decodeFromString(VectorContentV18.serializer(), String(PayloadV18.inflate(bytes), Charsets.UTF_8))
+        val v18 = VectorCodecV18.decode(bytes)
+        assertEquals("$row $layer: v1.8's sanitizing changes nothing", strict, v18)
+        assertEquals("$row $layer: v1.8 saves what it read", v18, VectorCodecV18.decode(VectorCodecV18.encode(v18)))
+        return v18.objects
+    }
+
+    /**
+     * The shape of shape layer [layer] of [row] as v1.8 reads it (A9's rows): only fields v1.8
+     * knows (a strict reader takes the data), v1.8's sanitizing changes nothing, and v1.8 saves
+     * it back byte for byte.
+     */
+    private fun v18Shape(row: String, layer: String, dto: ProjectFileDtoV18): ShapeObjectV18 {
+        val data = requireNotNull(dto.layers.single { it.name == layer }.shapeData) { "$row: $layer is a shape layer" }
+        val strict = STRICT_V18.decodeFromString(ShapeLayerDataV18.serializer(), data)
+        assertEquals("$row $layer: the shape data version", ShapeCodecV18.VERSION, strict.version)
+        val v18 = requireNotNull(ShapeCodecV18.decode(data)) { "$row: v1.8 reads $layer's shape" }
+        assertEquals("$row $layer: v1.8's sanitizing changes nothing", strict.shape, v18)
+        assertEquals("$row $layer: v1.8 saves exactly what v1.9 wrote", data, ShapeCodecV18.encode(v18))
+        return v18
+    }
+
+    /** v1.8 reads every field of each shape object of [file] of [row] as v1.9 does (their shape-layer JSON). */
+    private fun sameShapesAsV19(row: String, file: String, v18: List<VObjectV18>) {
+        val v19 = VectorCodec.decode(resource("$row/$file")).objects
+        assertEquals("$row: the objects", v19.map { it.id }, v18.map { it.id })
+        for ((a, b) in v19.zip(v18)) {
+            if (a !is VShape) continue
+            assertTrue("$row: object ${a.id} is a shape in v1.8 too", b is VShapeV18)
+            b as VShapeV18
+            assertEquals("$row: v1.8 reads every field of shape ${a.id}", ShapeCodec.encode(a.shape), ShapeCodecV18.encode(b.shape))
+            assertEquals(a.seed, b.seed)
+            assertEquals(a.opacity, b.opacity, 0f)
+        }
+    }
+
+    private fun assertBox(what: String, s: ShapeObjectV18, cx: Float, cy: Float, w: Float, h: Float) {
+        assertEquals("$what: cx", cx, s.cx, 1e-3f)
+        assertEquals("$what: cy", cy, s.cy, 1e-3f)
+        assertEquals("$what: w", w, s.w, 1e-3f)
+        assertEquals("$what: h", h, s.h, 1e-3f)
+    }
+
     // ------------------------------------------------------------------ the rows (5.2)
 
     @Ignore("5.2 row 1, TextSpec.justify (NEVER): owner A3")
@@ -244,11 +303,24 @@ class Qa19CompatBackFromV18RobolectricTest {
         assertEquals("v1.8's payload keeps the size", 64, PayloadV18.fromJson(payload).width)
     }
 
-    @Ignore("5.2 row 10 (shapes joined into a vector layer, S1), existing kinds only: owner A9")
+    /** 5.2 row 10 (shapes joined into a vector layer, S1), existing kinds only: owner A9, fixture by [writeShapesJoined]. */
     @Test
     fun row10ShapesJoinedIntoAVectorLayer() {
-        v18Reads("shapes-joined")
-        // A9: fully read and fully editable in v1.8.
+        val dto = v18Reads("shapes-joined")
+        // A9: fully read and fully editable in v1.8. The shape layer the ellipse joined is a vector
+        // layer of three shape objects (the star drawn on it afterwards); its data holds only kinds
+        // and fields v1.8 knows, and v1.8 reads every field of each shape as v1.9 does.
+        assertEquals(listOf("Layer 1", ShapeTypeV18.RECTANGLE.label), dto.layers.map { it.name })
+        val joined = dto.layers.single { it.name == ShapeTypeV18.RECTANGLE.label }
+        assertEquals("no shape data left", null, joined.shapeData)
+        val objects = v18Objects("shapes-joined", joined.name, dto)
+        assertTrue(objects.all { it is VShapeV18 })
+        val shapes = objects.map { (it as VShapeV18).shape }
+        assertEquals(listOf(ShapeTypeV18.RECTANGLE, ShapeTypeV18.ELLIPSE, ShapeTypeV18.STAR), shapes.map { it.type })
+        assertBox("the rectangle", shapes[0], 70f, 60f, 80f, 60f)
+        assertBox("the ellipse", shapes[1], 190f, 150f, 60f, 60f)
+        assertEquals("three objects, each with its own id", 3, objects.map { it.id }.toSet().size)
+        sameShapesAsV19("shapes-joined", joined.vectorFile!!, objects)
     }
 
     @Test
@@ -340,11 +412,28 @@ class Qa19CompatBackFromV18RobolectricTest {
         return VectorCodecV18.decode(resource("$row/${layer.vectorFile}")).objects.map { it as VPathV18 }
     }
 
-    @Ignore("5.2 row 10 (bevelled points of shapes), existing kinds only: owner A9")
+    /** 5.2 row 10 (bevelled points of shapes), existing kinds only: owner A9, fixture by [writeBevelShapes]. */
     @Test
     fun row10BevelledShapePoints() {
-        v18Reads("bevel-shapes")
-        // A9: fully read and fully editable in v1.8.
+        val dto = v18Reads("bevel-shapes")
+        // A9: fully read and fully editable in v1.8. The bevelled points are plain sharp points of
+        // the shape's own points (v1.7's ShapePoint, radius included): on a shape layer v1.8 saves
+        // the shape back byte for byte; on a vector layer it reads every field as v1.9 does.
+        assertEquals(listOf("Layer 1", ShapeTypeV18.RECTANGLE.label, VECTOR_LAYER), dto.layers.map { it.name })
+        val rect = v18Shape("bevel-shapes", ShapeTypeV18.RECTANGLE.label, dto)
+        val points = requireNotNull(rect.points) { "the rectangle keeps its points" }
+        assertEquals("one corner bevelled into two points", 5, points.size)
+        assertEquals("the two new points' own roundness 0", 2, points.count { it.radius == 0f })
+        assertEquals("the other corners follow the shape's radius", 3, points.count { it.radius == null })
+        assertTrue(points.none { it.smooth || it.handleIn != null || it.handleOut != null })
+        val vec = dto.layers.single { it.name == VECTOR_LAYER }
+        val objects = v18Objects("bevel-shapes", VECTOR_LAYER, dto)
+        val hexagon = (objects.single() as VShapeV18).shape
+        assertEquals(ShapeTypeV18.POLYGON, hexagon.type)
+        val hexPoints = requireNotNull(hexagon.points) { "the hexagon keeps its points" }
+        assertEquals("two corners bevelled with three segments, four points each", 12, hexPoints.size)
+        assertEquals("the eight new points' own roundness 0", 8, hexPoints.count { it.radius == 0f })
+        sameShapesAsV19("bevel-shapes", vec.vectorFile!!, objects)
     }
 
     /** 5.2 row 11, one-layer new canvases and "Picture" alone (existing format): owner A8, fixture by [writeNewCanvases]. */
@@ -368,11 +457,25 @@ class Qa19CompatBackFromV18RobolectricTest {
         // A3: identical in v1.8.
     }
 
-    @Ignore("5.2 row 12 (R17 edits), existing fields: owner A9; its generator may need Qa19Harness.editor")
+    /** 5.2 row 12 (R17 edits), existing fields: owner A9, fixture by [writeShapeR17] (the tool driven below the UI). */
     @Test
     fun row12R17ShapeEdits() {
-        v18Reads("shape-r17")
-        // A9: identical in v1.8.
+        val dto = v18Reads("shape-r17")
+        // A9: identical in v1.8. Per-edit undo leaves no trace in the file: the shapes as last shown
+        // (the undone edits gone, the redone one kept), in existing fields only; v1.8 saves the
+        // shape layer back byte for byte and reads every field of the shape object as v1.9 does.
+        assertEquals(listOf("Layer 1", ShapeTypeV18.RECTANGLE.label, VECTOR_LAYER), dto.layers.map { it.name })
+        val rect = v18Shape("shape-r17", ShapeTypeV18.RECTANGLE.label, dto)
+        assertBox("the rectangle as last edited", rect, 90f, 61f, 100f, 60f)
+        assertEquals(0f, rect.rotation, 1e-4f)
+        assertEquals("a box shape, no points of its own", null, rect.points)
+        val vec = dto.layers.single { it.name == VECTOR_LAYER }
+        val objects = v18Objects("shape-r17", VECTOR_LAYER, dto)
+        val ellipse = (objects.single() as VShapeV18).shape
+        assertEquals(ShapeTypeV18.ELLIPSE, ellipse.type)
+        assertBox("the ellipse as last edited", ellipse, 190f, 150f, 60f, 60f)
+        assertEquals("its typed rotation", 30f, ellipse.rotation, 1e-4f)
+        sameShapesAsV19("shape-r17", vec.vectorFile!!, objects)
     }
 
     @Ignore("5.2 row 13, banded save (byte-identical files): owner A7b, un-ignored by the lead")
@@ -480,6 +583,9 @@ class Qa19CompatBackFromV18RobolectricTest {
         "cut-pieces" to ::writeCutPieces,
         "curves-mixed" to ::writeMixedCurves,
         "bevel-curves" to ::writeBevelledCurves,
+        "shapes-joined" to ::writeShapesJoined,
+        "bevel-shapes" to ::writeBevelShapes,
+        "shape-r17" to ::writeShapeR17,
     )
 
     /** `project.json` of the gallery's project [id], copied into [dir]. */
@@ -714,6 +820,150 @@ class Qa19CompatBackFromV18RobolectricTest {
         }
     }
 
+    /**
+     * A9's rows: the Shape tool on a 320 x 240 document [id] ("Layer 1" selected and, when
+     * [vectorLayer], "Vector 1" above it), the tool options as installed, snapping off, an
+     * identity view (screen and document px the same). [write] makes the row's shapes; then the
+     * document is saved by [saveProject] into [dir].
+     */
+    private fun withShapeTool(id: String, name: String, vectorLayer: Boolean, dir: File, write: (EditorController, ShapeTool) -> Unit) {
+        val w = 320
+        val h = 240
+        val doc = Document(id, name, w, h)
+        doc.layers += Layer(doc.newLayerId(), "Layer 1", BitmapUtils.createLayerBitmap(w, h))
+        if (vectorLayer) doc.layers += Layer(doc.newLayerId(), VECTOR_LAYER, BitmapUtils.createLayerBitmap(w, h)).also { it.vector = VectorContent.EMPTY }
+        doc.activeLayerIndex = 0
+        val c = Smoke.controller(app, doc)
+        try {
+            c.viewTransform.set(Matrix())
+            c.snapping.enabled = false
+            c.color = 0xFF802000.toInt()
+            c.tools
+            c.selectTool(ToolId.SHAPE)
+            write(c, c.tools.getValue(ToolId.SHAPE) as ShapeTool)
+            shadowOf(Looper.getMainLooper()).idle()
+            saveProject(doc, dir)
+        } finally {
+            c.dispose()
+        }
+    }
+
+    /** A one-finger gesture through [pts] (document px), the main looper idled after it. */
+    private fun shapeGesture(c: EditorController, vararg pts: Pair<Float, Float>) {
+        c.pointerDown(ToolPoint(pts[0].first, pts[0].second))
+        for (i in 1 until pts.size) c.pointerMove(ToolPoint(pts[i].first, pts[i].second))
+        c.pointerUp(ToolPoint(pts.last().first, pts.last().second))
+        shadowOf(Looper.getMainLooper()).idle()
+    }
+
+    /**
+     * Row 10 (shapes joined into a vector layer, S1; A9): a filled rectangle on a layer of its own
+     * ("Rectangle", a legacy shape layer), an ellipse drawn while that layer is selected (it joins
+     * it: the layer becomes a vector layer of two shape objects), and a filled star drawn on it.
+     */
+    private fun writeShapesJoined(dir: File) = withShapeTool("shapes-joined", "Joined shapes", vectorLayer = false, dir) { c, tool ->
+        tool.update { it.copy(type = ShapeType.RECTANGLE, style = ShapeStyle.STROKE_FILL, useBrushSize = false, strokeWidth = 4f, fillColor = A9_BLUE) }
+        shapeGesture(c, 30f to 30f, 70f to 60f, 110f to 90f)
+        tool.commit()
+        val layer = c.activeLayer
+        assertTrue("a shape layer of its own", layer.isShapeLayer && !layer.isVectorLayer)
+        tool.update { it.copy(type = ShapeType.ELLIPSE, style = ShapeStyle.STROKE) }
+        shapeGesture(c, 160f to 120f, 190f to 150f, 220f to 180f)
+        tool.commit()
+        assertTrue("the ellipse joined the shape layer", layer.isVectorLayer && layer.shapeData == null)
+        tool.update { it.copy(type = ShapeType.STAR, style = ShapeStyle.FILL) }
+        shapeGesture(c, 200f to 20f, 240f to 50f, 280f to 80f)
+        tool.commit()
+        assertEquals(listOf("Layer 1", ShapeType.RECTANGLE.label), c.doc.layers.map { it.name })
+        assertEquals(3, layer.vector!!.objects.filterIsInstance<VShape>().size)
+    }
+
+    /**
+     * Row 10 (bevelled points of shapes, R18; A9): a rectangle with round corners on a layer of
+     * its own whose top-left corner was made sharp and bevelled (Segments 1: two points, each of
+     * its own roundness 0), and on "Vector 1" a filled hexagon with two corners bevelled with
+     * Segments 3 (four points each).
+     */
+    private fun writeBevelShapes(dir: File) = withShapeTool("bevel-shapes", "Bevelled shapes", vectorLayer = true, dir) { c, tool ->
+        tool.update {
+            it.copy(type = ShapeType.RECTANGLE, style = ShapeStyle.STROKE, useBrushSize = false, strokeWidth = 4f, corner = CornerStyle.ROUND, cornerRadius = 12f)
+        }
+        shapeGesture(c, 30f to 30f, 70f to 60f, 110f to 90f)
+        tool.setPointEditing(true)
+        tool.selectPoints(PointSelection.of(tool.pointCount, 0))
+        assertTrue(tool.typePointRoundness("0"))
+        assertTrue("the bevel applies", tool.bevelPoints())
+        tool.closeBevelPopup()
+        assertEquals("one corner became two points", 5, tool.pointCount)
+        tool.commit()
+        assertTrue(c.activeLayer.isShapeLayer)
+        val vec = c.doc.layers.single { it.name == VECTOR_LAYER }
+        c.selectLayer(vec)
+        tool.update { it.copy(type = ShapeType.POLYGON, sides = 6, style = ShapeStyle.STROKE_FILL, corner = CornerStyle.SHARP, fillColor = A9_BLUE) }
+        shapeGesture(c, 160f to 120f, 200f to 160f, 240f to 200f)
+        tool.setPointEditing(true)
+        assertEquals(6, tool.pointCount)
+        tool.selectPoints(PointSelection.of(6, 0, 2))
+        assertTrue("the bevel applies", tool.bevelPoints())
+        tool.changeBevelSegments(3)
+        tool.closeBevelPopup()
+        assertEquals("two corners became four points each", 12, tool.pointCount)
+        tool.commit()
+        assertEquals(12, (vec.vector!!.objects.single() as VShape).shape.points!!.size)
+        assertEquals(listOf("Layer 1", ShapeType.RECTANGLE.label, VECTOR_LAYER), c.doc.layers.map { it.name })
+    }
+
+    /**
+     * Row 12 (R17 edits; A9): shapes edited one step at a time, some edits undone. A new filled
+     * rectangle moved, a typed height undone, a nudge undone and redone, placed on a layer of its
+     * own; reopened, moved, the move undone, a typed width. On "Vector 1" an ellipse placed,
+     * reopened, a typed rotation, a move undone.
+     */
+    private fun writeShapeR17(dir: File) = withShapeTool("shape-r17", "R17 edits", vectorLayer = true, dir) { c, tool ->
+        fun box(what: String, cx: Float, cy: Float, w: Float, h: Float, rotation: Float = 0f) {
+            val b = requireNotNull(tool.box) { "$what: a shape open" }
+            assertEquals("$what: ${b}", listOf(cx, cy, w, h, rotation), listOf(b.cx, b.cy, b.w, b.h, b.rotationDeg))
+        }
+        tool.update { it.copy(type = ShapeType.RECTANGLE, style = ShapeStyle.STROKE_FILL, useBrushSize = false, strokeWidth = 4f, fillColor = A9_BLUE) }
+        shapeGesture(c, 30f to 30f, 70f to 60f, 110f to 90f)
+        box("drawn", 70f, 60f, 80f, 60f)
+        shapeGesture(c, 70f to 60f, 80f to 60f, 90f to 60f)
+        box("moved", 90f, 60f, 80f, 60f)
+        tool.place(tool.box!!.copy(h = 40f))
+        c.undo()
+        box("the typed height undone", 90f, 60f, 80f, 60f)
+        tool.nudge(0, 1)
+        c.undo()
+        c.redo()
+        box("the nudge redone", 90f, 61f, 80f, 60f)
+        tool.commit()
+        val layer = c.activeLayer
+        assertTrue(layer.isShapeLayer)
+        shapeGesture(c, 50f to 61f)
+        assertSame("reopened by a tap on its left side", layer, tool.editingLayer)
+        shapeGesture(c, 90f to 61f, 90f to 71f, 90f to 81f)
+        c.undo()
+        box("the move undone", 90f, 61f, 80f, 60f)
+        tool.place(tool.box!!.copy(w = 100f))
+        tool.commit()
+        assertEquals(ShapeTool.EDIT_SHAPE_LABEL, c.undoManager.undoLabel)
+
+        val vec = c.doc.layers.single { it.name == VECTOR_LAYER }
+        c.selectLayer(vec)
+        tool.update { it.copy(type = ShapeType.ELLIPSE, style = ShapeStyle.STROKE) }
+        shapeGesture(c, 160f to 120f, 190f to 150f, 220f to 180f)
+        tool.commit()
+        shapeGesture(c, 160f to 150f)
+        assertTrue("the ellipse reopened", tool.editingObject)
+        tool.place(tool.box!!.copy(rotationDeg = 30f))
+        shapeGesture(c, 190f to 150f, 200f to 150f, 210f to 150f)
+        c.undo()
+        box("the move undone", 190f, 150f, 60f, 60f, 30f)
+        tool.commit()
+        assertEquals(ShapeTool.EDIT_SHAPE_LABEL, c.undoManager.undoLabel)
+        assertEquals(listOf("Layer 1", ShapeType.RECTANGLE.label, VECTOR_LAYER), c.doc.layers.map { it.name })
+    }
+
     /** Every file under [root] by its path relative to it ('/'-separated), with its bytes. */
     private fun snapshot(root: File): Map<String, ByteArray> =
         root.walkTopDown().filter { it.isFile }.associate { it.relativeTo(root).invariantSeparatorsPath to it.readBytes() }
@@ -754,6 +1004,10 @@ class Qa19CompatBackFromV18RobolectricTest {
         /** Row 10 (cut pieces): the layers [writeCutPieces] cuts. */
         const val CUT_VECTOR_LAYER = "Vector 1"
         const val CUT_SHAPE_LAYER = "Shape"
+
+        /** A9's rows: the vector layer of [withShapeTool], and the shapes' fill. */
+        const val VECTOR_LAYER = "Vector 1"
+        const val A9_BLUE = 0xFF3070C0.toInt()
 
         /** v1.8's vector JSON read strictly: a key or a value v1.8 does not know fails. */
         val STRICT_V18 = Json { allowSpecialFloatingPointValues = true }
