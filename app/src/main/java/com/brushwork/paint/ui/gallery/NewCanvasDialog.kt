@@ -116,7 +116,8 @@ private fun NewCanvasContent(creating: Boolean, onDismiss: () -> Unit, onCreate:
     var unit by rememberSaveable { mutableStateOf(LengthUnit.PX) }
     // v1.9 (R15): the last choice, "White" the first time.
     var background by rememberSaveable { mutableStateOf(NewCanvasBackground.fromSetting(settings.newCanvasBackground)) }
-    var customColor by rememberSaveable { mutableIntStateOf(0xFFF3E7D3.toInt()) }
+    // v1.9 Gate 2: the last "Color…" background too.
+    var customColor by rememberSaveable { mutableIntStateOf(settings.newCanvasCustomColor or 0xFF000000.toInt()) }
     var pickingColor by remember { mutableStateOf(false) }
 
     val w = size.width
@@ -135,8 +136,10 @@ private fun NewCanvasContent(creating: Boolean, onDismiss: () -> Unit, onCreate:
         val cw = size.width
         val ch = size.height
         if (creating || !CanvasPresets.check(cw, ch, maxHeap).ok) return
-        // v1.9 (R15): one layer for every choice; the choice is remembered for the next canvas.
+        // v1.9 (R15): one layer for every choice; the choice is remembered for the next canvas
+        // (and, Gate 2, the "Color…" color with it).
         settings.newCanvasBackground = background.setting
+        settings.newCanvasCustomColor = customColor
         onCreate(NewCanvasSpec(name.trim().ifEmpty { "Untitled" }, cw, ch, size.dpi.toFloat(), background.background(customColor), background.start))
     }
 

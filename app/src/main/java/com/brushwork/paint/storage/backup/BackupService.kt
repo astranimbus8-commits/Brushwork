@@ -71,6 +71,8 @@ object BackupService {
     private var data = BackupStateData()
     /** Bumped by [start]: work of an earlier start stops at its next step. */
     private var generation = 0
+    /** [onSaved] calls so far: a start on the worker keeps [hasArtworks] for a save made while it read. */
+    private var saves = 0
     private val pendingSaves = LinkedHashSet<String>()
     private val pendingDeletes = LinkedHashSet<String>()
     private var pendingCatchUp = false
@@ -90,16 +92,57 @@ object BackupService {
     /** Free bytes on the volume of a file of the folder, or null when unknown (tests replace it). */
     @Volatile internal var freeBytes: (Context, Uri) -> Long? = ::volumeFreeBytes
 
-    /** Called once from `BrushworkApp.onCreate`: reads the state, sets [status] and starts the catch-up. */
-    fun start(app: Application) = startWith(app)
+    /**
+     * Called once from `BrushworkApp.onCreate`: reads the state, sets [status] and starts the catch-up.
+     *
+     * v1.9 Gate 2 (device row Q22): on the worker, not the main thread ([startInBackground]): the
+     * state file, the gallery's folder and the folder grants are small reads, but reads on the main
+     * thread at app start all the same. Until they are done [status] says nothing (as before
+     * [start]) and a save or a delete is not queued: the catch-up the start runs mirrors what
+     * changed (it compares every artwork with the backup's copy) and moves what is gone.
+     */
+    fun start(app: Application) = startInBackground(app)
 
-    /** [start] for any context (tests start again to stand for the next app start). */
-    internal fun startWith(app: Context) {
+    /**
+     * [start] for any context (tests record where it reads). Here, without reading: what a new
+     * process holds (no folder known, [status] saying nothing), and work of an earlier start stops,
+     * as at [startWith]; the reads and the rest run on the worker.
+     */
+    internal fun startInBackground(app: Context) {
         val c = app.applicationContext ?: app
+        val gen = synchronized(lock) {
+            generation++
+            context = c
+            data = BackupStateData()
+            pendingSaves.clear()
+            pendingDeletes.clear()
+            pendingCatchUp = false
+            pendingFull = false
+            scheduled = false
+            later.value = 0L
+            artworks.value = false
+            state.value = BackupStatus.Ok(0L, "", 0L)
+            generation
+        }
+        worker.execute { startWith(c, ifGeneration = gen) }
+    }
+
+    /** [start] on this thread, for any context (tests start again to stand for the next app start). */
+    internal fun startWith(app: Context) = startWith(app, ifGeneration = null)
+
+    /**
+     * The start: reads the state, then sets it. [ifGeneration] (the rest of a [startInBackground],
+     * which already stopped the earlier work): a start or a folder choice that came meanwhile wins,
+     * and this one is dropped.
+     */
+    private fun startWith(app: Context, ifGeneration: Int?) {
+        if (ifGeneration != null && synchronized(lock) { generation } != ifGeneration) return
+        val c = app.applicationContext ?: app
+        val savesBefore = synchronized(lock) { saves }
         val stored = BackupStateStore.read(c)
         val hasAny = hasArtworks(c)
         synchronized(lock) {
-            generation++
+            if (ifGeneration == null) generation++ else if (generation != ifGeneration) return
             context = c
             data = stored
             pendingSaves.clear()
@@ -108,7 +151,8 @@ object BackupService {
             pendingFull = false
             scheduled = false
             later.value = stored.notSetLaterAt
-            artworks.value = hasAny
+            // (An artwork saved while the start read the folder is in the gallery too.)
+            artworks.value = hasAny || saves != savesBefore
             val s = statusOf(c, stored)
             state.value = s
             if (s is BackupStatus.Ok) {
@@ -123,6 +167,7 @@ object BackupService {
     fun onSaved(projectId: String) {
         artworks.value = true
         synchronized(lock) {
+            saves++
             if (!backingUp()) return
             pendingDeletes.remove(projectId)
             pendingSaves += projectId

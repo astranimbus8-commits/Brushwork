@@ -1,5 +1,6 @@
 package com.brushwork.paint.ui.editor
 
+import android.content.SharedPreferences
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
@@ -33,6 +34,34 @@ class EditorPrefs(
     private var _leftHanded by mutableStateOf(settings.leftHanded)
     private var _holdToPick by mutableStateOf(settings.longPressEyedropper)
     private var _autosave by mutableIntStateOf(settings.autosaveSeconds)
+
+    /**
+     * v1.9 Gate 2 (A8's known gap): the saved settings can change under an open editor (the
+     * Backup section's restore commits the backup's settings on another thread); the mirror
+     * follows them (on the main thread, where the preferences tell their listeners), so they take
+     * effect without a restart. Held here: the preferences hold their listeners weakly.
+     */
+    private val follow = SharedPreferences.OnSharedPreferenceChangeListener { _, _ -> reload() }
+
+    init {
+        settings.prefs.registerOnSharedPreferenceChangeListener(follow)
+    }
+
+    private fun reload() {
+        _twoFingerUndo = settings.twoFingerUndo
+        _threeFingerRedo = settings.threeFingerRedo
+        _stylusOnly = settings.stylusOnlyDrawing
+        _leftHanded = settings.leftHanded
+        _holdToPick = settings.longPressEyedropper
+        _autosave = settings.autosaveSeconds
+        // (Every switch that changes the compositor's live switch saves it too: they differ only
+        // when the saved value changed elsewhere.)
+        val safe = settings.safeCompositing
+        if (safe != AdjustmentStage.safeCompositing) {
+            AdjustmentStage.safeCompositing = safe
+            safeCompositingSets++
+        }
+    }
 
     var twoFingerUndo: Boolean
         get() = _twoFingerUndo
