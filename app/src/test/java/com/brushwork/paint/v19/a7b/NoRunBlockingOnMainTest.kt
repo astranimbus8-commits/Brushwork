@@ -20,17 +20,14 @@ import java.io.File
  * [com.brushwork.paint.EditorController.deferredWaitLimitMs] at most, and not at all while the
  * app leaves the screen (`EditorSession.saveOnLeaving` waits off the main thread instead).
  *
- * One `runBlocking` remains, outside this area: A5's `EraseLanding` (a region erase's cut still
- * running when another step lands it), reported to the lead to use the same bounded wait.
+ * v1.9 Gate 2 (M3): the last one, A5's `EraseLanding` (a region erase's cut still running when
+ * another step lands it), uses the same bounded wait now.
  */
 @RunWith(RobolectricTestRunner::class)
 class NoRunBlockingOnMainTest {
 
     /** A call (not an import or a comment): `runBlocking {`, `runBlocking(` or `runBlocking<`. */
     private val call = Regex("""\brunBlocking\s*[({<]""")
-
-    /** Not this area's, reported to the lead (see the class docs). */
-    private val allowed = setOf("vector/draw/EraseLanding.kt")
 
     private fun mainSources(): File? {
         var dir: File? = File(System.getProperty("user.dir") ?: return null).absoluteFile
@@ -49,17 +46,16 @@ class NoRunBlockingOnMainTest {
     }.map { it.index + 1 }
 
     @Test
-    fun theAppsCodeHasNoRunBlockingButTheOneReported() {
+    fun theAppsCodeHasNoRunBlocking() {
         val root = mainSources()
         assertNotNull("main sources not found from ${System.getProperty("user.dir")}", root)
         val found = ArrayList<String>()
         root!!.walkTopDown().filter { it.isFile && it.name.endsWith(".kt") }.forEach { f ->
             val rel = f.relativeTo(root).invariantSeparatorsPath
-            if (rel in allowed) return@forEach
             for (line in calls(f.readLines())) found += "$rel:$line"
         }
         assertTrue("runBlocking on the main thread: $found", found.isEmpty())
-        for (f in listOf("vector/VectorLayers.kt", "array/ArrayRenders.kt")) {
+        for (f in listOf("vector/VectorLayers.kt", "array/ArrayRenders.kt", "vector/draw/EraseLanding.kt")) {
             assertFalse("$f: no runBlocking import left", File(root, f).readLines().any { it.trim() == "import kotlinx.coroutines.runBlocking" })
         }
         // v1.8's three waits are bounded now.
@@ -67,6 +63,10 @@ class NoRunBlockingOnMainTest {
         assertTrue(controller.contains("awaitDeferredJob(p.work, limit)"))
         assertTrue(File(root, "vector/VectorLayers.kt").readText().contains("c.awaitDeferredJob(job)"))
         assertTrue(File(root, "array/ArrayRenders.kt").readText().contains("c.awaitDeferredJob(job)"))
+        assertTrue(File(root, "vector/draw/EraseLanding.kt").readText().contains("c.awaitDeferredJob(job)"))
+        // (G2 review) and the cut a timed-out wait cancels stops, as the renders' workers do
+        // (`CrossMemoryEraseCutTimeoutTest.aCancelledCutStopsAtItsNextObject`).
+        assertTrue(File(root, "vector/draw/EraseLanding.kt").readText().contains("EraseCut.cutAll(targets, region) { isActive }"))
     }
 
     @Test

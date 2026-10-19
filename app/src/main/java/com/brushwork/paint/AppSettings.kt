@@ -160,6 +160,14 @@ class AppSettings(context: Context) {
         set(v) = prefs.edit { putString("newCanvas.background", v) }
 
     /**
+     * R15 (v1.9 Gate 2): the new-canvas dialog's last "Color…" background, opaque; a pale cream
+     * the first time (a preference, not project data).
+     */
+    var newCanvasCustomColor: Int
+        get() = prefs.getInt("newCanvas.customColor", 0xFFF3E7D3.toInt())
+        set(v) = prefs.edit { putInt("newCanvas.customColor", v) }
+
+    /**
      * R14: the Text tool's More-row toggle (PlaceLabels19.NEW_LAYER_EACH_TIME): on, every new
      * text gets a layer of its own (v1.8); off by default, a new text joins the active text layer.
      */

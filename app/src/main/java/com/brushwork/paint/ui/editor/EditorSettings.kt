@@ -1,5 +1,6 @@
 package com.brushwork.paint.ui.editor
 
+import android.content.SharedPreferences
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
@@ -20,12 +21,19 @@ import com.brushwork.paint.ui.mask.FastAdjustPreviewToggle
 
 /**
  * Compose-observable mirror of the editor-related [AppSettings] (which are plain
- * SharedPreferences). Setters write through immediately.
+ * SharedPreferences). Setters write through immediately. [onSafeCompositingFollowed] redraws the
+ * canvas when the compositor's "Safe compositing" switch followed a value saved elsewhere.
  */
 @Stable
 class EditorPrefs(
     /** The saved settings behind these preferences (for switches that write them directly, like area A's "Fast adjustment preview"). */
     val settings: AppSettings,
+    /**
+     * v1.9 Gate 2: called (on the main thread) when the compositor's switch followed a "Safe
+     * compositing" saved elsewhere ([reload]); the editor redraws its canvas then, as the
+     * settings' own switch does (else the cached tiles mix the canvas with and without the effect).
+     */
+    private val onSafeCompositingFollowed: () -> Unit = {},
 ) {
     private var _twoFingerUndo by mutableStateOf(settings.twoFingerUndo)
     private var _threeFingerRedo by mutableStateOf(settings.threeFingerRedo)
@@ -33,6 +41,32 @@ class EditorPrefs(
     private var _leftHanded by mutableStateOf(settings.leftHanded)
     private var _holdToPick by mutableStateOf(settings.longPressEyedropper)
     private var _autosave by mutableIntStateOf(settings.autosaveSeconds)
+
+    /**
+     * v1.9 Gate 2 (A8's known gap): the saved settings can change under an open editor (the
+     * Backup section's restore commits the backup's settings on another thread); the mirror
+     * follows them (on the main thread, where the preferences tell their listeners), so they take
+     * effect without a restart. Held here: the preferences hold their listeners weakly.
+     */
+    private val follow = SharedPreferences.OnSharedPreferenceChangeListener { _, _ -> reload() }
+
+    private fun reload() {
+        _twoFingerUndo = settings.twoFingerUndo
+        _threeFingerRedo = settings.threeFingerRedo
+        _stylusOnly = settings.stylusOnlyDrawing
+        _leftHanded = settings.leftHanded
+        _holdToPick = settings.longPressEyedropper
+        _autosave = settings.autosaveSeconds
+        // (Every switch that changes the compositor's live switch saves it too: they differ when
+        // the saved value changed elsewhere, or for a moment while the Masks tool's sheet saves
+        // its switch before setting it.)
+        val safe = settings.safeCompositing
+        if (safe != AdjustmentStage.safeCompositing) {
+            AdjustmentStage.safeCompositing = safe
+            safeCompositingSets++
+            onSafeCompositingFollowed()
+        }
+    }
 
     var twoFingerUndo: Boolean
         get() = _twoFingerUndo
@@ -74,10 +108,16 @@ class EditorPrefs(
             return AdjustmentStage.safeCompositing
         }
         set(v) {
-            settings.safeCompositing = v
+            // (The compositor's switch first: the save tells [follow], which then has nothing to follow.)
             AdjustmentStage.safeCompositing = v
+            settings.safeCompositing = v
             safeCompositingSets++
         }
+
+    init {
+        // ([follow]: last, once every mirror it sets is set up.)
+        settings.prefs.registerOnSharedPreferenceChangeListener(follow)
+    }
 
     companion object {
         val AUTOSAVE_CHOICES = listOf(15, 30, 45, 60, 120)
