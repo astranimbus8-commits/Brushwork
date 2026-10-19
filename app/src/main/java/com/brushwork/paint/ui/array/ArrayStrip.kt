@@ -12,6 +12,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -24,6 +25,7 @@ import com.brushwork.paint.tools.array.ArrayTool
 import com.brushwork.paint.ui.common.ArrayLabels
 import com.brushwork.paint.ui.common.BwDialog
 import com.brushwork.paint.ui.common.FitText
+import com.brushwork.paint.ui.common.scale1Size
 import com.brushwork.paint.ui.editor.EditorIcons
 import com.brushwork.paint.ui.theme.BrushworkColors
 import com.brushwork.paint.ui.tools.strip.LocalStripContext
@@ -124,15 +126,29 @@ private fun RenderingNote() {
 @Composable
 private fun NoArrayHint() {
     val style = MaterialTheme.typography.bodySmall
-    // v1.9 Gate 2 (I27): [FitText], whose floor is 11 sp as laid out at font scale 1; [MIN_TEXT_SP]
-    // grows with the font scale, so at 2.0 the hint was cut.
+    val modifier = Modifier.widthIn(max = HINT_DP.dp).padding(horizontal = 6.dp)
+    if (LocalDensity.current.fontScale <= 1f) {
+        // v1.8's hint, as it was.
+        BasicText(
+            NO_ARRAY_HINT,
+            style = style.copy(color = BrushworkColors.OnChromeDim),
+            maxLines = 2,
+            autoSize = TextAutoSize.StepBased(minFontSize = MIN_TEXT_SP.sp, maxFontSize = style.fontSize, stepSize = 0.25.sp),
+            modifier = modifier,
+        )
+        return
+    }
+    // v1.9 Gate 2 (I27): at a larger font scale, [FitText] down to [MIN_TEXT_SP] as laid out at font
+    // scale 1 (v1.8's smallest size there); in sp, [MIN_TEXT_SP] grew with the font scale, so at 2.0
+    // the hint was cut.
     FitText(
         NO_ARRAY_HINT,
         fontSize = style.fontSize,
         style = style,
         color = BrushworkColors.OnChromeDim,
         maxLines = 2,
-        modifier = Modifier.widthIn(max = HINT_DP.dp).padding(horizontal = 6.dp),
+        floor = scale1Size(MIN_TEXT_SP.sp),
+        modifier = modifier,
     )
 }
 

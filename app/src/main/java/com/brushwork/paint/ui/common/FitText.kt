@@ -23,16 +23,20 @@ import androidx.compose.ui.unit.sp
 
 /**
  * v1.9 Gate 2 (I27, design 3.4): a strip, bar, pill or field text that stays inside its box at a
- * large font scale. It is [Text] at [fontSize] whenever that fits (so a text that fits at font
- * scale 1 does not move), else the largest size that fits its box (wide and tall, every line
- * whole, none cut with an ellipsis), stepped down by 0.25 sp to [floor], by default [fitFloor]:
- * [FIT_FLOOR_DP] (11 sp as laid out at font scale 1), or the text's own size at font scale 1 when
- * that is smaller. Its line height (given, or the style's) and its letter spacing (the style's,
- * 0.5 sp in Material's body style) are kept as the same share of the size, so the lines and the
- * gaps shrink with the text and a fixed cell still holds them. Should even the floor not fit,
- * [overflow] applies as it did before. A caller whose text is cut on purpose at font scale 1 (the
- * X / Y pill's far-off values at its 110 dp cap) passes [scale1Size] as [floor]: font scale 1
- * then lays the text out as [Text] does, and a larger one shrinks it back to that size at most.
+ * large font scale. With its default [floor], at font scale 1 (or below) it is [Text] with these
+ * very arguments, so v1.8's strips, pill, fields and gallery lay out as they did (a caller that
+ * passes a lower floor keeps v1.8's own text at font scale 1, as the Array hint does). At a larger
+ * font scale it is [Text] at
+ * [fontSize] whenever that fits, else the largest size that fits its box (wide and tall, every
+ * line whole, none cut with an ellipsis), stepped down by 0.25 sp to [floor]: by default
+ * [scale1Size], the text's own size at font scale 1, the rule of A5's
+ * `VectorEraseChooser.FittingFontScale` ("at least 11 sp" for an 11 sp text). A text never gets
+ * smaller than at font scale 1, so whatever fits at font scale 1 fits at any scale, and a text
+ * shortened at font scale 1 by design (an ellipsized name, the X / Y pill's far-off value at its
+ * 110 dp cap) is shortened as it is there. While it shrinks, its line height (given, or the
+ * style's) and its letter spacing (the style's) are kept as the same share of the size, so the
+ * lines and the gaps shrink with the text and a fixed cell still holds them. Should even the floor
+ * not fit, [overflow] applies as in [Text].
  *
  * The strips' cells keep their declared widths (I18), so at 1.3 and 2.0 a label shrinks or wraps
  * in its cell instead of being cut (I27, `StripFontScaleTest`).
@@ -47,22 +51,39 @@ internal fun FitText(
     lineHeight: TextUnit = TextUnit.Unspecified,
     textAlign: TextAlign? = null,
     maxLines: Int = 1,
-    softWrap: Boolean = maxLines > 1,
+    softWrap: Boolean = true,
     overflow: TextOverflow = TextOverflow.Clip,
     style: TextStyle = LocalTextStyle.current,
-    floor: TextUnit = fitFloor(fontSize),
+    floor: TextUnit = scale1Size(fontSize),
 ) {
+    val sized = fontSize.isSp && fontSize.value > 0f && floor.isSp && floor.value < fontSize.value
+    if (!sized) {
+        // Font scale 1 or below (or a size not in sp): v1.8's Text, one layout, nothing converted.
+        Text(
+            text,
+            modifier = modifier,
+            color = color,
+            fontSize = fontSize,
+            fontWeight = fontWeight,
+            textAlign = textAlign ?: TextAlign.Unspecified,
+            lineHeight = lineHeight,
+            overflow = overflow,
+            softWrap = softWrap,
+            maxLines = maxLines,
+            style = style,
+        )
+        return
+    }
     val line = if (lineHeight.isSpecified) lineHeight else style.lineHeight
-    val sized = fontSize.isSp && fontSize.value > 0f
-    val shared = if (line.isSp && sized) (line.value / fontSize.value).em else line
+    val shared = if (line.isSp) (line.value / fontSize.value).em else line
     val spacing = style.letterSpacing
-    val sharedSpacing = if (spacing.isSp && sized) (spacing.value / fontSize.value).em else spacing
+    val sharedSpacing = if (spacing.isSp) (spacing.value / fontSize.value).em else spacing
     Text(
         text,
         modifier = modifier,
         color = color,
-        fontSize = if (sized) TextUnit.Unspecified else fontSize,
-        autoSize = if (sized) FitSize(floor, fontSize) else null,
+        fontSize = TextUnit.Unspecified,
+        autoSize = FitSize(floor, fontSize),
         fontWeight = fontWeight,
         letterSpacing = sharedSpacing,
         textAlign = textAlign ?: TextAlign.Unspecified,
@@ -75,21 +96,8 @@ internal fun FitText(
 }
 
 /**
- * The smallest size [FitText] steps [fontSize] down to, in sp at the current font scale:
- * [FIT_FLOOR_DP], or what [fontSize] measures at font scale 1 when that is smaller; never above
- * [fontSize] (a font scale below 1).
- */
-@Composable
-internal fun fitFloor(fontSize: TextUnit): TextUnit {
-    if (!fontSize.isSp) return fontSize
-    val floorSp = with(LocalDensity.current) { minOf(fontSize.value, FIT_FLOOR_DP).dp.toSp() }
-    return if (floorSp.value < fontSize.value) floorSp else fontSize
-}
-
-/**
- * [fontSize] as laid out at font scale 1, in sp at the current font scale (never above
- * [fontSize]): a [FitText] floor under which no text shrinks, so font scale 1 lays it out as
- * [Text] does.
+ * [fontSize] as laid out at font scale 1, in sp at the current font scale, never above
+ * [fontSize] (a font scale below 1): [FitText]'s floor, under which no text shrinks.
  */
 @Composable
 internal fun scale1Size(fontSize: TextUnit): TextUnit {
@@ -97,9 +105,6 @@ internal fun scale1Size(fontSize: TextUnit): TextUnit {
     val sp = with(LocalDensity.current) { fontSize.value.dp.toSp() }
     return if (sp.value < fontSize.value) sp else fontSize
 }
-
-/** I27: a strip text shrinks to 11 sp as laid out at font scale 1 (11 dp), no smaller. */
-internal const val FIT_FLOOR_DP = 11f
 
 /** [FitText]'s step, in sp. */
 private const val FIT_STEP_SP = 0.25f

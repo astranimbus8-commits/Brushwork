@@ -1,10 +1,21 @@
 package com.brushwork.paint.v19.cross
 
 import android.view.KeyEvent
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.width
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.model.SymmetrySettings
 import com.brushwork.paint.model.SymmetryType
@@ -26,6 +37,7 @@ import com.brushwork.paint.tools.vector.ShapeTool
 import com.brushwork.paint.tools.vector.ShapeType
 import com.brushwork.paint.ui.color.RobolectricUi
 import com.brushwork.paint.ui.common.EraseLabels19
+import com.brushwork.paint.ui.common.FitText
 import com.brushwork.paint.ui.common.PointLabels19
 import com.brushwork.paint.ui.common.V18Tags
 import com.brushwork.paint.ui.common.V19Tags
@@ -61,7 +73,8 @@ import org.robolectric.annotation.Config
  * the bevel popup. The mode cell stays in row 1 of Curve, Polyline, Path and Shape at both widths
  * (G5). Then the real editor at each width and scale: the vector object bar and its extra row,
  * the X / Y pill of an open shape, the Shape settings sheet (its length fields) and the bevel
- * popup over the strip.
+ * popup over the strip. Last, [FitText] itself: at font scale 1 it is v1.8's [Text], at 2.0 it
+ * shrinks a text that fits at font scale 1, never below its size there.
  *
  * A section collects every overflow it finds and fails once at its end, so one run names them all.
  */
@@ -79,6 +92,7 @@ class StripFontScaleTest {
         for ((dp, q) in widths) for (scale in Qa19Ui.FONT_SCALES) h.section("the editor's bars at $dp dp, font scale $scale") {
             atWidth(q) { timed("editor $dp dp at $scale") { editor(h, dp, scale) } }
         }
+        h.section("FitText: Text at font scale 1, never below its size there at 2.0") { fitText(h) }
     }
 
     private fun atWidth(q: String, block: () -> Unit) {
@@ -369,8 +383,98 @@ class StripFontScaleTest {
         failOn(problems, "the editor at $where")
     }
 
+    // ------------------------------------------------------------------ FitText
+
+    /** The placed text nodes showing exactly [text] in the windows shown since the baseline. */
+    private fun shownTexts(text: String): List<RobolectricUi.Element> {
+        val windows = RobolectricUi.windowRoots()
+        return RobolectricUi.elements().filter { x ->
+            windows.indexOf(x.window) >= SmokeUi.baseline && x.node.layoutInfo.isPlaced &&
+                x.node.config.getOrNull(SemanticsProperties.Text)?.joinToString("") { it.text } == text
+        }
+    }
+
+    private fun layoutOf(e: RobolectricUi.Element, what: String): TextLayoutResult {
+        val r = Qa19Ui.textLayout(e.node)
+        assertNotNull("$what has a text layout", r)
+        return r!!
+    }
+
+    /**
+     * [FIT_FITS] in a box it fits at font scale 1 but not at twice that, [FIT_CUT] in a box it
+     * never fits ([FitText] with an ellipsis), and the same as v1.8's [Text] beside it.
+     */
+    @Composable
+    private fun FitCases() {
+        val style = TextStyle(fontSize = FIT_SP.sp, lineHeight = FIT_LINE_SP.sp)
+        Column {
+            Box(Modifier.width(FIT_BOX_DP.dp)) { FitText(FIT_FITS, fontSize = FIT_SP.sp, style = style) }
+            Box(Modifier.width(CUT_BOX_DP.dp)) {
+                FitText(FIT_CUT, fontSize = FIT_SP.sp, style = style, softWrap = false, overflow = TextOverflow.Ellipsis)
+            }
+            Box(Modifier.width(CUT_BOX_DP.dp)) {
+                Text(FIT_CUT, fontSize = FIT_SP.sp, style = style, softWrap = false, overflow = TextOverflow.Ellipsis, maxLines = 1)
+            }
+        }
+    }
+
+    /**
+     * Gate 2 review: at font scale 1 [FitText] lays out as [Text] with the same arguments (a text
+     * cut there by design stays cut, at its size: v1.8's strips, pill and gallery unchanged). At
+     * 2.0 a text that fits at font scale 1 shrinks until it fits, never below its size at font
+     * scale 1, and a text cut at font scale 1 is drawn at that size, cut as there.
+     */
+    private fun fitText(h: Qa19Harness) {
+        // The drawn size is read from the nodes' heights (the real layout, one line each: its line
+        // height a share of the size); the semantics layout keeps the style's font size.
+        val activity = h.show { FitCases() }
+        val density = activity.resources.displayMetrics.density
+        val fitsNode1 = shownTexts(FIT_FITS).single()
+        val fits1 = layoutOf(fitsNode1, "at 1, the text that fits")
+        val width1 = fits1.multiParagraph.getLineWidth(0)
+        assertTrue(
+            "the case: at 1 one line of $width1 px, over half its box of ${FIT_BOX_DP * density} px but within it",
+            fits1.lineCount == 1 && width1 > FIT_BOX_DP * density / 2f && width1 <= FIT_BOX_DP * density,
+        )
+        val cutNodes1 = shownTexts(FIT_CUT)
+        assertEquals("at 1, FitText and Text beside it", 2, cutNodes1.size)
+        val cut1 = cutNodes1.map { layoutOf(it, "at 1, the cut text") }
+        for (r in cut1) assertTrue("at 1, the cut text ellipsized", r.isLineEllipsized(0))
+        assertEquals("at 1, FitText laid out as Text, not shrunk", cutNodes1[1].node.size, cutNodes1[0].node.size)
+        assertEquals("at 1, FitText cut as Text", cut1[1].getLineEnd(0, visibleEnd = true), cut1[0].getLineEnd(0, visibleEnd = true))
+        assertTrue("at 1, the text that fits is whole: ${Qa19Ui.textOverflows()}", Qa19Ui.textOverflows().none { it.startsWith("\"$FIT_FITS\"") })
+        val fitsHigh1 = fitsNode1.node.size.height
+        val cutHigh1 = cutNodes1[0].node.size.height
+
+        h.show(fontScale = 2f) { FitCases() }
+        val fitsNode2 = shownTexts(FIT_FITS).single()
+        assertEquals(2f, layoutOf(fitsNode2, "at 2.0, the text that fits at 1").layoutInput.density.fontScale, 0f)
+        val cutNodes2 = shownTexts(FIT_CUT)
+        val fitsHigh2 = fitsNode2.node.size.height
+        val cutHigh2 = cutNodes2[0].node.size.height
+        System.err.println(
+            "[strip font scale] FitText: fits ${fitsNode1.node.size} at 1, ${fitsNode2.node.size} at 2.0; " +
+                "cut ${cutNodes1[0].node.size} at 1, ${cutNodes2[0].node.size} at 2.0 (Text ${cutNodes2[1].node.size})",
+        )
+        assertTrue(
+            "at 2.0, the text that fits at 1 shrunk (under twice its height at 1, $fitsHigh1 px), not below its size at 1: $fitsHigh2 px",
+            fitsHigh2 >= fitsHigh1 - 1 && fitsHigh2 < 2 * fitsHigh1 - 2,
+        )
+        assertTrue("at 2.0, it fits: ${Qa19Ui.textOverflows()}", Qa19Ui.textOverflows().none { it.startsWith("\"$FIT_FITS\"") })
+        assertEquals("at 2.0, the cut text at its size at 1, not below", cutHigh1.toFloat(), cutHigh2.toFloat(), 1f)
+        assertTrue("at 2.0, the cut text ellipsized as at 1", layoutOf(cutNodes2[0], "at 2.0, the cut text").isLineEllipsized(0))
+    }
+
     private companion object {
         /** The sheet's close button (`BwSheet`, "Close"). */
         const val SHEET_CLOSE = "Close"
+
+        /** [FitCases]: the texts' size and line height (sp) and their boxes (dp). */
+        const val FIT_SP = 14f
+        const val FIT_LINE_SP = 20f
+        const val FIT_BOX_DP = 110f
+        const val CUT_BOX_DP = 48f
+        const val FIT_FITS = "Corner size"
+        const val FIT_CUT = "A label cut at font scale 1 as in v1.8"
     }
 }

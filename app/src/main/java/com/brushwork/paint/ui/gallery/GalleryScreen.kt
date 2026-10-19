@@ -439,8 +439,9 @@ private fun ProjectCard(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f)) {
-                // v1.9 Gate 2 (I27): the three lines shrink at a large font scale (to 11 sp as at font
-                // scale 1) before a long name is ellipsized; the size line was cut at 2.0 on 360 dp.
+                // v1.9 Gate 2 (I27): the three lines shrink at a large font scale, never below their size
+                // at font scale 1 ([FitText]); the size line was cut at 2.0 on 360 dp. A name too long
+                // at font scale 1 ends in "…" as there.
                 val title = MaterialTheme.typography.titleSmall
                 val small = MaterialTheme.typography.bodySmall
                 FitText(info.name, fontSize = title.fontSize, style = title, overflow = TextOverflow.Ellipsis)
