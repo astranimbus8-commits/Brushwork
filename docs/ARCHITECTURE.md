@@ -911,7 +911,8 @@ after F3, and only A6 changes `CanvasView.kt`.
   balance for both two and three shards.
 - The floor is the non-Timing count of all shards: 3970 at v1.8, 4024 after F0, 4072 after F1a,
   4154 after F1b, 4169 after F2 and 4177 after F3 (shard 0 2192 + shard 1 1985), 4764 after
-  the ten areas (three shards: 1426 + 1745 + 1593); the Timing run has 325 at F3.
+  the ten areas (three shards: 1426 + 1745 + 1593) and 4787 after Gate 2; the Timing run has 325
+  at F3 and 360 after Gate 2.
   "Testing and CI (v1.9)" below has the jobs, the local runs and the
   known flakes. Only the lead changes the file (rule O): it raises the floor at each merge to the
   merged branch's count, and lowers it only in the commit that deletes tests on purpose. The file
@@ -4157,7 +4158,7 @@ flags in detail.
   never cancels a push build of `main`.
 
 **The test-count floor.** The non-Timing count of all shards: 3970 at v1.8, 4177 after F3, 4764
-after the ten areas; Gate 2's merge raises it. Only the lead changes the file (rule O): it raises the
+after the ten areas, 4787 after Gate 2. Only the lead changes the file (rule O): it raises the
 floor at each merge into `main` to the merged branch's count, in a commit of its own
 (`v19-lead: test-count <n> after <x>`), and lowers it only in the commit that deletes tests on
 purpose. The file has no trailing newline.
