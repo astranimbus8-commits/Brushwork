@@ -29,7 +29,9 @@ import org.robolectric.shadows.ShadowLog
 /**
  * v1.9 F0 (design 2.2, I27): the shared Robolectric helpers of the v1.9 UI tests. FROZEN after
  * F0 (5.4 `$FrozenTests`): areas build against it and never edit it, nor the kits it wraps
- * ([SmokeUi], [StripTestKit], [ChromeHarness]).
+ * ([SmokeUi], [StripTestKit], [ChromeHarness]). Changed since F0 only by the lead: F1b (D21, what
+ * "too wide" and "cut" mean in [textOverflows]) and Gate 2 (a centred line's rounded ends in
+ * [textOverflows], pinned by `Qa19UiSelfTest`).
  *
  * A v1.9 UI test class holds ONE test method (the v1.6 habit, see [ChromeHarness]) that runs its
  * cases as sections, at each width ([Q392], [Q360]) in its own class and at each font scale of
