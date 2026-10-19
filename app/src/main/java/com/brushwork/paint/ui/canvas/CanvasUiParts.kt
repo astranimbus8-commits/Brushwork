@@ -28,7 +28,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -49,7 +48,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
-import com.brushwork.paint.diagnostics.ErrorReporter
+import com.brushwork.paint.diagnostics.rememberSupervisedScope
 import com.brushwork.paint.ui.theme.BrushworkColors
 import kotlinx.coroutines.launch
 import kotlin.math.atan2
@@ -92,7 +91,7 @@ internal fun ColumnScope.TabScaffold(footer: @Composable ColumnScope.() -> Unit 
 @Composable
 internal fun rememberAfterFieldCommit(): (() -> Unit) -> Unit {
     val focus = LocalFocusManager.current
-    val scope = rememberCoroutineScope { ErrorReporter.handler }
+    val scope = rememberSupervisedScope()
     return remember(focus, scope) {
         { action ->
             focus.clearFocus()

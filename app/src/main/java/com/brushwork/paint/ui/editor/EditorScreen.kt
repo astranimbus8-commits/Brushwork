@@ -67,7 +67,6 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -97,7 +96,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.UiPrefs
-import com.brushwork.paint.diagnostics.ErrorReporter
+import com.brushwork.paint.diagnostics.rememberSupervisedScope
 import com.brushwork.paint.exchange.PendingImports
 import com.brushwork.paint.exchange.VectorFormat
 import com.brushwork.paint.model.Layer
@@ -328,7 +327,7 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
 
     // ---------------------------------------------------------------- snackbar messages
     val snackbar = remember { SnackbarHostState() }
-    val scope = rememberCoroutineScope { ErrorReporter.handler }
+    val scope = rememberSupervisedScope()
     // Problems found while opening (unreadable vector or mask data...), shown once.
     LaunchedEffect(controller) {
         val warnings = controller.doc.loadWarnings

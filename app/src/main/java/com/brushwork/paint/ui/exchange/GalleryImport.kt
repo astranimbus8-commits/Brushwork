@@ -19,7 +19,6 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -27,7 +26,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import com.brushwork.paint.diagnostics.ErrorReporter
+import com.brushwork.paint.diagnostics.rememberSupervisedScope
 import com.brushwork.paint.exchange.ImportException
 import com.brushwork.paint.exchange.ImportFile
 import com.brushwork.paint.exchange.ImportKind
@@ -117,7 +116,7 @@ internal object GalleryImports {
 @Composable
 fun rememberGalleryImport(repository: ProjectRepository, onOpenProject: (String) -> Unit): () -> Unit {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope { ErrorReporter.handler }
+    val scope = rememberSupervisedScope()
     var busy by remember { mutableStateOf(false) }
     var pdf by remember { mutableStateOf<GalleryPdf?>(null) }
 

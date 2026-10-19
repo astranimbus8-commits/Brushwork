@@ -78,6 +78,7 @@ import com.brushwork.paint.tools.text.TextPathType
 import com.brushwork.paint.tools.text.TextRenderer
 import com.brushwork.paint.tools.text.TextSpec
 import com.brushwork.paint.tools.text.TextTool
+import com.brushwork.paint.tools.transform.TransformTool
 import com.brushwork.paint.tools.vector.CornerStyle
 import com.brushwork.paint.tools.vector.CurveSettings
 import com.brushwork.paint.tools.vector.ShapeCodec
@@ -841,7 +842,9 @@ class Qa19CompatBackFromV18RobolectricTest {
     /**
      * Row 10, duplicates (A4, R14): the selection bar's Duplicate (its controller entry,
      * [SelectionDuplicate.duplicate]; no UI needed) on a raster layer (the selected pixels drawn
-     * again 16 px right and down) and on a vector layer (the touched object copied).
+     * again 16 px right and down: since Gate 2 the copy floats in Transform at the same spot and
+     * is moved there and applied, which draws the same pixels) and on a vector layer (the touched
+     * object copied).
      */
     private fun writeDuplicates(dir: File) {
         val kit = A4Kit(240, 180)
@@ -853,6 +856,7 @@ class Qa19CompatBackFromV18RobolectricTest {
             select(c, 10f, 10f, 70f, 60f)
             assertEquals(16, SelectionDuplicate.offset(c))
             assertTrue("pixels duplicated", SelectionDuplicate.duplicate(c))
+            (c.tools[ToolId.TRANSFORM] as TransformTool).run { moveBy(16f, 16f); commit() }
             kit.vectorLayer(c, listOf(kit.box(100f, 100f, 140f, 140f), kit.box(180f, 40f, 220f, 80f)), "Objects")
             select(c, 90f, 90f, 150f, 150f)
             assertTrue("an object duplicated", SelectionDuplicate.duplicate(c))
