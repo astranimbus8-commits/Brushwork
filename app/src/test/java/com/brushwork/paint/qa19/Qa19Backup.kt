@@ -79,13 +79,6 @@ internal object Qa19Backup {
         return old
     }
 
-    /**
-     * The gallery cards' texts, skipped by the overflow checks: the artworks' names and the
-     * cards' size and date lines are one ellipsized line by design (GalleryScreen's card, not a
-     * v1.9 control), and at font scale 2 on the 360 dp phone they are cut.
-     */
-    private val names: (String) -> Boolean = { it == OLD || it == TODAY || it.endsWith(" px") || it == "Just now" }
-
     /** The notice, the picker, the offer and the restore list at the device's [fontScale] on a [widthDp] phone. */
     fun chooseAndRestore(h: Qa19Harness, fontScale: Float, widthDp: Float) {
         val where = "$widthDp dp at font scale $fontScale"
@@ -103,7 +96,7 @@ internal object Qa19Backup {
         }
         if (fontScale == 1f) assertEquals("the buttons on one line at font scale 1, $where", choose.top, later.top, 1f)
         assertTrue("the hint above the buttons, $where", box(BackupLabels19.PICK_HINT).bottom <= choose.top + 1f)
-        Qa19Ui.assertNoTextOverflow("the notice, $where", except = names)
+        Qa19Ui.assertNoTextOverflow("the notice, $where")
 
         // The picker opens at Documents.
         Qa19Ui.click(BackupLabels19.CHOOSE_FOLDER, exact = true)
@@ -122,7 +115,7 @@ internal object Qa19Backup {
         BackupKit.idle()
         assertEquals("nothing written while the offer shows, $where", emptyList<String>(), FakeDocumentsProvider.log.toList())
         assertEquals(where, BackupStatus.NotSet, BackupService.status.value)
-        Qa19Ui.assertNoTextOverflow("the offer, $where", except = names)
+        Qa19Ui.assertNoTextOverflow("the offer, $where")
 
         // "Restore them": the list, the old artwork checked, the settings box on.
         Qa19Ui.click(BackupLabels19.RESTORE_THEM, exact = true)
@@ -132,7 +125,7 @@ internal object Qa19Backup {
         assertTrue(where, Qa19Ui.has(OLD, exact = true))
         assertTrue(where, Qa19Ui.has(BackupLabels19.ALSO_SETTINGS, exact = true))
         assertEquals("still nothing written, $where", emptyList<String>(), FakeDocumentsProvider.log.toList())
-        Qa19Ui.assertNoTextOverflow("the restore list, $where", except = names)
+        Qa19Ui.assertNoTextOverflow("the restore list, $where")
 
         Qa19Ui.click(confirm, exact = true)
         Smoke.pumpUntil(20_000) { BackupService.folderSet && BackupKit.local(old).isDirectory }
@@ -202,8 +195,9 @@ internal object Qa19Backup {
         assertNull("no notice without artworks, $where", Qa19Ui.tagged(V19Tags.BACKUP_BANNER))
         val r = button(BackupLabels19.RESTORE)
         assertTrue("the restore button inside the screen, $where: $r", r.left >= 0f && r.right <= a.window.decorView.width)
-        // The button's text only: the empty-gallery texts above it are GalleryScreen's (frozen).
-        Qa19Ui.assertNoTextOverflow(where, except = { it != BackupLabels19.RESTORE })
+        // Gate 2: every text, the empty gallery's own too ("Your gallery is empty" measured 1 px too
+        // wide at font scale 1 on 392 and 360 dp, a rounding of the checker's, fixed in Qa19Ui).
+        Qa19Ui.assertNoTextOverflow(where)
 
         Qa19Ui.click(BackupLabels19.RESTORE, exact = true)
         pickDocumentsBrushwork(a, picker(a, where))
@@ -300,15 +294,15 @@ internal object Qa19Backup {
     /**
      * The gallery's ⋮ menu with a folder set: its three items; "Back up now" closes the menu and
      * backs up; "Backup folder…" opens the picker (the same folder again: no offer, still set);
-     * "Restore artworks…" opens the list.
+     * "Restore artworks…" opens the list. At the device's [fontScale] (Gate 2: also 1.3 and 2.0).
      */
-    fun menu(h: Qa19Harness, widthDp: Float) {
-        val where = "the gallery's menu, $widthDp dp"
+    fun menu(h: Qa19Harness, widthDp: Float, fontScale: Float = 1f) {
+        val where = "the gallery's menu, $widthDp dp at font scale $fontScale"
         BackupKit.freshInstall()
         BackupKit.newArtwork(TODAY)
         BackupKit.choose()
         FakeDocumentsProvider.resetCounts()
-        val a = h.show { GalleryScreen(BackupKit.repo, onOpenProject = {}) }
+        val a = h.show(fontScale) { GalleryScreen(BackupKit.repo, onOpenProject = {}) }
         Smoke.pumpUntil(10_000) { Qa19Ui.has(TODAY, exact = true) }
         assertNull("no notice with a folder set, $where", Qa19Ui.tagged(V19Tags.BACKUP_BANNER))
         fun open() {
@@ -320,7 +314,7 @@ internal object Qa19Backup {
             assertTrue("\"$label\", $where; shown: ${Qa19Ui.shown().take(60)}", Qa19Ui.has(label, exact = true))
         }
         assertTrue("${BackupLabels19.NOW} is on with a folder, $where", SmokeUi.isEnabled(BackupLabels19.NOW))
-        Qa19Ui.assertNoTextOverflow(where, except = names)
+        Qa19Ui.assertNoTextOverflow(where)
 
         Qa19Ui.click(BackupLabels19.NOW, exact = true)
         Smoke.pumpUntil(5_000) { !Qa19Ui.has(BackupLabels19.FOLDER, exact = true) }

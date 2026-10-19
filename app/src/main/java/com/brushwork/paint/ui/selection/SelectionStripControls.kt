@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -59,6 +60,7 @@ import com.brushwork.paint.ui.common.closeOnSecondFinger
 import com.brushwork.paint.ui.common.iconLongPressLabel
 import com.brushwork.paint.ui.theme.BrushworkColors
 import com.brushwork.paint.ui.theme.IbisColors
+import com.brushwork.paint.ui.common.FitText
 import com.brushwork.paint.ui.tools.strip.LocalStripContext
 import com.brushwork.paint.ui.tools.strip.StripItem
 import com.brushwork.paint.ui.tools.strip.StripRow
@@ -78,6 +80,12 @@ internal val StripControlHeight = 40.dp
 
 /** The declared width (dp) of a 40 dp icon item. */
 internal val IconItemWidth = 40.dp
+
+/**
+ * v1.9 Gate 2 (I27): the most a [StripValueButton] label takes of its 40 dp, so that at a large
+ * font scale its value keeps the rest (the label is 12 dp tall at font scale 1).
+ */
+private val ValueLabelMaxHeight = 18.dp
 
 /** The base look of a strip button: outline, or the accent fill when [on]. */
 private fun Modifier.stripButton(on: Boolean = false, enabled: Boolean = true): Modifier = this
@@ -148,8 +156,13 @@ internal fun StripValueButton(
             .padding(horizontal = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        // v1.9 Gate 2 (I27): the label and the value shrink at a large font scale rather than be cut;
+        // the label keeps at most [ValueLabelMaxHeight], the value the rest of the 40 dp.
         Column {
-            Text(label, fontSize = 10.sp, lineHeight = 12.sp, color = BrushworkColors.OnChromeDim, maxLines = 1, softWrap = false)
+            FitText(
+                label, fontSize = 10.sp, lineHeight = 12.sp, color = BrushworkColors.OnChromeDim, maxLines = 1, softWrap = false,
+                modifier = Modifier.heightIn(max = ValueLabelMaxHeight),
+            )
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (valueContent != null) {
                     Box(
@@ -157,7 +170,7 @@ internal fun StripValueButton(
                         contentAlignment = Alignment.CenterStart,
                     ) { valueContent() }
                 } else {
-                    Text(
+                    FitText(
                         value, fontSize = 12.sp, lineHeight = 14.sp, fontWeight = FontWeight.Medium, color = BrushworkColors.OnChrome,
                         maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis,
                         modifier = if (fixed) Modifier.weight(1f, fill = false) else Modifier,
@@ -247,7 +260,8 @@ internal fun StripToggle(label: String, checked: Boolean, width: Dp, onChange: (
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center,
     ) {
-        Text(
+        // v1.9 Gate 2 (I27): shrinks at a large font scale rather than be cut.
+        FitText(
             label,
             fontSize = 12.sp,
             color = if (checked) Color.White else BrushworkColors.OnChrome,

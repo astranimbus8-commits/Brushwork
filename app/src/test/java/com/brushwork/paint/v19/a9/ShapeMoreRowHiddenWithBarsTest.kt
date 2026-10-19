@@ -24,7 +24,8 @@ import org.robolectric.RobolectricTestRunner
  * More items while an open shape is or becomes a shape object, and are left out while the
  * selection bar or the object bar shows (`StripContext.selectionBarShown`, here as the editor
  * computes it): with objects selected under Shape, or a selection, no label shows twice. Never in
- * Points mode (Bevel points is there) nor for a shape of a layer of its own.
+ * Points mode (Bevel points is there) nor for a shape of a layer of its own. Gate 2: the paste bar
+ * alone (Paste and Hide) does not hide them.
  */
 @RunWith(RobolectricTestRunner::class)
 class ShapeMoreRowHiddenWithBarsTest {
@@ -107,6 +108,59 @@ class ShapeMoreRowHiddenWithBarsTest {
         // Neither: the items are back.
         c.setSelection(null, recordUndo = false)
         assertEquals(objectKeys, items(c, tool, barShown = barsShown(c)).filter { it.key in objectKeys }.map { it.key })
+    }
+
+    /**
+     * What `EditorScreen` passes as `selectionBarShown`, the clipboard included: the object bar
+     * (objects selected), or the selection bar, which steps aside while the tool has changes of its
+     * own and otherwise shows for a selection or, as the paste bar, for something copied (no
+     * filter, no long operation, the clipboard not hidden).
+     */
+    private fun editorBarShown(c: EditorController, tool: ShapeTool): Boolean =
+        c.vectors.selectedIds.isNotEmpty() || (!tool.hasUserChanges && (c.selection != null || c.clipboard != null))
+
+    /**
+     * v1.9 Gate 2: the paste bar alone (no selection, no selected objects, something copied) offers
+     * Paste and Hide only, so the object items stay, although the editor passes
+     * `selectionBarShown = true` for it. The editor shows it over an open shape object without
+     * changes (a reopened one); a new shape has changes, and the bar steps aside.
+     */
+    @Test
+    fun underThePasteBarAloneTheObjectItemsStay() {
+        val c = rig.controller(vectorLayer = true)
+        val tool = rig.shapeTool(c)
+        c.selectLayer(0)
+        c.setSelection(Selection.all(c.doc.width, c.doc.height), recordUndo = false)
+        assertTrue("something copied", c.copySelection())
+        c.setSelection(null, recordUndo = false)
+        c.selectLayer(1)
+        rig.drawRect(c, tool)
+        assertTrue("a new shape: the editor shows no bar", tool.hasUserChanges && !editorBarShown(c, tool))
+        assertEquals(objectKeys, items(c, tool, barShown = editorBarShown(c, tool)).filter { it.key in objectKeys }.map { it.key })
+
+        // The shape placed and reopened, unchanged: the paste bar shows over it.
+        tool.commit()
+        val vec = c.doc.layers[1]
+        val id = (vec.vector!!.objects.single() as VShape).id
+        assertTrue(tool.editShapeObject(vec, id))
+        assertTrue("an open shape object", ShapeStripInfo.of(tool, c.doc.dpi).objectActions)
+        assertTrue(c.clipboard != null && c.selection == null && c.vectors.selectedIds.isEmpty() && !tool.hasUserChanges)
+        assertTrue("the editor shows the paste bar", editorBarShown(c, tool) && !ShapeStripItems.selectionOrObjectBarUp(c))
+        val underPasteBar = items(c, tool, barShown = editorBarShown(c, tool))
+        assertEquals(objectKeys, underPasteBar.filter { it.key in objectKeys }.map { it.key })
+        assertTrue("Paste is not an object item", underPasteBar.none { it.label == "Paste" })
+        assertNoLabelTwice(underPasteBar, "the paste bar")
+
+        // A selection turns it into the selection bar, objects selected show the object bar: they go.
+        c.setSelection(Selection.all(c.doc.width, c.doc.height), recordUndo = false)
+        assertTrue("the selection bar", editorBarShown(c, tool) && ShapeStripItems.selectionOrObjectBarUp(c))
+        assertNoObjectItems(items(c, tool, barShown = editorBarShown(c, tool)), "a selection with something copied")
+        c.setSelection(null, recordUndo = false)
+        c.vectors.setSelection(vec, setOf(id))
+        assertTrue("the object bar", editorBarShown(c, tool) && ShapeStripItems.selectionOrObjectBarUp(c))
+        assertNoObjectItems(items(c, tool, barShown = editorBarShown(c, tool)), "objects selected with something copied")
+        c.vectors.setSelection(null, emptySet())
+        assertEquals("the paste bar alone again", objectKeys, items(c, tool, barShown = editorBarShown(c, tool)).filter { it.key in objectKeys }.map { it.key })
     }
 
     @Test

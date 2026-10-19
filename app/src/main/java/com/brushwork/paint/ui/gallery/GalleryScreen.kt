@@ -111,6 +111,7 @@ import com.brushwork.paint.storage.ExportFormat
 import com.brushwork.paint.storage.ProjectInfo
 import com.brushwork.paint.storage.ProjectRepository
 import com.brushwork.paint.ui.common.BwDialog
+import com.brushwork.paint.ui.common.FitText
 import com.brushwork.paint.ui.common.checkerboard
 import com.brushwork.paint.ui.exchange.rememberGalleryImport
 import com.brushwork.paint.ui.theme.BrushworkColors
@@ -437,18 +438,23 @@ private fun ProjectCard(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f)) {
-                Text(info.name, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(
+                // v1.9 Gate 2 (I27): the three lines shrink at a large font scale, never below their size
+                // at font scale 1 ([FitText]); the size line was cut at 2.0 on 360 dp. A name too long
+                // at font scale 1 ends in "…" as there.
+                val title = MaterialTheme.typography.titleSmall
+                val small = MaterialTheme.typography.bodySmall
+                FitText(info.name, fontSize = title.fontSize, style = title, overflow = TextOverflow.Ellipsis)
+                FitText(
                     "${info.width} × ${info.height} px",
-                    style = MaterialTheme.typography.bodySmall,
+                    fontSize = small.fontSize,
+                    style = small,
                     color = BrushworkColors.OnChromeDim,
-                    maxLines = 1,
                 )
-                Text(
+                FitText(
                     relativeTime(info.modifiedAt, now),
-                    style = MaterialTheme.typography.bodySmall,
+                    fontSize = small.fontSize,
+                    style = small,
                     color = BrushworkColors.OnChromeDim,
-                    maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
             }

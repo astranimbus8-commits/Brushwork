@@ -22,7 +22,6 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -47,6 +46,7 @@ import com.brushwork.paint.ui.common.closeOnSecondFinger
 import com.brushwork.paint.ui.common.iconLongPressLabel
 import com.brushwork.paint.ui.theme.BrushworkColors
 import com.brushwork.paint.ui.theme.IbisColors
+import com.brushwork.paint.ui.common.FitText
 import com.brushwork.paint.ui.tools.strip.StripItem
 import com.brushwork.paint.ui.tools.strip.StripRow
 
@@ -169,7 +169,8 @@ internal fun StripTextButton(
     }
     val tint = if (on) Color.White else color
     val label: @Composable (Modifier) -> Unit = { m ->
-        Text(
+        // v1.9 Gate 2 (I27): shrinks at a large font scale rather than cut the text.
+        FitText(
             text,
             fontSize = if (stacked) 10.sp else 11.sp,
             lineHeight = if (stacked) 12.sp else 13.sp,
@@ -242,7 +243,8 @@ internal fun StripStatusText(text: String, width: Dp, leading: (@Composable () -
             leading()
             Box(Modifier.width(6.dp))
         }
-        Text(
+        // v1.9 Gate 2 (I27): shrinks at a large font scale rather than cut the text.
+        FitText(
             text,
             fontSize = 11.sp,
             lineHeight = 13.sp,

@@ -7,7 +7,6 @@ import androidx.compose.material.icons.filled.AlignHorizontalCenter
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -28,7 +27,8 @@ fun SnapToObjectsChip(controller: EditorController, compact: Boolean = true, mod
     FilterChip(
         selected = on,
         onClick = { controller.snapping.enabled = !on },
-        label = { Text(if (compact) "Snap" else "Snap to objects", maxLines = 1) },
+        // v1.9 Gate 2 (I27): the label shrinks at a large font scale rather than wraps.
+        label = { FitText(if (compact) "Snap" else "Snap to objects") },
         leadingIcon = { Icon(Icons.Filled.AlignHorizontalCenter, contentDescription = null, modifier = Modifier.size(18.dp)) },
         colors = FilterChipDefaults.filterChipColors(
             selectedContainerColor = BrushworkColors.AccentDim,

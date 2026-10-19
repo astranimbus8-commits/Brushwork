@@ -42,6 +42,14 @@ import org.robolectric.annotation.Config
  * - a relaunch shows the remembered row from the start, and the first fit leaves room for it; the
  *   row opening or closing never moves the canvas, and "Fit to screen" leaves room for the open row.
  * [Qa19StickyRowsNarrowUiTest] runs the canvas touches at 360 dp and the font scales of I27.
+ *
+ * v1.9 Gate 2 (R3 with the v1.9 strip items, design 3.4): [Qa19StickyRows.newItems], one section
+ * per item: the row stays open while the item is used (the group thickness row and its slider,
+ * the bevel popup, the erase-mode cell and its chooser, the "Turn into pixels" dialog, "New layer
+ * each time", Duplicate / Bring forward / Send backward, justify, kerning, lists, a text path's
+ * nodes, the Chromatic aberration blend mode, "Drawing preview"), and shows again, open, once its
+ * popup, menu, dialog, sheet or panel closes; only the strip's row and the object bar's extra row
+ * stay open, the menus and popups still close.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = Qa19Ui.Q392, instrumentedPackages = ["com.brushwork.paint.qa19.stickyrowssandbox"])
@@ -128,6 +136,8 @@ class Qa19StickyRowsUiTest {
             closeByToggle(s)
             Smoke.assertQuiet(s.c, "a relaunch, and fits")
         }
+
+        Qa19StickyRows.newItems(h, "392 dp", fontScale = 1f)
     }
 
     /** "Fit to screen" from the "More options" menu, scrolled to it by a finger ([MoreWalk.pick]: the menu closes). */
