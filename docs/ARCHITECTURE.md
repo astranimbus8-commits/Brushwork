@@ -633,8 +633,9 @@ The lead's part of v1.9, written at gate 1 (design 5.1). v1.9 answers the twenty
 of 2026-10-12. The lead built a foundation on branch `v19-foundation` (worktree
 `.wt/v19-foundation`) from `main` at `600582d9` (v1.8.0); ten areas then build the items in
 parallel from the tag `v19-gate1` and merge in the order A7a, A8, A5, A1, A9, A2, A4, A3, A6, A7b.
-Each area writes its own section under "v1.9 areas" below; the lead writes "Testing and CI
-(v1.9)" at gate 3. The invariants are in "Invariants (v1.9)" above.
+Each area writes its own section under "v1.9 areas" below, and the lead's Gate 2 is the last
+section there ("Gate 2"); the lead wrote "Testing and CI (v1.9)" at Gate 2. The invariants are in
+"Invariants (v1.9)" above.
 
 ### Steps, areas and ownership
 
@@ -740,19 +741,20 @@ What v1.8 does with what v1.9 writes is the table of design 5.2;
 `qa19/Qa19CompatBackFromV18RobolectricTest` has one test per row (rows 10 and 12 one per owner;
 row 8, the wrap re-flow, cannot occur), each reading a fixture of
 `app/src/test/resources/qa19/compat/<row>/` with the `compat18/` readers. At gate 1 only row 14
-runs:
+ran; since Gate 2 every row runs (23 tests, each with its committed fixture), and the only
+ignored test of the class is the generator `generateFixtures`:
 
-| Row | Construct | v1.8 opens / edits and saves | Owner | Gate 1 |
-|---|---|---|---|---|
-| 1-5 | `TextSpec.justify`, `kerningMode`, `list`; `TextPathSpec.nodes`; `TextLayerData.more` and `TextItem.id` | the saved pixels; an edit drops the field (and, for `more`, shows only the first text) | A3 | ignored (row 2's ignore text still quotes the forcing rule above) |
-| 6, 7 | v1.8 Transform, array source and data lift of a layer of several texts | the pixels move with every text; the data keeps the first text | A3 | ignored |
-| 9 | `ProjectFileDto.paper`, `BrushworkPayload.paper` | one transparent layer; a re-save drops the paper | A8 | ignored |
-| 10 | joined shapes, mixed curves, merged layers, duplicates, cut pieces, bevelled points | existing kinds: fully editable | A9, A1, A4, A4, A5, A1 / A9 | ignored |
-| 11 | one-layer new canvases, "Picture" alone | existing format | A8 | ignored |
-| 12 | text arrange order, R17 edits | existing fields | A3, A9 | ignored |
-| 13 | banded save | byte-identical files | A7b (the lead un-ignores it) | ignored |
-| 14 | the v1.9 prefs, `UiPrefs`, the tool-settings fields | not in the project; v1.8 ignores unknown keys | lead (F1a) | runs, fixture `qa19/compat/prefs/` |
-| 15, 16 | crash reports, `backup-state.json`, the backup folder | outside the projects | A7a (the lead un-ignores it), A8 | ignored |
+| Row | Construct | v1.8 opens / edits and saves | Owner | Gate 1 | Gate 2 |
+|---|---|---|---|---|---|
+| 1-5 | `TextSpec.justify`, `kerningMode`, `list`; `TextPathSpec.nodes`; `TextLayerData.more` and `TextItem.id` | the saved pixels; an edit drops the field (and, for `more`, shows only the first text) | A3 | ignored (row 2's ignore text still quotes the forcing rule above) | runs, fixtures `text-justify/`, `text-kerning/`, `text-list/`, `text-path-nodes/`, `text-several/` |
+| 6, 7 | v1.8 Transform, array source and data lift of a layer of several texts | the pixels move with every text; the data keeps the first text | A3 | ignored | runs, `text-transform/`, `text-array-lift/` |
+| 9 | `ProjectFileDto.paper`, `BrushworkPayload.paper` | one transparent layer; a re-save drops the paper | A8 | ignored | runs, `paper/` |
+| 10 | joined shapes, mixed curves, merged layers, duplicates, cut pieces, bevelled points | existing kinds: fully editable | A9, A1, A4, A4, A5, A1 / A9 | ignored | runs (seven tests), `shapes-joined/`, `curves-mixed/`, `layers-merged/`, `duplicates/`, `cut-pieces/`, `bevel-curves/`, `bevel-shapes/`; Gate 2's in-layer Duplicate (P3) writes the same `duplicates/` pixels, so no fixture was regenerated |
+| 11 | one-layer new canvases, "Picture" alone | existing format | A8 | ignored | runs, `new-canvas/` |
+| 12 | text arrange order, R17 edits | existing fields | A3, A9 | ignored | runs, `text-arrange/`, `shape-r17/` |
+| 13 | banded save | byte-identical files | A7b (the lead un-ignores it) | ignored | runs, `banded/` (the lead, after A7b) |
+| 14 | the v1.9 prefs, `UiPrefs`, the tool-settings fields | not in the project; v1.8 ignores unknown keys | lead (F1a) | runs, fixture `qa19/compat/prefs/` | runs, `prefs/` (Gate 2's key "newCanvas.customColor" is not in `V19_SETTINGS_KEYS`: a preference v1.8 ignores like the others) |
+| 15, 16 | crash reports, `backup-state.json`, the backup folder | outside the projects | A7a (the lead un-ignores it), A8 | ignored | runs, `crash/` (the lead, after A7a), `backup-state/`, `backup-folder/` |
 
 An area writes its row's generator (`generators`), runs the ignored `generateFixtures` once,
 un-ignores its row and adds the row's checks after `v18Reads(row, newKeys)`. `Compat18KitTest`
@@ -762,12 +764,14 @@ project and a payload lose their paper there, and that the tool settings lose th
 ### UiPrefs versus AppSettings (I26)
 
 - `AppSettings` ("brushwork_settings") is journaled: while a UI mark is open every write is
-  recorded, so a history tap over the UI takes it back (`rollbackJournal`). v1.9 adds eight keys,
+  recorded, so a history tap over the UI takes it back (`rollbackJournal`). v1.9 adds nine keys,
   each default the v1.8 behaviour: "drawPreview" (`DRAW_PREVIEW_FASTER`; or `DRAW_PREVIEW_EXACT`),
   "showFrameTimes" (false), "newCanvas.background" (`NEW_CANVAS_WHITE`; or TRANSPARENT, CUSTOM,
   PAPER), "text.newLayerEachTime" (false), "curve.bevel.amount" and "shape.bevel.amount" (0.15,
   kept in 0.01..0.5, a non-finite value becomes 0.15), "curve.bevel.segments" and
-  "shape.bevel.segments" (1, kept in 1..8).
+  "shape.bevel.segments" (1, kept in 1..8), and since Gate 2 "newCanvas.customColor" (an Int,
+  default 0xFFF3E7D3, the New canvas dialog's former pale cream; written at Create together with
+  "newCanvas.background", so the settings backup carries it).
 - `UiPrefs` ("brushwork_ui") is a plain `SharedPreferences` file, not journaled, not in the
   project and not in the backup's `settings.json`: "strip.openRows" (the `ToolId` names whose More
   row is open; unknown names are kept) and "objectBar.moreOpen". Only the explicit toggle taps
@@ -779,36 +783,37 @@ project and a payload lose their paper there, and that the tool settings lose th
 ### Seams and who fills them (F1b)
 
 Every seam keeps v1.8's behaviour on `main` at gate 1. "Fills" is the area that gives it its v1.9
-behaviour; everyone else calls it.
+behaviour; everyone else calls it. "At Gate 2" is the seam on `main` after the ten areas and Gate 2
+(the details are in each area's block under "v1.9 areas" and in "Gate 2" there).
 
-| Seam | File | Owner | At gate 1 | Fills |
-|---|---|---|---|---|
-| `ToolHistory<S>(initial, cap = 100)`: `current`, `canUndo`, `canRedo`, `depth`, `record`, `undo`, `redo`, `reset` | `tools/ToolHistory.kt` | frozen | complete (recording the current state is not a step) | used by A2 (`FilterValues`), A3 (path nodes) |
-| `InToolHistoryOwner` and `EditorController.inToolHistory` (region `v19-lead history`) | `tools/InToolHistoryOwner.kt` | frozen | null: v1.8. Undo and Redo ask the owner first; `HistoryLabels` shows "Undo: " plus its label, and `performUndo` / `performRedo` skip `historyBlocked` (the open text editor) while it can step; `canRedoNow` (`EditorChrome.kt`) and the Undo button (`EditorScreen.kt`) read it | A2, A3 set an owner while a session is open |
-| `MemoryGovernor` (`register`, `onTrimMemory`, `admit`, `entries`, `policy`), `MemoryPressure`, `Trimmable`, `GovernorPolicy` | `engine/MemoryGovernor.kt` | frozen | `DefaultPolicy` trims nothing and admits everything; `BrushworkApp` forwards `onTrimMemory` and `onLowMemory` | A7b's policy, A6's cache registrations |
-| `GovernorPolicies.current()` | `engine/GovernorPolicies.kt` | A7b | `MemoryGovernor.DefaultPolicy` | A7b (`GovernorPolicyV19`) |
-| `UndoManager.trimOldest(keepAtLeast = 1, until)` | `engine/Undo.kt` | frozen | complete: drops the oldest steps, keeps redo, does nothing inside an edit scope | called by A7b's policy |
-| `MemoryGovernor.admit` sites | `FilterSession.apply` (in `v19-A7b apply`), `LayerMerge.mergeDownNow`, `EditorController.mergeFolder` (in `v19-A4 mergeFolder`), `ImageExport` (JPEG copy), `EditorActions.admitFlatten` | the files' owners | always admitted; a refusal shows `StabilityLabels19.NO_MEMORY_FOR` (the JPEG copy throws an `IOException`) | A7b's policy decides; `DiagnosticsSeamsTest` pins one admit per file |
-| `PerfTrace` (`enabled`, `span`, `record`, `stats`, `lastMs`, `clear`; eight names) | `engine/PerfTrace.kt` | A6 | spans: FRAME (`CanvasView.onDraw`), LIFT (`BrushTool`), ERASE_REBUILD (`VectorEraser`), MASK_FRAME (`MaskTool` drags), FILTER_PREVIEW (`FilterSession`), SAVE_LAYER (`LayerCodec`), OPEN (`EditorSession`); CUT has no site | A6; A5 adds the CUT span |
-| `EditInvalidation.afterCommit(changed, displayCurrent)`; `commitEdit(..., displayCurrent = false)` (region `v19-A6 commitEdit`) | `engine/EditInvalidation.kt` | A6 | returns `changed`: v1.8 | A6, with the I25 parity test |
-| `LayerMerge` (`mergeDown`, `siblingBelow`, `mergeDownNow`, `mergeDownInto`, `kindOf`, `rasterReason`), `MergeKind` | `engine/LayerMerge.kt` | A4 | v1.8's merge, extracted from the controller; `kindOf` by `VectorLayerOps.mergesAsObjects`; `rasterReason` null | A4 (R19) |
-| `LayerConvert` (`shapeToVector`, `toVectorAction(c, layer, name, label)`, internal `convert`) | `engine/LayerConvert.kt` | A4 | complete, byte-identical to v1.8's `convertToVectorLayer` | called by A4, A5, A9 |
-| `CanvasCreate.seed(spec)`, `seedFromImage(picture, name)`, `CanvasStart { FILL, TRANSPARENT, PAPER }`; `NewCanvasSpec.start: CanvasStart? = null` | `storage/CanvasCreate.kt`; `storage/ProjectRepository.kt` | A8 | the v1.8 seeds ("Background" and "Layer 1"; "Picture" and "Layer 1"), descriptors only | A8 (one layer, R15) |
-| `PaperBackdrop.draw(canvas, doc, dst)`, `sampleColor(doc)` | `engine/PaperBackdrop.kt` | A8 | draws `doc.paper`; nothing without one | A8 |
-| `PointBevel.bevel(...)`, `BevelPoint`, `Result`; `BevelPopup(amount, segments, onAmount, onSegments, onDone)` | `tools/points/PointBevel.kt`, `ui/points/BevelPopup.kt` | frozen | complete | called by A1 (Polyline), A9 (Shape) |
-| `ArrangeOrder.step(bounds, selected, dir)` | `vector/select/ArrangeOrder.kt` | frozen | complete: each selected item moves past the first overlapping unselected item in its direction, or one step; null when nothing moves | called by A4 (`ObjectActions.arrange`), A3, A9 |
-| `ErasableTool` (`eraseOn`, `setErase`, `eraseLabel`, `erasingLabel`) | `tools/ErasableTool.kt` | frozen | no tool implements it | A1, A9 implement it; A5's slot 1 reads it |
-| `EraseRouting.route`, `EraseRoute`, `EraseSource` | `vector/draw/EraseRouting.kt` | A5 | the v1.8 routing (I20) | A5 (R11 (b)) |
-| `EraseCut.cut`, `strokeRegion`, `Outcome`, `MAX_PIECES` 256, `MAX_TARGETS` 500 | `vector/draw/EraseCut.kt` | A5 | `Unchanged` | A5 |
-| `ToolErase.begin`, `ToolEraseSession`, `ToolEraseResult` | `vector/draw/ToolErase.kt` | A5 | `begin` returns null | A5; called by A1, A9 |
-| `VectorEraseChooser.item`, `pixelsItem`, `modeCell` | `ui/vector/VectorEraseChooser.kt` | A5 | null (no strip item) | A5 |
-| `VectorPaintSpec.erase` (DST_OUT); `StrokeInfo.convertFirst` (set by `BrushTool` when the route is `CONVERT_THEN_OBJECTS`); `VectorEraserRecorder(..., convertFirst)` | `tools/vector/VectorRender.kt`; `brush/StrokeHooks.kt`; `vector/draw/VectorEraser.kt` | A5; A6; A5 | false: v1.8 (the gate-1 routing never returns `CONVERT_THEN_OBJECTS`, and the recorder ignores it) | A5 |
-| `Breadcrumbs` (32 events), `CrashLog`, `CrashReport`, `ErrorReporter.handler` | `diagnostics/` | A7a | breadcrumbs recorded; `CrashLog` logs only and reports nothing; the handler on every `CoroutineScope(` and `rememberCoroutineScope` forwards to the thread's handler | A7a |
-| `BackupService` (`status`, `start`, `onSaved`, `onDeleted`), `BackupStatus` | `storage/backup/BackupService.kt` | A8 | `Ok(0, "", 0)`, no-ops | A8 |
-| `GalleryNotice`, `pickNotice(crash, backup, notSetDismissedAtMillis, nowMillis)`, `GalleryNotices`; `BackupBanner`, `GalleryBackupMenuItems`, `galleryBackupMenuShown`, `EmptyGalleryRestore` | `ui/gallery/` | A8 | `pickNotice` complete; the slots are empty and the menu hidden | A8 (A7a's crash card in the notice) |
-| `CrashCard`, `DiagnosticsSection`; `BackupSection`; `DrawingPreviewSetting` | `ui/diagnostics/`, `ui/backup/`, `ui/editor/` | A7a, A8, A6 | empty, except `DiagnosticsSection`'s frame-times switch (F3) | A7a, A8, A6 |
-| `TextItemOps.available`, `duplicateItems(c, layer, area, ids)` | `tools/text/TextItemOps.kt` | A3 | false, null | A3; A4 calls it and hides Duplicate on text layers while it is unavailable |
-| `StripKeysV19` (eleven keys), `LabelsV19.kt`, `V19Tags` | `ui/tools/strip/`, `ui/common/` | frozen | declared | every area uses them; new ones by `LeadRequest` |
+| Seam | File | Owner | At gate 1 | Fills | At Gate 2 |
+|---|---|---|---|---| --- |
+| `ToolHistory<S>(initial, cap = 100)`: `current`, `canUndo`, `canRedo`, `depth`, `record`, `undo`, `redo`, `reset` | `tools/ToolHistory.kt` | frozen | complete (recording the current state is not a step) | used by A2 (`FilterValues`), A3 (path nodes) | `FilterSession.history` (A2) and `TextPathNodeEditor` (A3) |
+| `InToolHistoryOwner` and `EditorController.inToolHistory` (region `v19-lead history`) | `tools/InToolHistoryOwner.kt` | frozen | null: v1.8. Undo and Redo ask the owner first; `HistoryLabels` shows "Undo: " plus its label, and `performUndo` / `performRedo` skip `historyBlocked` (the open text editor) while it can step; `canRedoNow` (`EditorChrome.kt`) and the Undo button (`EditorScreen.kt`) read it | A2, A3 set an owner while a session is open | owners: `FilterSession` (A2), `TextPathNodeEditor` (A3) and `EditorController.deferredWaitGuard` while deferred work is pending (since Gate 2 a pending region cut counts too, M3) |
+| `MemoryGovernor` (`register`, `onTrimMemory`, `admit`, `entries`, `policy`), `MemoryPressure`, `Trimmable`, `GovernorPolicy` | `engine/MemoryGovernor.kt` | frozen | `DefaultPolicy` trims nothing and admits everything; `BrushworkApp` forwards `onTrimMemory` and `onLowMemory` | A7b's policy, A6's cache registrations | `GovernorPolicyV19` decides; registered: its own entries, A6's caches (`engine/live/WeakRegistration`), `OpticalKerning` (A3), the gallery's `ThumbnailCache` (A8) |
+| `GovernorPolicies.current()` | `engine/GovernorPolicies.kt` | A7b | `MemoryGovernor.DefaultPolicy` | A7b (`GovernorPolicyV19`) | `GovernorPolicyV19` |
+| `UndoManager.trimOldest(keepAtLeast = 1, until)` | `engine/Undo.kt` | frozen | complete: drops the oldest steps, keeps redo, does nothing inside an edit scope | called by A7b's policy | called by `GovernorPolicyV19` |
+| `MemoryGovernor.admit` sites | `FilterSession.apply` (in `v19-A7b apply`), `LayerMerge.mergeDownNow`, `EditorController.mergeFolder` (in `v19-A4 mergeFolder`), `ImageExport` (JPEG copy), `EditorActions.admitFlatten` | the files' owners | always admitted; a refusal shows `StabilityLabels19.NO_MEMORY_FOR` (the JPEG copy throws an `IOException`) | A7b's policy decides; `DiagnosticsSeamsTest` pins one admit per file | the same five sites; `GovernorPolicyV19` decides |
+| `PerfTrace` (`enabled`, `span`, `record`, `stats`, `lastMs`, `clear`; eight names) | `engine/PerfTrace.kt` | A6 | spans: FRAME (`CanvasView.onDraw`), LIFT (`BrushTool`), ERASE_REBUILD (`VectorEraser`), MASK_FRAME (`MaskTool` drags), FILTER_PREVIEW (`FilterSession`), SAVE_LAYER (`LayerCodec`), OPEN (`EditorSession`); CUT has no site | A6; A5 adds the CUT span | every span has a site: CUT is `EraseLanding`'s region cut (A5) |
+| `EditInvalidation.afterCommit(changed, displayCurrent)`; `commitEdit(..., displayCurrent = false)` (region `v19-A6 commitEdit`) | `engine/EditInvalidation.kt` | A6 | returns `changed`: v1.8 | A6, with the I25 parity test | null for a lift whose preview is its commit (`displayCurrent = true`, I25); `tilesAfterCommit` redraws a lift's undo tiles (A6) |
+| `LayerMerge` (`mergeDown`, `siblingBelow`, `mergeDownNow`, `mergeDownInto`, `kindOf`, `rasterReason`), `MergeKind` | `engine/LayerMerge.kt` | A4 | v1.8's merge, extracted from the controller; `kindOf` by `VectorLayerOps.mergesAsObjects`; `rasterReason` null | A4 (R19) | A4's merges (R19; block A4) |
+| `LayerConvert` (`shapeToVector`, `toVectorAction(c, layer, name, label)`, internal `convert`) | `engine/LayerConvert.kt` | A4 | complete, byte-identical to v1.8's `convertToVectorLayer` | called by A4, A5, A9 | unchanged |
+| `CanvasCreate.seed(spec)`, `seedFromImage(picture, name)`, `CanvasStart { FILL, TRANSPARENT, PAPER }`; `NewCanvasSpec.start: CanvasStart? = null` | `storage/CanvasCreate.kt`; `storage/ProjectRepository.kt` | A8 | the v1.8 seeds ("Background" and "Layer 1"; "Picture" and "Layer 1"), descriptors only | A8 (one layer, R15) | one layer (R15, A8) |
+| `PaperBackdrop.draw(canvas, doc, dst)`, `sampleColor(doc)` | `engine/PaperBackdrop.kt` | A8 | draws `doc.paper`; nothing without one | A8 | A8; `CrossPaperRoundTripTest` (Gate 2) follows a paper document through its sites |
+| `PointBevel.bevel(...)`, `BevelPoint`, `Result`; `BevelPopup(amount, segments, onAmount, onSegments, onDone)` | `tools/points/PointBevel.kt`, `ui/points/BevelPopup.kt` | frozen | complete | called by A1 (Polyline), A9 (Shape) | called by `CurveTool` (Polyline, A1) and `ShapeTool` (A9); each popup session is one exact step (Gate 2) |
+| `ArrangeOrder.step(bounds, selected, dir)` | `vector/select/ArrangeOrder.kt` | frozen | complete: each selected item moves past the first overlapping unselected item in its direction, or one step; null when nothing moves | called by A4 (`ObjectActions.arrange`), A3, A9 | called by `ObjectActions.arrange` (A4; Shape's More row goes through it) and `TextTool` (A3) |
+| `ErasableTool` (`eraseOn`, `setErase`, `eraseLabel`, `erasingLabel`) | `tools/ErasableTool.kt` | frozen | no tool implements it | A1, A9 implement it; A5's slot 1 reads it | implemented by `CurveTool` (Curve, Polyline, Path; A1) and `ShapeTool` (A9) |
+| `EraseRouting.route`, `EraseRoute`, `EraseSource` | `vector/draw/EraseRouting.kt` | A5 | the v1.8 routing (I20) | A5 (R11 (b)) | the I20 table (block A5); the Eraser brush's path stroke keeps v1.8's route (product P4, deferred past 1.9) |
+| `EraseCut.cut`, `strokeRegion`, `Outcome`, `MAX_PIECES` 256, `MAX_TARGETS` 500 | `vector/draw/EraseCut.kt` | A5 | `Unchanged` | A5 | A5; since Gate 2 `cutAll(targets, eraser, active)` stops at its next object once cancelled (M3) |
+| `ToolErase.begin`, `ToolEraseSession`, `ToolEraseResult` | `vector/draw/ToolErase.kt` | A5 | `begin` returns null | A5; called by A1, A9 | A5; `CurveTool` and `ShapeTool` erase through it |
+| `VectorEraseChooser.item`, `pixelsItem`, `modeCell` | `ui/vector/VectorEraseChooser.kt` | A5 | null (no strip item) | A5 | A5's items and the erase-mode cell |
+| `VectorPaintSpec.erase` (DST_OUT); `StrokeInfo.convertFirst` (set by `BrushTool` when the route is `CONVERT_THEN_OBJECTS`); `VectorEraserRecorder(..., convertFirst)` | `tools/vector/VectorRender.kt`; `brush/StrokeHooks.kt`; `vector/draw/VectorEraser.kt` | A5; A6; A5 | false: v1.8 (the gate-1 routing never returns `CONVERT_THEN_OBJECTS`, and the recorder ignores it) | A5 | A5: a legacy shape layer converts and erases in one step (`EraseLanding`) |
+| `Breadcrumbs` (32 events), `CrashLog`, `CrashReport`, `ErrorReporter.handler` | `diagnostics/` | A7a | breadcrumbs recorded; `CrashLog` logs only and reports nothing; the handler on every `CoroutineScope(` and `rememberCoroutineScope` forwards to the thread's handler | A7a | A7a's crash log and reports; since Gate 2 a composable's scope is `rememberSupervisedScope()` (P2: a supervisor under the handler) |
+| `BackupService` (`status`, `start`, `onSaved`, `onDeleted`), `BackupStatus` | `storage/backup/BackupService.kt` | A8 | `Ok(0, "", 0)`, no-ops | A8 | A8's backup; since Gate 2 `start` does no IO on the calling thread (M4a) |
+| `GalleryNotice`, `pickNotice(crash, backup, notSetDismissedAtMillis, nowMillis)`, `GalleryNotices`; `BackupBanner`, `GalleryBackupMenuItems`, `galleryBackupMenuShown`, `EmptyGalleryRestore` | `ui/gallery/` | A8 | `pickNotice` complete; the slots are empty and the menu hidden | A8 (A7a's crash card in the notice) | A8, with A7a's crash card |
+| `CrashCard`, `DiagnosticsSection`; `BackupSection`; `DrawingPreviewSetting` | `ui/diagnostics/`, `ui/backup/`, `ui/editor/` | A7a, A8, A6 | empty, except `DiagnosticsSection`'s frame-times switch (F3) | A7a, A8, A6 | filled by A7a, A8 and A6 |
+| `TextItemOps.available`, `duplicateItems(c, layer, area, ids)` | `tools/text/TextItemOps.kt` | A3 | false, null | A3; A4 calls it and hides Duplicate on text layers while it is unavailable | `available` true; `duplicateItems` copies the chosen texts (A3), so Duplicate shows on text layers |
+| `StripKeysV19` (eleven keys), `LabelsV19.kt`, `V19Tags` | `ui/tools/strip/`, `ui/common/` | frozen | declared | every area uses them; new ones by `LeadRequest` | declared; the strip specs rank their v1.9 items by them |
 
 To make the extractions byte-identical, `EditorController` widened a few members to `internal`:
 `settleQueuedVectorWork()`, the inline `withToolPaused`, `storeData(..., record = ::pushUndo)`,
@@ -905,8 +910,10 @@ after F3, and only A6 changes `CanvasView.kt`.
   took 27.5 min and passed the 26-minute fallback of design 5.5; `CiShardFilterTest` checks the
   balance for both two and three shards.
 - The floor is the non-Timing count of all shards: 3970 at v1.8, 4024 after F0, 4072 after F1a,
-  4154 after F1b, 4169 after F2 and 4177 after F3 (shard 0 2192 + shard 1 1985), and 4764 after
-  the ten areas; the Timing run has 325 at F3. Only the lead changes the file (rule O): it raises the floor at each merge to the
+  4154 after F1b, 4169 after F2 and 4177 after F3 (shard 0 2192 + shard 1 1985), 4764 after
+  the ten areas (three shards: 1426 + 1745 + 1593); the Timing run has 325 at F3.
+  "Testing and CI (v1.9)" below has the jobs, the local runs and the
+  known flakes. Only the lead changes the file (rule O): it raises the floor at each merge to the
   merged branch's count, and lowers it only in the commit that deletes tests on purpose. The file
   has no trailing newline.
 - Test kits of the foundation: `qa19/Qa19Ui.kt` (frozen: `uiTest` sections, the editor and
@@ -1724,19 +1731,30 @@ options on them) and R14 ("a button to duplicate the selection in the same layer
   being edited, a legacy shape layer, or a text layer while `TextItemOps.available` is false (A3).
   It is one step `LayerLabels19.DUPLICATE_STEP` (`groupUndo`); the offset is
   `ObjectActions.duplicateOffset` (16 px at 100 %).
-  - Pixels: the selected pixels (`SelectionEdits.drawSelected`) are drawn again, offset right and
-    down, on the same layer (an alpha lock keeps them inside the painted pixels), and the
-    selection moves onto them (`SelectionDuplicate.shifted`: only the selection's bounds are
-    drawn onto a new ALPHA_8 mask and scanned for its tight bounds, never a full-document copy;
-    a pixel copy that does not fit in memory restores the saved tiles and records nothing).
-    This is a stand-in: the design floats the copy in Transform on the
-    same layer, which needs an in-layer placement in `TransformTool` (today closing a placement
-    over a painted layer deletes the layer); the lead deferred that change to Gate 2.
+  - Pixels: at the areas' merge this was a stand-in (the selected pixels drawn again 16 px right
+    and down, the selection moved by `SelectionDuplicate.shifted`). Since Gate 2 (product P3) the
+    selected pixels (`SelectionEdits.drawSelected`, soft edges kept) float as a copy in Transform
+    at the same spot of the same layer (`TransformTool.startInLayerCopy`, a placement `Session`
+    with `inLayer = true`: the source is never cleared, a cancel never removes the layer, and the
+    commit never folds with an add-layer step). The check mark lands it as the one step
+    `DUPLICATE_STEP` (an alpha lock keeps it inside the painted pixels) with the selection moved
+    along; the cross, Delete or Undo while it floats leave the layer, the selection and the
+    history as they were. A tool switch or closing the editor lands it as that step
+    (`onDeactivate`), and Transform stays the tool after the check mark or the cross. Applying an
+    unmoved copy is a step too and composites the copy over itself (soft pixels gain alpha). The
+    copy bitmap is the selection's bounds, never the document; one that does not fit shows
+    `LayerLabels19.NO_MEMORY` and records nothing. While it floats the selection bar hides
+    (every placement has user changes) and the Transform strip shows v1.8's "Delete picture".
+    `SelectionDuplicate.offset` now applies to objects and texts only; `shifted` and its test stay
+    unused by product code.
   - Objects: the objects the selection touches (`c.vectors.touching`) are copied right above the
     topmost of them (`ObjectEdits.duplicate`) and selected, with the toast `DUPLICATED`. When the
     selection touches none, a toast says so (`LayerLabels19.NOTHING_TO_DUPLICATE`, with the
     layer's name) and there is no step.
-  - Texts: `TextItemOps.duplicateItems`, once A3 makes it available.
+  - Texts: the texts that meet the selection, copied with the same offset through
+    `TextItemOps.duplicateItems` (A3 made it available: `available` is true since A3's merge), with
+    the toast `DUPLICATED`; `CrossTextDuplicateTest` (Gate 2) pins it on a merged layer of several
+    texts against the Text More row's Duplicate.
   - The item grows to its one-line label at any font size (`BarItem(fit = true)`).
   - Slid to its end, the bar must start with a whole item at least the cue's 12 dp in (v1.8
     polish). With eleven items a 392 dp phone started with "Deselect" under the start cue, so the
@@ -2155,6 +2173,145 @@ optimization); `Filter.kernelRadius` tiling for the neighbourhood filters and st
 (this block says what the code does).
 
 <!-- /v19-A7b -->
+
+### Gate 2 (the lead: cross tests and deferred fixes)
+
+The lead's Gate 2 (design 2.1 and 3.4) ran as five lanes, each built and reviewed on a branch of
+its own from `main` at `9a213149` (the ten areas merged, CI on three shards), then merged into
+`v19-gate2` with `--no-ff` in this order, each merge clean: product (`aa5908ea`; P1-P4), memory
+(`dec9e513`; M1-M4), objects (`9a03e511`; X1-X4), text (`e012a951`; T1-T3, `CrossUndoSnap`) and
+strip (`81e10e87`; S1-S7). The lead's own `v19G2` commits followed (the frozen note of
+`Qa19Ui.kt`, `DiagnosticsSeamsTest` after P2, this section), then the merge into `main`.
+
+**Cross tests** (`app/src/test/java/com/brushwork/paint/v19/cross/` unless named):
+
+| Design 3.4 item | Class (tests) | What it pins |
+|---|---|---|
+| Erase joined shapes with the four tools in each mode | `CrossObjectsEraseJoinedShapesTest` (2) | X1: a vector layer of two shape objects erased with the outline of Curve, Polyline, Path and Shape in Object, Partial and To intersection: one step each whose undo and redo give the objects and pixels back exactly, the layer a fresh rendering of its objects (I1) and never pixels by itself (I20), saved and opened again as it was; a Partial piece cut with Shape opens in a curve tool; "Turn into pixels" after its warning is v1.8's rasterize as a step of its own, then each tool erases the pixels |
+| Merge two shape layers, then a Partial cut | `CrossObjectsMergeThenCutTest` (1) | X2: two shape layers ("New layer each time") merge down from the layers panel with no dialog into one vector layer of both shapes, one step "Merge down"; Partial cuts one shape into paths, one step "Erase"; each undoes exactly |
+| Shape More row's Duplicate, Bring forward, Send backward as the object bar's | `CrossObjectsShapeMoreRowTest` (1) | X3: the same data, ids, order, pixels and step labels as the object bar's buttons for the same object (A4's plain step when nothing overlaps); only what stays open differs (Shape reopens the result, the bar keeps it selected) |
+| I10 with both bars | `CrossObjectsBarsUiTest` (1, UI, 392 and 360 dp); `v19/a9/ShapeMoreRowHiddenWithBarsTest.underThePasteBarAloneTheObjectItemsStay` | X4: with objects selected under Shape only the object bar offers the object items, so no label shows twice (nor with the bar's own row open); S6: under the paste bar alone they stay in the More row |
+| Merge layers of several texts, then edit and arrange | `CrossTextMergeEditArrangeTest` (2) | T1: two text layers of two texts each merge (TEXT_ITEMS); an Edit text and each Bring forward / Send backward of the Text More row is one exact step; the pixels equal a fresh `TextRenderer.drawItem` of every text with no tolerance; save and reopen keep every text, its order and the pixels |
+| Duplicate a text from the Text More row and the selection bar | `CrossTextDuplicateTest` (1) | T2: one exact step `LayerLabels19.DUPLICATE_STEP` each; the copy is a new editable text right above its original, offset as the object bar's, with an id of its own |
+| Undo walks (I22): a filter session, text-path node edits, the bevel popup | `CrossUndoSessionsEndAsOneStepTest` (3), helper `CrossUndoSnap` | T3: while a session is open Undo and Redo walk its own steps and the document history stays; its ✓ is one document step whose undo and redo are exact, storing what the walk left (the filter's values, the nodes, the bevelled points), on new and reopened polylines and shapes |
+| A ten-step filter session on PRINT at CRITICAL | `CrossMemoryFilterSessionTest` (2) | M1: a ten-step Tone session with CRITICAL trims before it, inside it and while it applies; "Not enough memory for Tone" first, then a banded apply that commits bitwise what NORMAL commits, one step that undoes and redoes exactly; the editor's governor entries gone once it closed. CI runs a 384 x 512 stand-in that crosses the same 16 bands; PRINT itself runs only where `CI` is unset |
+| A paper document through thumbnail, export, merge, backup restore | `CrossPaperRoundTripTest` (1) | M2: the thumbnail and the PNG and WEBP (bit for bit) and JPEG (within 6) exports equal the flatten on the paper; SVG and PDF with Include paper carry it and import back; Merge down keeps the paper out of the pixels; the backup mirror and a restore into a fresh install keep it, and a second restore never overwrites (I23) |
+| (Gate 2 fixes M3, M4) | `CrossMemoryEraseCutTimeoutTest` (2), `CrossMemoryBackupGapsTest` (2) | M3 and M4 below |
+| R3's sticky row during every new strip item | `qa19/Qa19StickyRows.newItems`, sections of `Qa19StickyRowsUiTest` and `Qa19StickyRowsNarrowUiTest` | the ••• menu, the bevel popup, the erase-mode chooser, the Stroke kind and blend-mode menus close on a pick or an outside tap, the Turn into pixels dialog on Cancel, the sheets on Close; after each the row shows again, open |
+| Qa19Compat with every row, LabelsV19Test, StripLayoutTest and the strip inventory at 392 / 360 dp | `qa19/Qa19CompatBackFromV18RobolectricTest`, `ui/common/LabelsV19Test`, `ui/tools/strip/StripLayoutTest`, `StripInventoryTest`, `v19/a1/CurveStripInventoryTest`, `v19/a9/ShapeStripInventoryTest` | green with every area merged; every compatibility row runs (the table in "Model and codecs" above) |
+| I27 | `StripFontScaleTest` (1, UI) | at 392 and 360 dp and font scale 1.3 and 2.0: every strip state of `V18CrossTestKit.states` and the v1.9 worst cases with the More row open (and the erase-mode cell's menu and the bevel popup where they show) keep their texts inside their cells, and the erase-mode cell stays in row 1 of Curve, Polyline, Path and Shape (G5); the editor's object bar and its row, the X / Y pill, the Shape settings sheet and the bevel popup; `FitText` itself |
+
+**Decisions of the lanes** (rules since Gate 2):
+- **Supervised scopes (P2, A7a's open item).** A composable gets its coroutine scope from
+  `diagnostics/rememberSupervisedScope()`: a `SupervisorJob` parented to the composition's job,
+  with `ErrorReporter.handler`, the composition's dispatcher and frame clock, cancelled when the
+  composable leaves. A failed job ends only itself; in a release build its error becomes a
+  report and a toast instead of ending the window's Recomposer. `UnguardedLaunchGateTest` fails
+  a plain `rememberCoroutineScope` outside `diagnostics/SupervisedScope.kt` (UNSUPERVISED) and
+  one without the handler; `DiagnosticsSeamsTest` counts a `rememberSupervisedScope()` site as
+  guarded (the lead's Gate 2 fix: after P2 its scan found 7 sites against a floor of 13). Limit:
+  an error thrown in a `LaunchedEffect` body or another composition-scoped effect still goes
+  through the Recomposer, as in v1.8.
+- **Transform floats the raster Duplicate (P3).** In the A4 block above ("Duplicate on the
+  selection bar"); `TransformTool.startInLayerCopy`. P1: the Duplicate's out-of-memory toast is
+  `LayerLabels19.NO_MEMORY`.
+- **EraseLanding's timeout (M3, the lead's ruling).** `Cutting.flush` waits through
+  `EditorController.awaitDeferredJob` (`deferredWaitLimitMs`: 1.5 s, 0 while leaving). On a
+  timeout a cut that need not land is cancelled: the layer keeps its data and pixels, no step is
+  made, the tool hears `done(false)` and `onDeferredWaitTimedOut` shows `TOO_SLOW` with the
+  tool's label. A cut that must land (while `leavingDeferred`, or `mustLandDeferredWork()`,
+  except under the cut's own busy overlay, which shows after `CUT_BUSY_AFTER_MS`, as the
+  `VectorLayers.BUSY_LABEL` exclusion) is cancelled in the background and cut synchronously in
+  the step, as before. A pending region cut arms the wait guard (`refreshDeferredWaitGuard`
+  counts `VectorDrawState.hasPendingCut`). The cut is cooperative: `EraseCut.cutAll(targets,
+  eraser, active)` asks `active` before each object and copy, so a cancelled cut stops at its
+  next object (one object's PathOps runs to its end).
+- **A8's gaps (M4).** (a) `BackupService.start` does no IO on the calling thread: it bumps the
+  generation, resets the state to a new process's and reads the state file, the folder and the
+  grants on the `brushwork-backup` worker; saves and deletes during the reads are caught up by
+  the start (a save keeps `hasArtworks` true). On a cold start the no-folder notice shows a
+  moment after the gallery's first frame. `startWith(app)` stays synchronous for tests. (b)
+  `EditorPrefs` follows "brushwork_settings" through a listener, so a settings restore reaches an
+  open editor at once; a followed Safe compositing calls `onSafeCompositingFollowed` and
+  `EditorScreen` redraws (`controller.invalidateDoc(null)`). (c) "newCanvas.customColor" (in
+  "UiPrefs versus AppSettings" above).
+- **Objects.** To intersection over shapes alone erases nothing and makes no step (shapes are
+  only boundaries, v1.8's rule); "Turn into pixels" is two steps ("Rasterize vector layer" with
+  its toast, then the erase); a Partial piece of a shape is an editable path; two shape layers
+  merge down with no dialog (`LayerMerge.rasterReason` is null for VECTOR_OBJECTS); a Duplicate
+  lands right above the duplicated object; two shapes drawn alike keep different
+  `VShape.seed` values.
+- **Texts.** `TextTool.duplicateOpen()` and `arrangeOpen()` leave the copy or the moved text open
+  (tests call `TextTool.discard()` before a snapshot or an Undo); a filter on a layer of several
+  texts is one step that holds the pixel edit and the rasterize data action
+  (`TextLabels19.RASTERIZED_TEXTS`); "Done editing points" (`TextTool.doneNodes`) records no
+  step, only the text's commit "Edit text" does.
+- **Large fonts (I27, S1-S4).** A strip, bar, pill, field or gallery-card text that may meet a
+  large font scale uses `ui/common/FitText`, not `Text`: at font scale 1 or below it is `Text`
+  with the same arguments (v1.8's layout); above, `Text` at its size when that fits, else the
+  largest 0.25 sp step that fits its box (no line past `maxLines`, none ellipsized), never below
+  the text's own size at font scale 1 (`scale1Size`); line height and letter spacing shrink with
+  it, and cells keep their widths (I18). The lead keeps this reading of I27's "at least 11 sp":
+  no text gets smaller than v1.8 drew it at font scale 1, and a text cut at font scale 1 by
+  design (a long gallery name) stays cut at that size. Only v1.8's Array no-array hint passes a
+  floor (8 sp, v1.8's own autosize); the object bar keeps v1.8's `BasicText` autosize. A test
+  measures a `FitText` by its node's size (the semantics layout keeps the style's size).
+  `Qa19Ui.textOverflows` (the lead's frozen kit, its one Gate 2 change): a line is too wide when
+  `minOf(lineRight - lineLeft, getLineWidth)` passes the box by 0.5 px, so a centred line's
+  floored and ceiled ends no longer read 1 px too wide ("Your gallery is empty").
+- **More-row order (S5).** Text's v1.9 More-row items stand before Snap / Numbers (v1.8's pins
+  "Snap ends the row" and "Snap, then Numbers" of `Qa18PolishChromeVerifyTest` hold); Shape's
+  object items (Duplicate, Bring forward, Send backward) follow v1.8's More items by their
+  `StripKeysV19` ranks 50-52. The two rows differ by design. Text's Duplicate shows with an open
+  text, "New layer each time" without one.
+- **Bars (S6).** Only the selection bar and the object bar hide Shape's object items
+  (`ShapeStripItems.selectionOrObjectBarUp`); under the paste bar alone they stay. Shape's
+  Duplicate of a new, pending shape is two steps (it places the shape, then copies it); Text's of
+  an untouched open text is one. A sheet, a panel or node editing hides the More row, which
+  stays remembered (`UiPrefs`) and shows again, open, when they end.
+- **Labels (the lead).** No stand-in moved into `LabelsV19.kt`: every text the lanes named
+  ("Close", "Done", "Cancel", "Cancel filter", "More options", "Settings", "Editor settings", and
+  the Transform strip's "Delete picture" over an in-layer copy) is reused from v1.8 or older, and
+  reused texts stay where they are. `LabelsV19Test`'s allowed pairs are Gate 1's (design 2.3.6
+  and the F1a D10 ruling); its erase-mode list now reads each mode's note except
+  `EraseLabels19.PARTIAL_NOTE`, a v1.9 text.
+
+**Open bugs.** None from the lanes. Recorded edges, not changed: two region cuts pending on two
+layers (while the first cut's own overlay shows, the second must land and is re-cut
+synchronously, unbounded as before M3); `MaskComponentsSheet` invalidates twice in one frame on a
+tap (harmless); a closed editor's `EditorPrefs` may follow one more restore before it is
+collected (one `invalidateDoc` on a gone controller, harmless); A9's
+`ShapeMoreRowHiddenWithBarsTest.withObjectsSelectedUnderShapeOrASelectionNoLabelShowsTwice` uses a
+state the editor never shows (its rule still holds); A3's and A9's tests may drop their
+`PILL_SLOT` / "Baseline shift" overflow exclusions; `SelectionDuplicate.shifted` and its test are
+unused by product code. The CI flake of `FringePerfTest` is in "Testing and CI (v1.9)".
+
+**Deferred past 1.9.**
+- Product P4: the Eraser brush's path stroke on vector and shape layers routed to OBJECTS /
+  CONVERT_THEN_OBJECTS keeps v1.8's route. `BrushTool.start` gives `StrokeHook.None` for a path
+  and `CurveTool.commitObject` (and Shape's commit) paint the replay and append the eraser path
+  in one `undoStepNamed` group; a hooked `VectorEraserRecorder` would double the effect and land
+  outside that group, so it needs commit changes in `CurveTool` and `ShapeTool` (and would change
+  `EraseRoutingTest` and `EraseRoutingV18Test`).
+- Memory M4d: restoring the settings alone from the restore list (the service does it,
+  `BackupService.restore(ids = empty, alsoSettings = true)`; the list needs a new label and a
+  change to the pinned "Restore 0 artworks" check).
+- A7b: a timeout counter in the frozen history region; `HistoryLabels` reporting a timed-out
+  Undo or Redo; the `EditorSession.close` rework; a running byte total in `UndoManager`;
+  `Filter.kernelRadius` tiling for the neighbourhood filters and streamed `ArrayCodec` sources;
+  the design's wording.
+- A6: moving `engine/live/WeakRegistration` beside `MemoryGovernor` (no behaviour change);
+  `LayerToolRules` refusing the watercolor brush on an adjustment layer's mask (a behaviour
+  change outside the requests).
+- A3: `NODES_HINT` + " Tap the path to add a point there." (optional; the hint has no line limit
+  and covers the canvas at font scale 2.0).
+- A5 (lane strip): the optional one-time Partial hint for closed paths (a new label and a
+  remembered flag).
+- A8: a "More options" label constant, declined (a reused text; `LabelsV19.SHARED` would gain an
+  entry for nothing).
+- Shipped off, pending the Gate 3 device A/B: A6's P3 (`StrokeBelowCache.FOR_STROKES`), R11a
+  (`StrokeBelowCache.FOR_ERASER`) and P4 (`StrokePreview.SHIPPED`, the "Drawing preview"
+  setting hidden).
 
 ## Core model (`model/`)
 - `Document` — size, dpi, color mode, `layers` (index 0 = bottom), `activeLayerIndex`, grid + ruler settings.
@@ -3966,6 +4123,76 @@ Measured on GitHub Actions (pushes to `main`, all green):
 | 38133168556 | `f4478bc8` | 18.2 min | 3.0 min | about 25.5 min |
 
 The split cut the test time from about 41 minutes to 21 to 30 minutes, and the job from about 47 minutes to 25 to 37, well inside the 75-minute timeout.
+
+## Testing and CI (v1.9)
+
+Written by the lead at Gate 2 (design 5.5). The v1.8 rules above still hold (the `Timing`
+category and `TimingTaggedTest`, `PerfBudget`'s guards, the frozen kits, one UI `@Test` per
+Robolectric UI class); "CI shards and the test-count floor (F0)" in "v1.9 foundation" has the
+flags in detail.
+
+**CI** (`.github/workflows/android.yml`, "Build APK", on every push to `main` and on a `v*` tag):
+- `unit`: a matrix of three shards, `testDebugUnitTest -PtestShard=<i> -PtestShards=3` (45 min
+  each). A class runs in shard `ciShardOf(className, n)`, the hash of its top-level class name
+  modulo n, so nested classes stay with their outer class and a new class lands in a shard
+  without a list to keep. With `CI` set each shard uses two JVMs and leaves out the `Timing`
+  category. CI ran two shards from F0 until Gate 2: after A7b's merge a two-shard test step took
+  27.5 min and passed the 26-minute fallback of design 5.5 (item 6), so the lead set three
+  (`9a213149`). The first three-shard run (39169533493) counted 1426, 1745 and 1593 tests (4764)
+  and took 22 min 40 s for the whole workflow. `CiShardFilterTest` checks that every class falls
+  in exactly one shard and the balance for two and three shards.
+- `timing`: `testDebugUnitTest -PtimingOnly` (30 min): the `Timing` classes alone, serially in
+  one JVM, so no second JVM competes with a budget for the cores.
+- `test-count` (after `unit`, 10 min): sums the `tests` attributes of every shard's JUnit XML
+  (artifacts `test-results-0`, `-1`, `-2`) and fails below the floor in
+  `app/src/test/test-count.txt`, when a shard uploaded no XML or log, or when a log shows
+  `testDebugUnitTest NO-SOURCE`. The XML counts whether the task ran or came from the build
+  cache, so the tag build of a tested commit passes.
+- The release APK (30 min) needs `unit`, `timing` and `test-count`, with A8's guards (the
+  keystore, a `versionCode` above the last tag's) and `mapping.txt` uploaded; a `v*` tag
+  publishes it.
+- `.github/workflows/soak.yml` ("Soak tests", nightly at 02:30 UTC and on `workflow_dispatch`,
+  60 min): `testDebugUnitTest -PsoakOnly` runs `SoakHarnessTest` alone in one JVM
+  (`bw.testSet=soak`; it skips itself in every other run). A workflow of its own, so its schedule
+  never cancels a push build of `main`.
+
+**The test-count floor.** The non-Timing count of all shards: 3970 at v1.8, 4177 after F3, 4764
+after the ten areas; Gate 2's merge raises it. Only the lead changes the file (rule O): it raises the
+floor at each merge into `main` to the merged branch's count, in a commit of its own
+(`v19-lead: test-count <n> after <x>`), and lowers it only in the commit that deletes tests on
+purpose. The file has no trailing newline.
+
+**Local runs** (`.wt/_tools/gbuild.ps1 <tasks>`: JDK 17 and at most four Gradle builds at once
+across the worktrees):
+- `testDebugUnitTest` without `CI`: one JVM runs every test, the `Timing` ones included.
+- With `CI=true`: CI's mode (two JVMs, no `Timing`); add `-PtestShard=<i> -PtestShards=3` for one
+  shard. Then `testDebugUnitTest -PtimingOnly` without `CI` for the `Timing` classes.
+- `-PsoakOnly`: the soak harness alone. `-Pbench`: the P0 proxy bench `qa19/P0ProxyBench` alone
+  ("P0 proxy baselines" above); with `CI` set that class is excluded from every run.
+- `.wt/_tools/test-times-v19.ps1 -Folder <JUnit XML folders>` reads one or several runs (the
+  local results folder, or CI's `test-results-<i>` and `test-results-timing` artifacts) and
+  prints the slowest classes and the seconds per area (a `v19/<x>/` package is area x, a
+  `qa19` class goes by its prefix, the lead's classes are "lead", the rest "v1.8 and older"). An
+  area's added seconds stay within 1.5 x its share of design 5.5's budget (item 7).
+
+**UI classes (design 5.5 caps).** One `@Test` per Robolectric UI class (a second one gets no
+recomposition); more scenarios become sections. New UI classes in v1.9 (test classes added since
+`600582d9` that compose through `installTestRecomposer`, `RobolectricUi` or `Qa19Ui.uiTest`, the
+kits left out), against each part's cap:
+the lead's F0 to F3 6 of 8 (`Qa19StickyRowsUiTest`, `Qa19StickyRowsNarrowUiTest`,
+`Qa19FrameTimesUiTest`, `Qa19UiSelfTest`, `BevelPopupRobolectricTest`, `StripKeysV19Test`), A7a 1
+of 1, A8 5 of 5, A5 3 of 3, A1 4 of 4, A9 3 of 3, A2 2 of 3, A4 3 of 3, A3 6 of 7, A6 2 of 2,
+A7b 0 of 1, Gate 2 2 of 3 (`CrossObjectsBarsUiTest`, `StripFontScaleTest`): 37 of 43.
+
+**Known CI flakes.**
+- `filters/art/FringePerfTest` "Glitch, custom" (and "Glitch, no middle color") on a slow runner:
+  the Glitch rows assert `GLITCH_CI_LIMIT` 1.6x on CI, and an EPYC 9V74 runner measured 1.95x
+  (the class comment's runner table; EPYC 7763 and Xeon 8370C stay under). A failure is rerun;
+  a second failure is recorded with the runner's CPU line, and the budget is never loosened.
+- Under a loaded machine (several builds at once) a few v1.8 UI classes can time out locally:
+  `qa18/Qa18PolishChromeSelectionBarTest`, `qa17/Qa17CompatPendingWorkOnStopUiTest`,
+  `qa18/Qa18PolishChromeVerifyTest` and `qa18/Qa18PolishChromeLongPressTest`; each passes run
+  alone. A failure elsewhere is a real one.
 
 ## UI (`ui/`)
 `MainActivity` → gallery or editor. `ui/common/Components.kt` holds shared controls (sheets,
