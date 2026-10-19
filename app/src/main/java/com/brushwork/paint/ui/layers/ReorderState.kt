@@ -16,7 +16,6 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -29,7 +28,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import com.brushwork.paint.diagnostics.ErrorReporter
+import com.brushwork.paint.diagnostics.rememberSupervisedScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.currentCoroutineContext
@@ -194,7 +193,7 @@ fun rememberReorderState(
     onDrop: (index: Int) -> Unit,
     isReorderable: (index: Int) -> Boolean = { true },
 ): ReorderState {
-    val scope = rememberCoroutineScope { ErrorReporter.handler }
+    val scope = rememberSupervisedScope()
     val canDragState = rememberUpdatedState(canDrag)
     val startState = rememberUpdatedState(onStart)
     val moveState = rememberUpdatedState(onMove)

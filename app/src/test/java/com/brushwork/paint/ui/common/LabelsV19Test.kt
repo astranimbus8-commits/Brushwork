@@ -193,7 +193,13 @@ class LabelsV19Test {
         (listOf("•", "◦", "▪", "–", "★", "✓") + samples).toSet()
     }
 
-    private val eraseModes: List<String> = VectorEraseMode.entries.flatMap { listOf(it.label, it.description) }
+    /**
+     * The erase modes as the editor shows them (`VectorEraseMode.note`: the Eraser's hint, the mode
+     * cell's menu): v1.8's labels and notes. Gate 2: Partial's note is v1.9's
+     * ([EraseLabels19.PARTIAL_NOTE]), so it is checked with each screen's v1.9 texts, not here (v1.8's
+     * description of Partial is no longer shown).
+     */
+    private val eraseModes: List<String> = VectorEraseMode.entries.flatMap { listOf(it.label, it.note) } - EraseLabels19.PARTIAL_NOTE
 
     /**
      * The selection bar's "Cut" item and its description (`SelectionBar.kt`), shown over any tool
@@ -289,7 +295,8 @@ class LabelsV19Test {
     @Test
     fun theCurveAndShapeStripsWhileErasing() {
         if (labelsV19 == null) return
-        val erasing = listOf("MODE_CELL", "INSTEAD_OF_PAINT", "TOO_COMPLEX", "COPIES_BAKED")
+        // The mode cell's menu shows the modes' notes, Partial's v1.9 one among them (Gate 2).
+        val erasing = listOf("MODE_CELL", "INSTEAD_OF_PAINT", "TOO_COMPLEX", "COPIES_BAKED", "PARTIAL_NOTE")
         assertNoSubstrings(
             "Curve, Polyline and Path strips",
             v19 = all("CurveLabels19") + pick("EraseLabels19", "WITH_CURVE", "WITH_POLYLINE", "WITH_PATH", "ERASING_CURVE", "ERASING_POLYLINE", "ERASING_PATH", *erasing.toTypedArray()),
@@ -377,7 +384,7 @@ class LabelsV19Test {
         // and the button shows it with its own description).
         assertNoSubstrings(
             "selection bar",
-            v19 = pick("LayerLabels19", "DUPLICATE_DESC", "DUPLICATED", "NOTHING_TO_DUPLICATE"),
+            v19 = pick("LayerLabels19", "DUPLICATE_DESC", "DUPLICATED", "NOTHING_TO_DUPLICATE", "NO_MEMORY"),
             older = visible("ui/editor/SelectionBar.kt"),
         )
         assertNoSubstrings(

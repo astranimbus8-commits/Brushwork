@@ -27,7 +27,8 @@ import java.io.File
  * v1.9 A8 (R15; I27): the cases of the New canvas tests ([Qa19NewCanvasUiTest] at 392 dp,
  * [Qa19NewCanvasNarrowUiTest] at 360 dp, each at font scale 1 and at [Qa19Ui.FONT_SCALES]). The
  * dialog's "Background" row has four choices, each found by its tag, on one line at font scale 1;
- * the selected one's caption shows under the row; the choice is remembered; and the gallery's
+ * the selected one's caption shows under the row; the choice is remembered (Gate 2: with the last
+ * "Color…" color); and the gallery's
  * "New canvas" makes one layer.
  */
 internal object Qa19NewCanvas {
@@ -103,6 +104,24 @@ internal object Qa19NewCanvas {
         Qa19Ui.click("Create", exact = true)
         assertEquals(where, CanvasStart.TRANSPARENT, made!!.start)
         assertEquals("remembered, $where", AppSettings.NEW_CANVAS_TRANSPARENT, AppSettings(app).newCanvasBackground)
+
+        // v1.9 Gate 2: "Color…" opens on the last custom color (a preference, as restored with the
+        // settings), and "Create" keeps it.
+        if (fontScale == 1f) {
+            val teal = 0xFF2090A0.toInt()
+            AppSettings(app).newCanvasCustomColor = teal
+            h.show(fontScale) { NewCanvasDialog(creating = false, onDismiss = {}, onCreate = { made = it }) }
+            Smoke.pumpUntil(10_000) { Qa19Ui.tagged(NewCanvasBackground.CUSTOM.tag) != null }
+            choose(NewCanvasBackground.CUSTOM)
+            Smoke.pumpUntil(10_000) { Qa19Ui.has("Background color", exact = true) }
+            Qa19Ui.click("OK", exact = true)
+            assertChosen(NewCanvasBackground.CUSTOM, "the last color, $where")
+            Qa19Ui.click("Create", exact = true)
+            assertEquals(where, CanvasStart.FILL, made!!.start)
+            assertEquals("the last color, $where", teal, made!!.background)
+            assertEquals("remembered, $where", AppSettings.NEW_CANVAS_CUSTOM, AppSettings(app).newCanvasBackground)
+            assertEquals("remembered, $where", teal, AppSettings(app).newCanvasCustomColor)
+        }
     }
 
     /** The gallery's "New canvas" with "Paper": the project has one empty "Layer 1" over the paper. */

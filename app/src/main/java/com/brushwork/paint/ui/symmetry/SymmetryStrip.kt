@@ -48,6 +48,7 @@ import com.brushwork.paint.EditorController
 import com.brushwork.paint.model.SymmetrySettings
 import com.brushwork.paint.model.SymmetryType
 import com.brushwork.paint.tools.symmetry.SymmetryTool
+import com.brushwork.paint.ui.common.FitText
 import com.brushwork.paint.ui.common.SymmetryLabels
 import com.brushwork.paint.ui.common.ToolIconButton
 import com.brushwork.paint.ui.common.closeOnSecondFinger
@@ -152,7 +153,7 @@ internal object SymmetryStripItems {
             onClick = { c.selectTool(c.doneTool) },
             contentPadding = PaddingValues(horizontal = 8.dp),
             modifier = Modifier.width(DONE_DP.dp),
-        ) { Text(DONE_LABEL, maxLines = 1) }
+        ) { FitText(DONE_LABEL) } // v1.9 Gate 2 (I27): shrinks rather than wraps
     }
 
     fun reset(c: EditorController, s: SymmetrySettings) = StripItem(RESET, SymmetryLabels.RESET, RESET_DP.dp, row = StripRow.MORE) {
@@ -241,7 +242,8 @@ private fun ValueButton(text: String, editor: @Composable () -> Unit) {
                 .padding(horizontal = 3.dp),
             contentAlignment = Alignment.Center,
         ) {
-            Text(text, fontSize = 11.sp, lineHeight = 13.sp, color = BrushworkColors.OnChrome, maxLines = 2, textAlign = TextAlign.Center)
+            // v1.9 Gate 2 (I27): shrinks at a large font scale rather than be cut.
+            FitText(text, fontSize = 11.sp, lineHeight = 13.sp, color = BrushworkColors.OnChrome, maxLines = 2, textAlign = TextAlign.Center)
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }, modifier = Modifier.closeOnSecondFinger { open = false }, containerColor = IbisColors.Menu) {
             // Fixed width: the menu measures its content's intrinsic width.

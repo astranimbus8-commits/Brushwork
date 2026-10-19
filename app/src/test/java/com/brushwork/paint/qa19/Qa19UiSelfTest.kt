@@ -1,14 +1,19 @@
 package com.brushwork.paint.qa19
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.Text
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -91,6 +96,27 @@ class Qa19UiSelfTest {
                 }
             }
             assertEquals(emptyList<String>(), Qa19Ui.textOverflows())
+        }
+
+        h.section("a centred text exactly as wide as its box passes, a wider one fails (Gate 2)") {
+            // The empty gallery's title at 360 dp: 609.0 px in a 609 px box, its ends 1 px apart
+            // wider in the semantics layout (centred in 888 px: floored left, ceiled right).
+            val exact = "Your gallery is empty"
+            val centredClipped = "A centred label far wider than its box"
+            h.show {
+                Column(Modifier.fillMaxWidth().padding(horizontal = 32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(exact, fontSize = 22.sp, lineHeight = 28.sp, letterSpacing = 0.sp, textAlign = TextAlign.Center)
+                    Box(Modifier.width(48.dp)) { Text(centredClipped, maxLines = 1, softWrap = false, textAlign = TextAlign.Center) }
+                }
+            }
+            val r = layoutOf(exact)
+            assertTrue(
+                "the case: ends ${r.getLineLeft(0)}..${r.getLineRight(0)} wider than ${r.size.width}, own width ${r.multiParagraph.getLineWidth(0)}",
+                r.getLineRight(0) - r.getLineLeft(0) > r.size.width + 0.5f && r.multiParagraph.getLineWidth(0) <= r.size.width + 0.5f,
+            )
+            val bad = Qa19Ui.textOverflows()
+            assertEquals("only the wider one: $bad", 1, bad.size)
+            assertTrue(bad.single(), bad.single().startsWith("\"$centredClipped\""))
         }
 
         var base = 0f

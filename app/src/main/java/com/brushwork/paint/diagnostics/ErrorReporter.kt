@@ -22,13 +22,14 @@ import kotlin.coroutines.CoroutineContext
  * - Release builds: the error is kept as a handled report ([CrashLog.record]), then on the main
  *   thread the open editor's tool is reset (its touch cancelled: `Tool.onCancel`) and
  *   [StabilityLabels19.ERROR_TOAST] is shown with the tool's name (outside the editor, the error's
- *   class), and the app goes on: the app, editor and font scopes are `SupervisorJob`s, so only
- *   the failed job ends.
+ *   class), and the app goes on: the app, editor and font scopes and the composables' scopes
+ *   ([rememberSupervisedScope], Gate 2) are `SupervisorJob`s, so only the failed job ends.
  * - Release builds, a job whose error ends its scope ([tookItsScopeDown]): the scope is no
- *   supervisor. Every composable's `rememberCoroutineScope` is one: Compose makes it a plain
- *   child of the window's Recomposer, so the error cancels the Recomposer too, and the screen
- *   would never draw or take a touch again. Going on would leave a dead screen, so the error is
- *   handed on as in a debug build: the app stops with a report (v1.8's outcome, now kept).
+ *   supervisor. A plain `rememberCoroutineScope` is one (the composables use
+ *   [rememberSupervisedScope] instead): Compose makes it a plain child of the window's
+ *   Recomposer, so the error cancels the Recomposer too, and the screen would never draw or take
+ *   a touch again. Going on would leave a dead screen, so the error is handed on as in a debug
+ *   build: the app stops with a report (v1.8's outcome, now kept).
  *   A supervisor scope closed by its owner (the editor scope as the editor closes) is not ended
  *   by a job that throws as it unwinds: that error is recovered from.
  * - Debug builds, tests (Robolectric) and a JVM with no app: the error goes to the thread's
@@ -75,7 +76,7 @@ object ErrorReporter {
      * True when the failed job's error ends its scope: the scope ([context]'s job's parent) is no
      * `SupervisorJob` and is no longer active. A job's error reaches this handler only after it has
      * gone to its parent. A parent that is no supervisor is cancelled by it, or was ending already
-     * and passes the error on up as it ends; so is every plain job above it. A composable's
+     * and passes the error on up as it ends; so is every plain job above it. A plain
      * `rememberCoroutineScope` is such a scope, also after the composable has left (its job
      * throwing as it unwinds): the window's Recomposer above it is cancelled too.
      * A supervisor scope never takes its jobs' errors: running, or closed by its owner (the editor

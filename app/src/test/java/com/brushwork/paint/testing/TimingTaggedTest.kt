@@ -128,6 +128,7 @@ class TimingTaggedTest {
             "qa17/Qa17LayersSymmetryUiTest.kt" to "notes the sections' times, asserts none",
             "qa17/Qa17LayersSymmetryVectorUiTest.kt" to "notes the sections' times, asserts none",
             "testing/PerfBudgetTest.kt" to "tests the guards on a scripted clock; its real-clock checks use budgets no run misses (1e9 ms) or meets (-1 ms)",
+            "v19/cross/StripFontScaleTest.kt" to "prints the sections' times, asserts none",
             "vector/VectorPropertyRobolectricTest.kt" to "the clock names the generated document",
         )
 

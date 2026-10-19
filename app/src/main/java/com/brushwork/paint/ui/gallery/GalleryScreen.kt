@@ -80,7 +80,6 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -107,11 +106,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
-import com.brushwork.paint.diagnostics.ErrorReporter
+import com.brushwork.paint.diagnostics.rememberSupervisedScope
 import com.brushwork.paint.storage.ExportFormat
 import com.brushwork.paint.storage.ProjectInfo
 import com.brushwork.paint.storage.ProjectRepository
 import com.brushwork.paint.ui.common.BwDialog
+import com.brushwork.paint.ui.common.FitText
 import com.brushwork.paint.ui.common.checkerboard
 import com.brushwork.paint.ui.exchange.rememberGalleryImport
 import com.brushwork.paint.ui.theme.BrushworkColors
@@ -135,7 +135,7 @@ private enum class ProjectAction(val label: String, val icon: ImageVector) {
 @Composable
 fun GalleryScreen(repository: ProjectRepository, onOpenProject: (id: String) -> Unit) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope { ErrorReporter.handler }
+    val scope = rememberSupervisedScope()
     val snackbar = remember { SnackbarHostState() }
 
     val changes by repository.changes.collectAsState()
@@ -438,18 +438,23 @@ private fun ProjectCard(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f)) {
-                Text(info.name, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(
+                // v1.9 Gate 2 (I27): the three lines shrink at a large font scale, never below their size
+                // at font scale 1 ([FitText]); the size line was cut at 2.0 on 360 dp. A name too long
+                // at font scale 1 ends in "…" as there.
+                val title = MaterialTheme.typography.titleSmall
+                val small = MaterialTheme.typography.bodySmall
+                FitText(info.name, fontSize = title.fontSize, style = title, overflow = TextOverflow.Ellipsis)
+                FitText(
                     "${info.width} × ${info.height} px",
-                    style = MaterialTheme.typography.bodySmall,
+                    fontSize = small.fontSize,
+                    style = small,
                     color = BrushworkColors.OnChromeDim,
-                    maxLines = 1,
                 )
-                Text(
+                FitText(
                     relativeTime(info.modifiedAt, now),
-                    style = MaterialTheme.typography.bodySmall,
+                    fontSize = small.fontSize,
+                    style = small,
                     color = BrushworkColors.OnChromeDim,
-                    maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
             }

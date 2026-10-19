@@ -14,7 +14,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -23,7 +22,7 @@ import com.brushwork.paint.AppSettings
 import com.brushwork.paint.BrushworkApp
 import com.brushwork.paint.diagnostics.CrashLog
 import com.brushwork.paint.diagnostics.CrashReport
-import com.brushwork.paint.diagnostics.ErrorReporter
+import com.brushwork.paint.diagnostics.rememberSupervisedScope
 import com.brushwork.paint.engine.PerfTrace
 import com.brushwork.paint.ui.common.SectionHeader
 import com.brushwork.paint.ui.common.StabilityLabels19
@@ -71,7 +70,7 @@ fun DiagnosticsSection() {
     )
 
     // A7a: the crash reports, read off the main thread (up to 20 files of 64 KB).
-    val scope = rememberCoroutineScope { ErrorReporter.handler }
+    val scope = rememberSupervisedScope()
     var loads by remember { mutableIntStateOf(0) }
     var reports by remember { mutableStateOf<List<CrashReport>?>(null) }
     LaunchedEffect(context, loads) {

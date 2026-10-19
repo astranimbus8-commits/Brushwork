@@ -59,7 +59,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -87,7 +86,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.brushwork.paint.core.LengthUnit
-import com.brushwork.paint.diagnostics.ErrorReporter
+import com.brushwork.paint.diagnostics.rememberSupervisedScope
 import com.brushwork.paint.ui.theme.BrushworkColors
 import com.brushwork.paint.ui.theme.IbisColors
 import kotlinx.coroutines.delay
@@ -332,7 +331,7 @@ fun RepeatIconButton(
 ) {
     val current by rememberUpdatedState(onClick)
     val released by rememberUpdatedState(onRelease)
-    val scope = rememberCoroutineScope { ErrorReporter.handler }
+    val scope = rememberSupervisedScope()
     Box(
         modifier
             .size(40.dp)

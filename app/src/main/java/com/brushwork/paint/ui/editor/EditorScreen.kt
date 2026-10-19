@@ -67,7 +67,6 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -97,7 +96,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.UiPrefs
-import com.brushwork.paint.diagnostics.ErrorReporter
+import com.brushwork.paint.diagnostics.rememberSupervisedScope
 import com.brushwork.paint.exchange.PendingImports
 import com.brushwork.paint.exchange.VectorFormat
 import com.brushwork.paint.model.Layer
@@ -206,7 +205,8 @@ fun EditorScreen(controller: EditorController, onExit: () -> Unit, onSaveNow: ()
 private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHostState, historyTaps: EditorHistoryTaps, onExit: () -> Unit, onSaveNow: () -> Unit) {
     val context = LocalContext.current
     val density = LocalDensity.current
-    val prefs = remember(controller) { EditorPrefs(controller.settings) }
+    // (v1.9 Gate 2: a "Safe compositing" restored from a backup redraws the canvas, as the settings' switch does.)
+    val prefs = remember(controller) { EditorPrefs(controller.settings) { controller.invalidateDoc(null) } }
     val actions = remember(controller, context) { EditorActions(controller, context) }
     var panel by rememberSaveable { mutableStateOf<EditorPanel?>(null) }
     // The layer window is not modal (the canvas stays usable), so it lives beside [panel]; it
@@ -328,7 +328,7 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
 
     // ---------------------------------------------------------------- snackbar messages
     val snackbar = remember { SnackbarHostState() }
-    val scope = rememberCoroutineScope { ErrorReporter.handler }
+    val scope = rememberSupervisedScope()
     // Problems found while opening (unreadable vector or mask data...), shown once.
     LaunchedEffect(controller) {
         val warnings = controller.doc.loadWarnings

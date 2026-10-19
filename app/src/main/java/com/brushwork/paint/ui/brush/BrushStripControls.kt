@@ -43,6 +43,7 @@ import com.brushwork.paint.ui.common.ToolIconButton
 import com.brushwork.paint.ui.common.closeOnSecondFinger
 import com.brushwork.paint.ui.theme.BrushworkColors
 import com.brushwork.paint.ui.theme.IbisColors
+import com.brushwork.paint.ui.common.FitText
 import com.brushwork.paint.ui.tools.strip.StripItem
 import com.brushwork.paint.ui.tools.strip.StripRow
 
@@ -148,7 +149,8 @@ internal fun ChooseBrushChip(name: String, width: Dp, onClick: () -> Unit) {
             .padding(start = 6.dp, end = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
+        // v1.9 Gate 2 (I27): shrinks at a large font scale rather than cut the name.
+        FitText(
             name,
             fontSize = 11.sp,
             lineHeight = 12.sp,
@@ -191,7 +193,8 @@ internal fun StripReadout(
         ) {
             Icon(icon, contentDescription = description, tint = BrushworkColors.OnChromeDim, modifier = Modifier.size(16.dp))
             Spacer(Modifier.width(3.dp))
-            Text(text, fontSize = 13.sp, color = BrushworkColors.OnChrome, maxLines = 1, softWrap = false, overflow = TextOverflow.Clip)
+            // v1.9 Gate 2 (I27): shrinks at a large font scale rather than cut "100%".
+            FitText(text, fontSize = 13.sp, color = BrushworkColors.OnChrome, maxLines = 1, softWrap = false, overflow = TextOverflow.Clip)
         }
         DropdownMenu(expanded = editing, onDismissRequest = close, modifier = Modifier.closeOnSecondFinger(close), containerColor = IbisColors.Menu) {
             // Fixed width: the menu measures its content's intrinsic width.

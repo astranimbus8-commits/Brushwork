@@ -39,6 +39,13 @@ internal class VectorDrawState(initialMode: VectorEraseMode) {
      */
     var cutsNow = 0
 
+    /**
+     * v1.9 (A7b step 5, G2): the eraser's region cuts still running in the background (each an
+     * editor [com.brushwork.paint.DeferredStep]); Undo and Redo reach the editor's wait guard
+     * meanwhile ([hasPendingCut]). Main thread.
+     */
+    var cutsPending = 0
+
     /** Test seam: where the eraser's region cut runs (null: `Dispatchers.Default`). */
     var cutDispatcher: CoroutineDispatcher? = null
 
@@ -151,6 +158,12 @@ internal class VectorDrawState(initialMode: VectorEraseMode) {
             c.scope.coroutineContext[Job]?.invokeOnCompletion { Handler(Looper.getMainLooper()).post { s.abandon() } }
             return s
         }
+
+        /**
+         * v1.9 (A7b step 5, G2): a region cut of [c]'s eraser is pending ([cutsPending]); false for
+         * an editor that never erased (no state is made for it). `EditorController.refreshDeferredWaitGuard`.
+         */
+        fun hasPendingCut(c: EditorController): Boolean = (states[c]?.cutsPending ?: 0) > 0
     }
 }
 

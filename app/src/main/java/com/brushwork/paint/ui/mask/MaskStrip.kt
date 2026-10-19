@@ -18,7 +18,6 @@ import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Icon
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -34,6 +33,7 @@ import androidx.compose.ui.unit.sp
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.masks.MaskMode
 import com.brushwork.paint.tools.mask.MaskTool
+import com.brushwork.paint.ui.common.FitText
 import com.brushwork.paint.ui.common.ToolIconButton
 import com.brushwork.paint.ui.placement.StripMenu
 import com.brushwork.paint.ui.placement.StripMenuButton
@@ -190,7 +190,8 @@ private fun TargetMenu(tool: MaskTool, info: MaskStripInfo) {
         StripMenuButton(MaskStripItems.TARGET_LABEL, MaskStripItems.TARGET_DP.dp, open, onClick = { open = true }) {
             Icon(Icons.Filled.Layers, contentDescription = null, tint = BrushworkColors.OnChrome, modifier = Modifier.size(16.dp))
             Box(Modifier.width(4.dp))
-            Text(
+            // v1.9 Gate 2 (I27): shrinks at a large font scale rather than be cut.
+            FitText(
                 maskTargetLabel(tool, info),
                 fontSize = 11.sp,
                 lineHeight = 13.sp,

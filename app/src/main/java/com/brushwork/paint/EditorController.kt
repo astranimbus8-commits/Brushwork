@@ -923,10 +923,12 @@ class EditorController(
     /**
      * Sets [deferredWaitGuard] as [inToolHistory] while a vector or array render is pending (or the
      * one-shot is armed) and nothing else owns Undo and Redo; takes it away again after. Called by
-     * the renders whenever their pending work changes. Main thread.
+     * the renders whenever their pending work changes. Main thread. v1.9 G2: an eraser's region
+     * cut too (`EraseLanding`).
      */
     internal fun refreshDeferredWaitGuard() {
-        val want = deferredWaitArmed || vectors.hasPendingRender || arrayRenders.isPending
+        val want = deferredWaitArmed || vectors.hasPendingRender || arrayRenders.isPending ||
+            com.brushwork.paint.vector.draw.VectorDrawState.hasPendingCut(this)
         val owner = inToolHistory
         if (want && owner == null) inToolHistory = deferredWaitGuard
         else if (!want && owner === deferredWaitGuard) inToolHistory = null

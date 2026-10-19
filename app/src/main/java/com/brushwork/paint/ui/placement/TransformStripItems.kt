@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
@@ -43,6 +44,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.brushwork.paint.tools.transform.TransformTool
+import com.brushwork.paint.ui.common.FitText
 import com.brushwork.paint.ui.common.PointLabels
 import com.brushwork.paint.ui.common.ToolIconButton
 import com.brushwork.paint.ui.common.TransformLabels17
@@ -357,7 +359,8 @@ private fun MeshSizeMenu(tool: TransformTool) {
     var open by remember { mutableStateOf(false) }
     Box(Modifier.testTag(V17Tags.MESH)) {
         StripMenuButton(TransformLabels18.MESH_SIZE, TransformStripItems.MESH_SIZE_DP.dp, open, onClick = { open = true }) {
-            Text(
+            // v1.9 Gate 2 (I27): shrinks at a large font scale rather than outgrow the cell.
+            FitText(
                 TransformStripItems.meshText(cols, rows),
                 fontSize = 12.sp,
                 color = BrushworkColors.OnChrome,
@@ -387,12 +390,14 @@ private fun InterpolationMenu(tool: TransformTool) {
         // The caption says what the button chooses; the current value and ▾ under it (v1.8 polish).
         StripMenuButton(TransformStripItems.INTERPOLATION_LABEL, TransformStripItems.INTERPOLATION_DP.dp, open, onClick = { open = true }, arrow = false) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(
+                // v1.9 Gate 2 (I27): both lines shrink at a large font scale, the caption to at most
+                // 18 dp of the 40, rather than be cut.
+                FitText(
                     TransformLabels18.INTERPOLATION_CAPTION, fontSize = 10.sp, lineHeight = 12.sp, color = BrushworkColors.OnChromeDim,
-                    maxLines = 1, softWrap = false,
+                    maxLines = 1, softWrap = false, modifier = Modifier.heightIn(max = 18.dp),
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(tool.interpolation.label, fontSize = 12.sp, lineHeight = 14.sp, color = BrushworkColors.OnChrome, maxLines = 1, softWrap = false)
+                    FitText(tool.interpolation.label, fontSize = 12.sp, lineHeight = 14.sp, color = BrushworkColors.OnChrome, maxLines = 1, softWrap = false)
                     Icon(Icons.Filled.ArrowDropDown, contentDescription = null, tint = BrushworkColors.OnChromeDim, modifier = Modifier.size(16.dp))
                 }
             }

@@ -61,20 +61,26 @@ class DiagnosticsSeamsTest {
     fun everyCoroutineScopeOfTheMainSourcesCarriesTheHandler() {
         val root = mainSources()
         assertNotNull("the main sources are found from ${System.getProperty("user.dir")}", root)
-        val scope = Regex("""\b(CoroutineScope|rememberCoroutineScope|MainScope)\s*[({]|\bGlobalScope\b""")
+        // A `: CoroutineScope` return type is no scope. Gate 2 (P2): a composable's scope is
+        // `rememberSupervisedScope()`, whose helper (diagnostics/SupervisedScope.kt) carries the handler
+        // on its own lines; its declaration is no site.
+        val scope = Regex("""(?<!:\s)(?<!:)\b(CoroutineScope|rememberCoroutineScope|MainScope)\s*[({]|\bGlobalScope\b""")
+        val supervised = Regex("""(?<!fun )\brememberSupervisedScope\s*\(""")
         val found = mutableListOf<String>()
         val unguarded = mutableListOf<String>()
         for (f in root!!.walkTopDown().filter { it.isFile && it.extension == "kt" }) {
             f.readLines().forEachIndexed { i, line ->
                 val code = line.substringBefore("//")
                 if (code.trimStart().startsWith("*") || code.trimStart().startsWith("/*")) return@forEachIndexed
-                if (!scope.containsMatchIn(code)) return@forEachIndexed
+                val isSupervised = supervised.containsMatchIn(code)
+                if (!isSupervised && !scope.containsMatchIn(code)) return@forEachIndexed
                 val where = "${f.name}:${i + 1}"
                 found += where
-                if (!code.contains("ErrorReporter.handler")) unguarded += "$where: ${line.trim()}"
+                if (!isSupervised && !code.contains("ErrorReporter.handler")) unguarded += "$where: ${line.trim()}"
             }
         }
         assertTrue("the scopes are found: $found", found.size >= 13)
+        assertTrue("the helper's own scopes are found: $found", found.count { it.startsWith("SupervisedScope.kt:") } >= 2)
         assertTrue("a coroutine scope without ErrorReporter.handler (design 2.4.13): $unguarded", unguarded.isEmpty())
     }
 

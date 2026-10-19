@@ -42,6 +42,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.brushwork.paint.tools.clone.CloneTool
+import com.brushwork.paint.ui.common.FitText
 import com.brushwork.paint.ui.common.ToolIconButton
 import com.brushwork.paint.ui.common.closeOnSecondFinger
 import com.brushwork.paint.ui.theme.BrushworkColors
@@ -129,7 +130,8 @@ private fun SetSourceButton(tool: CloneTool) {
     ) {
         Icon(Icons.Filled.MyLocation, contentDescription = null, tint = if (armed) Color.White else BrushworkColors.Accent, modifier = Modifier.size(16.dp))
         Spacer(Modifier.width(4.dp))
-        Text(
+        // v1.9 Gate 2 (I27): the cells' texts shrink at a large font scale rather than be cut.
+        FitText(
             if (armed) CloneStripItems.ARMED_LABEL else CloneStripItems.SET_SOURCE_LABEL,
             fontSize = 12.sp,
             lineHeight = 13.sp,
@@ -158,8 +160,8 @@ private fun SampleFromMenu(tool: CloneTool) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f)) {
-                Text("Sample", fontSize = 10.sp, lineHeight = 11.sp, color = BrushworkColors.OnChromeDim, maxLines = 1)
-                Text(current, fontSize = 12.sp, lineHeight = 14.sp, color = BrushworkColors.OnChrome, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                FitText("Sample", fontSize = 10.sp, lineHeight = 11.sp, color = BrushworkColors.OnChromeDim, modifier = Modifier.heightIn(max = 18.dp))
+                FitText(current, fontSize = 12.sp, lineHeight = 14.sp, color = BrushworkColors.OnChrome, overflow = TextOverflow.Ellipsis)
             }
             Icon(Icons.Filled.ArrowDropDown, contentDescription = null, tint = BrushworkColors.OnChromeDim, modifier = Modifier.size(18.dp))
         }
@@ -190,7 +192,7 @@ private fun HintChip(onClick: () -> Unit) {
     ) {
         Icon(Icons.Filled.TouchApp, contentDescription = null, tint = BrushworkColors.Accent, modifier = Modifier.size(16.dp))
         Spacer(Modifier.width(4.dp))
-        Text(CloneTool.HINT, fontSize = 12.sp, color = BrushworkColors.OnChrome, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        FitText(CloneTool.HINT, fontSize = 12.sp, color = BrushworkColors.OnChrome, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -217,6 +219,6 @@ private fun CheckChip(label: String, checked: Boolean, widthDp: Float, onChange:
             Icon(Icons.Filled.Check, contentDescription = null, tint = content, modifier = Modifier.size(16.dp))
             Spacer(Modifier.width(4.dp))
         }
-        Text(label, fontSize = 13.sp, color = content, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        FitText(label, fontSize = 13.sp, color = content, overflow = TextOverflow.Ellipsis)
     }
 }

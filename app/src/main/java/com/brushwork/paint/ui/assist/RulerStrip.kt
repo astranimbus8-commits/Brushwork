@@ -11,7 +11,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
-import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
@@ -27,6 +26,7 @@ import com.brushwork.paint.EditorController
 import com.brushwork.paint.assist.RulerGeometry
 import com.brushwork.paint.assist.RulerTool
 import com.brushwork.paint.model.RulerType
+import com.brushwork.paint.ui.common.FitText
 import com.brushwork.paint.ui.common.SnapToObjectsChip
 import com.brushwork.paint.ui.common.ToolIconButton
 import com.brushwork.paint.ui.tools.strip.LocalStripContext
@@ -54,7 +54,7 @@ internal fun rulerStrip(tool: RulerTool, c: EditorController): StripSpec {
                 onClick = { c.selectTool(c.doneTool) },
                 contentPadding = PaddingValues(horizontal = 8.dp),
                 modifier = Modifier.width(RulerStripItems.DONE_DP.dp),
-            ) { Text(RulerStripItems.DONE_LABEL, maxLines = 1) }
+            ) { FitText(RulerStripItems.DONE_LABEL) } // v1.9 Gate 2 (I27): shrinks rather than wraps
         },
         StripItem(RulerStripItems.NUMBERS, RulerStripItems.NUMBERS_LABEL, RulerStripItems.NUMBERS_DP.dp, row = StripRow.MORE) {
             TextButton(
@@ -67,7 +67,7 @@ internal fun rulerStrip(tool: RulerTool, c: EditorController): StripSpec {
             ) {
                 Icon(Icons.Filled.Tune, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(4.dp))
-                Text(RulerStripItems.NUMBERS_LABEL, maxLines = 1)
+                FitText(RulerStripItems.NUMBERS_LABEL) // v1.9 Gate 2 (I27)
             }
         },
         StripItem(RulerStripItems.SNAP, RulerStripItems.SNAP_LABEL, RulerStripItems.SNAP_DP.dp, row = StripRow.MORE) {

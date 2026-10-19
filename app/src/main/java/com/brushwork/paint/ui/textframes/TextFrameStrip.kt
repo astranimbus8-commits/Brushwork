@@ -35,6 +35,7 @@ import androidx.compose.ui.unit.sp
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.tools.text.frames.TextFrameTool
+import com.brushwork.paint.ui.common.FitText
 import com.brushwork.paint.ui.common.ToolIconButton
 import com.brushwork.paint.ui.placement.StripMenu
 import com.brushwork.paint.ui.placement.StripStatusText
@@ -198,7 +199,8 @@ private fun WrapCheck(on: Boolean) {
 private fun OversetNote(count: Int) {
     val text = TextFrameStripItems.overset(count)
     Box(Modifier.width(TextFrameStripItems.OVERSET_DP.dp).heightIn(min = 40.dp), contentAlignment = Alignment.Center) {
-        Text(
+        // v1.9 Gate 2 (I27): shrinks at a large font scale rather than be cut.
+        FitText(
             text,
             fontSize = 11.sp,
             lineHeight = 13.sp,

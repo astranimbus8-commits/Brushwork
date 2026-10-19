@@ -79,7 +79,6 @@ import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -113,7 +112,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.array.ArrayOps
-import com.brushwork.paint.diagnostics.ErrorReporter
+import com.brushwork.paint.diagnostics.rememberSupervisedScope
 import com.brushwork.paint.engine.EditTarget
 import com.brushwork.paint.masks.MaskEdits
 import com.brushwork.paint.model.IncrementKind
@@ -748,7 +747,7 @@ private fun BlendEntry(label: String, current: Boolean, onClick: () -> Unit) {
  */
 @Composable
 internal fun OpacityRow(controller: EditorController, layer: Layer, opacity: Float, onType: () -> Unit, modifier: Modifier = Modifier) {
-    val scope = rememberCoroutineScope { ErrorReporter.handler }
+    val scope = rememberSupervisedScope()
     val preview = remember(layer) { OpacityPreview(controller, layer, scope) }
     var dragValue by remember(layer) { mutableStateOf<Float?>(null) }
     val readout = remember(layer) { booleanArrayOf(false) }

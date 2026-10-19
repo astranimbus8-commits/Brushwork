@@ -29,7 +29,9 @@ import org.robolectric.shadows.ShadowLog
 /**
  * v1.9 F0 (design 2.2, I27): the shared Robolectric helpers of the v1.9 UI tests. FROZEN after
  * F0 (5.4 `$FrozenTests`): areas build against it and never edit it, nor the kits it wraps
- * ([SmokeUi], [StripTestKit], [ChromeHarness]).
+ * ([SmokeUi], [StripTestKit], [ChromeHarness]). Changed since F0 only by the lead: F1b (D21, what
+ * "too wide" and "cut" mean in [textOverflows]) and Gate 2 (a centred line's rounded ends in
+ * [textOverflows], pinned by `Qa19UiSelfTest`).
  *
  * A v1.9 UI test class holds ONE test method (the v1.6 habit, see [ChromeHarness]) that runs its
  * cases as sections, at each width ([Q392], [Q360]) in its own class and at each font scale of
@@ -118,6 +120,12 @@ internal object Qa19Ui {
      * (`TextStringSimpleNode`'s slow path), so `multiParagraph.width` is that max width and
      * `didOverflowWidth` was true for every text narrower than the room it was given (a short
      * label in a row). An ellipsized line counts as cut.
+     *
+     * v1.9 Gate 2: a line's width is the smaller of its ends' distance and its own width
+     * (`MultiParagraph.getLineWidth`). In that wider layout the ends of a centred line are whole
+     * pixels, the left one floored and the right one ceiled (Android's `Layout` for
+     * `ALIGN_CENTER`), so a centred line exactly as wide as its box ("Your gallery is empty":
+     * 609.0 px in a 609 px box, centred in 984 px, ends 187 and 797) measured 1 px too wide.
      */
     fun textOverflows(include: (RobolectricUi.Element) -> Boolean = { true }): List<String> {
         val windows = RobolectricUi.windowRoots()
@@ -125,7 +133,9 @@ internal object Qa19Ui {
         for (e in RobolectricUi.elements()) {
             if (windows.indexOf(e.window) < SmokeUi.baseline || !e.node.layoutInfo.isPlaced || !include(e)) continue
             val r = textLayout(e.node) ?: continue
-            val wide = (0 until r.lineCount).any { r.getLineRight(it) - r.getLineLeft(it) > r.size.width + 0.5f }
+            val wide = (0 until r.lineCount).any {
+                minOf(r.getLineRight(it) - r.getLineLeft(it), r.multiParagraph.getLineWidth(it)) > r.size.width + 0.5f
+            }
             val tall = r.didOverflowHeight && !r.multiParagraph.didExceedMaxLines
             val cut = r.multiParagraph.didExceedMaxLines || (0 until r.lineCount).any { r.isLineEllipsized(it) }
             if (!wide && !tall && !cut) continue

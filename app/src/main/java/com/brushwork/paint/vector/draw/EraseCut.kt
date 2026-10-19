@@ -11,6 +11,7 @@ import com.brushwork.paint.vector.VStroke
 import com.brushwork.paint.vector.pathfinder.PathConvert
 import com.brushwork.paint.vector.pathfinder.PathfinderOps
 import com.brushwork.paint.vector.pathfinder.PathfinderStyle
+import kotlin.coroutines.cancellation.CancellationException
 import kotlin.math.max
 
 /**
@@ -148,8 +149,14 @@ object EraseCut {
      * each copy is cut on its own, and when one of them changes, all of them replace the object.
      * [eraser] is simplified once (a round-capped stroke region overlaps itself everywhere) and not
      * changed.
+     *
+     * v1.9 Gate 2 (A7b's bounded waits): [active] is asked before each object (and each of its
+     * copies) is cut; false stops the cut there with a [CancellationException]. The background cut
+     * passes its job's state (`EraseLanding`): a cut whose wait hit the limit is cancelled and stops
+     * at its next object instead of running on to the end, as the vector and array renders stop.
+     * (One object's own boolean op still runs to its end.)
      */
-    internal fun cutAll(targets: List<VObject>, eraser: Path): Cuts {
+    internal fun cutAll(targets: List<VObject>, eraser: Path, active: () -> Boolean = { true }): Cuts {
         if (targets.isEmpty() || eraser.isEmpty) return Cuts.NONE
         val over = targets.size > MAX_TARGETS
         val cut = if (over) targets.subList(targets.size - MAX_TARGETS, targets.size) else targets
@@ -158,6 +165,7 @@ object EraseCut {
         var tooComplex = over
         var baked = false
         for (o in cut) {
+            stopUnless(active)
             val copies = ObjectCopies.expanded(o)
             if (copies.size == 1) {
                 when (val d = cutOne(o, e)) {
@@ -171,6 +179,7 @@ object EraseCut {
             var changed = false
             var refused = false
             for (copy in copies) {
+                stopUnless(active)
                 when (val d = cutOne(copy, e)) {
                     is Detail.Pieces -> { pieces += d.pieces; changed = true }
                     Detail.TooMany, Detail.Failed -> { pieces += copy; refused = true }
@@ -182,6 +191,11 @@ object EraseCut {
             if (changed) { out[o.id] = pieces; baked = true }
         }
         return Cuts(out, tooComplex, baked)
+    }
+
+    /** [cutAll]'s stop: its caller's job was cancelled ([active] false). */
+    private inline fun stopUnless(active: () -> Boolean) {
+        if (!active()) throw CancellationException("the region cut was cancelled")
     }
 
     /**

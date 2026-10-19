@@ -11,8 +11,6 @@ import com.brushwork.paint.tools.vector.ShapeObject
 import com.brushwork.paint.tools.vector.ShapeStyle
 import com.brushwork.paint.tools.vector.ShapeType
 import com.brushwork.paint.ui.brush.BrushStripItems
-import com.brushwork.paint.ui.brush.formatSize
-import com.brushwork.paint.ui.brush.percent
 import com.brushwork.paint.ui.common.EraseLabels19
 import com.brushwork.paint.ui.common.V18Tags
 import com.brushwork.paint.ui.common.V19Tags
@@ -164,23 +162,15 @@ class Qa19EraseModesUiTest {
     private fun fontScaleChecks(h: Qa19Harness, where: String, dp: Int, scale: Float, kind: String) {
         val s = h.editor(fontScale = scale) { objectsLayer(it, kind) }
         assertEquals("$where: the phone's width", dp.toFloat(), s.widthDp, 1f)
-        val c = s.c
         Qa19Ui.click(VectorEraseMode.PARTIAL.label, exact = true)
         assertTheStrip(where)
         assertTrue(Qa19Ui.has(EraseLabels19.PARTIAL_NOTE, exact = true))
-        // Not A5's cells (lead requests): v1.8's readouts and brush chip (BrushStripItems.OPACITY_DP,
-        // SIZE_DP and CHOOSE_DP wide, in any row, for every brush tool) cannot hold their texts at
-        // these scales (the opacity from 1.3, the others at 2.0), and the frozen strip host ends a
-        // hint longer than StripLayout.MAX_HINT_LINES in an ellipsis (v1.8's mode hints too).
-        // The pixels action and the dialog are checked in full.
-        val notA5 = setOfNotNull(
-            percent(c.eraser.opacity), formatSize(c.eraser.size).takeIf { scale >= 2f }, c.eraser.name.takeIf { scale >= 2f },
-            EraseLabels19.PARTIAL_NOTE.takeIf { scale >= 2f },
-        )
-        Qa19Ui.assertNoTextOverflow("$where, the More row open", except = { it in notA5 })
+        // Gate 2: every text, v1.8's readouts, the brush chip and the Partial hint too (they shrink,
+        // FitText); the pixels action and the dialog in full.
+        Qa19Ui.assertNoTextOverflow("$where, the More row open")
         Qa19Ui.click(EraseLabels19.TURN_INTO_PIXELS, exact = true)
         assertTrue(Qa19Ui.has(EraseLabels19.PIXELS_BODY, exact = true))
-        Qa19Ui.assertNoTextOverflow("$where, the pixels dialog", except = { it in notA5 })
+        Qa19Ui.assertNoTextOverflow("$where, the pixels dialog")
         Qa19Ui.click("Cancel", exact = true)
         assertFalse(Qa19Ui.has(EraseLabels19.PIXELS_TITLE, exact = true))
     }

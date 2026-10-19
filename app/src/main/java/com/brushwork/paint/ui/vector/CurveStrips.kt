@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -84,6 +85,7 @@ import com.brushwork.paint.tools.vector.CurveTool
 import com.brushwork.paint.ui.common.CurveGenLabels18
 import com.brushwork.paint.ui.common.CurveLabels17
 import com.brushwork.paint.ui.common.EraseLabels19
+import com.brushwork.paint.ui.common.FitText
 import com.brushwork.paint.ui.common.MirrorLabels18
 import com.brushwork.paint.ui.common.PointLabels
 import com.brushwork.paint.ui.common.PointLabels19
@@ -722,7 +724,10 @@ private fun all100Item(tool: CurveTool) = item(CurveKeys.ALL_100, "All points 10
 /** Curve: "Handles" (⟷); its popup is v1.6's Handles group ([HandlesPanel]). */
 private fun handlesItem(tool: CurveTool, ui: CurveStripUi) = item(CurveKeys.HANDLES, "Handles", CURVE_ICON_DP, StripRow.MORE) {
     val ctx = LocalStripContext.current
-    DropCell("Handles", CURVE_ICON_DP, arrow = false, face = { Text("⟷", color = BrushworkColors.OnChrome, style = MaterialTheme.typography.titleMedium) }) { close ->
+    DropCell("Handles", CURVE_ICON_DP, arrow = false, face = {
+        // v1.9 Gate 2 (I27): the glyph shrinks at a large font scale rather than outgrow the cell.
+        FitText("⟷", fontSize = MaterialTheme.typography.titleMedium.fontSize, color = BrushworkColors.OnChrome, style = MaterialTheme.typography.titleMedium)
+    }) { close ->
         HandlesPanel(tool, onType = {
             close()
             ctx.closeMore()
@@ -776,8 +781,12 @@ private fun weightItem(tool: CurveTool, f: CurveStripFacts, ui: CurveStripUi) = 
     }
     DropCell(POINT_WEIGHT_LABEL, CURVE_WEIGHT_DP, longPress = false, arrow = false, face = {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text("Weight", style = MaterialTheme.typography.labelSmall, color = BrushworkColors.OnChromeDim, maxLines = 1)
-            Text(shown, style = MaterialTheme.typography.labelMedium, color = BrushworkColors.OnChrome, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            // v1.9 Gate 2 (I27): both lines shrink at a large font scale, the caption to at most 18 dp
+            // of the 40, rather than be cut.
+            val caption = MaterialTheme.typography.labelSmall
+            val value = MaterialTheme.typography.labelMedium
+            FitText("Weight", fontSize = caption.fontSize, style = caption, color = BrushworkColors.OnChromeDim, modifier = Modifier.heightIn(max = 18.dp))
+            FitText(shown, fontSize = value.fontSize, style = value, color = BrushworkColors.OnChrome, overflow = TextOverflow.Ellipsis)
         }
     }) { close ->
         if (f.single >= 0) {
@@ -936,7 +945,9 @@ private fun IconCell(
 /** A text face of a [DropCell]. */
 @Composable
 private fun CellText(text: String) {
-    Text(text, style = MaterialTheme.typography.labelLarge, color = BrushworkColors.OnChrome, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    // v1.9 Gate 2 (I27): shrinks at a large font scale rather than be cut.
+    val style = MaterialTheme.typography.labelLarge
+    FitText(text, fontSize = style.fontSize, style = style, color = BrushworkColors.OnChrome, overflow = TextOverflow.Ellipsis)
 }
 
 /**
