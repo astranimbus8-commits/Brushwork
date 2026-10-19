@@ -482,18 +482,20 @@ internal object ShapeStripItems {
         // v1.9 (R14): the object items (outside Points mode), hidden while the selection bar or the
         // object bar shows: they offer the same labels (I10). The paste bar (no selection, no
         // selected objects, something copied) offers Paste only, so they stay (Gate 2).
-        if (info.objectActions && !(barShown && objectBarUp(c))) addAll(shapeObjectItems(tool))
+        if (info.objectActions && !(barShown && selectionOrObjectBarUp(c))) addAll(shapeObjectItems(tool))
         // v1.9 (R18): [PointLabels19.BEVEL], after v1.8's More items (StripKeysV19 rank 60); in
         // Points mode the box's Center and Proportional are hidden ([ShapeStripInfo.boxModifiersShown]).
         if (info.pointsMode) add(shapeBevelItem(tool))
     }
 
     /**
-     * v1.9 Gate 2: the bar the editor shows (`StripContext.selectionBarShown`) is the selection bar
-     * (a selection) or the object bar (selected objects), not the paste bar alone (nothing
-     * selected, something copied: Paste and Hide only). The object items hide under the first two.
+     * v1.9 Gate 2: while the editor shows a bar (`StripContext.selectionBarShown`), whether it is
+     * the selection bar (a selection) or the object bar (selected objects) rather than the paste
+     * bar alone (nothing selected, something copied: Paste and Hide only, shown while the tool has
+     * no changes of its own, as for a reopened shape object). The object items hide under the
+     * first two only.
      */
-    fun objectBarUp(c: EditorController): Boolean = c.selection != null || c.vectors.selectedIds.isNotEmpty()
+    fun selectionOrObjectBarUp(c: EditorController): Boolean = c.selection != null || c.vectors.selectedIds.isNotEmpty()
 
     /**
      * v1.9 (R11): the Eraser's mode cell ([VectorEraseChooser.modeCell], StripKeysV19.ERASE_MODE_CELL)
