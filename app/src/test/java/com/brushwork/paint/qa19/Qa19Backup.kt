@@ -324,10 +324,14 @@ internal object Qa19Backup {
 
         open()
         Qa19Ui.click(BackupLabels19.FOLDER, exact = true)
+        FakeDocumentsProvider.resetCounts()
         pickDocumentsBrushwork(a, picker(a, where))
-        Qa19Ui.settle()
+        // The pick's inspect and commit run on IO after the picker returns, so a settle can end
+        // before the commit schedules its backup: wait for that backup's index instead.
+        Smoke.pumpUntil(20_000) { indexWritten() && BackupService.status.value is BackupStatus.Ok }
         BackupKit.idle()
         Qa19Ui.settle()
+        assertTrue("backed up into the folder picked again, $where: ${FakeDocumentsProvider.log.toList()}", indexWritten())
         assertNull("no offer for the backup's own folder, $where", Qa19Ui.tagged(V19Tags.RESTORE_OFFER))
         assertNull(where, BackupFlow.dialog)
         assertTrue("still set, $where", BackupService.folderSet)
