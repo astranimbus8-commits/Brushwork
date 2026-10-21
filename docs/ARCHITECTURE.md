@@ -2343,6 +2343,9 @@ The invariants are in "Invariants (v1.10)" above.
   area's merge (recorded in `.wt/_tools/v110-merges.json`) is an ancestor of its HEAD.
 - Each area keeps `.wt/v110<x>-progress.txt`, seeded by the lead from
   `.wt/_tools/v110-progress-template.txt`; rule C reads it.
+- The test-count floor (`app/src/test/test-count.txt`, no trailing newline) is 4837 after F0:
+  v1.9.0's 4787 and F0's 50 new non-Timing tests. The Timing run (`-PtimingOnly`) has 360 tests.
+  Only the lead changes the floor, in a commit of its own after each step and merge.
 
 ### The UI seams (F0)
 
@@ -2438,7 +2441,8 @@ too). Assigning the same bitmap and pixel edits in place do not (`contentVersion
 layer, at its index and in its folder; the caller copies the layer's clipping
 (`BelowInsertionTest`). `ArraySpec.hideSource` and `ArrayLook.colorMode`
 (`ArrayColorMode.TINT` or `RECOLOR`) are written only when set, so a v1.9 file reads and writes
-the same; `sanitized()` and `mapped()` keep them (`ArraySpecFieldsTest`).
+the same; `sanitized()` and `mapped()` keep them (`ArraySpecFieldsTest`, and
+`ArrayLookModelTest`, whose fixture of a look with every property changed sets `colorMode`).
 
 **Frozen signatures.** `FrozenApiSignatureTest` (test root) reads the main sources and pins the
 F0 declarations the areas build against: each signature as written (whitespace and a trailing
@@ -2461,7 +2465,90 @@ five in `vector/VectorLayers.kt`, `v110-A5 snap` two in each of `ShapeTool.kt` a
 `EditorSession.kt`. At least three lines separate a block from any other region. Markers never
 change after F0 (rule R); `RegionMarkersTest` pins them with v1.9's. An area cannot add an
 import to a file it does not own, so its code inside a region of such a file uses fully
-qualified names. Rules P, M, E, W, N, F and G (design 6.3) are described at F1.
+qualified names.
+
+`.wt/_tools/ownership-check-v110.ps1 -Area <F0|F1|G2|A1..A11> -Worktree <wt> [-Base <ref>]
+[-ListPaths]` checks a branch against these rules (design 6.3). Always pass `-Worktree`: the
+default is `.wt\v110<x>` for an area and the main checkout for F0, F1 and G2, never the current
+folder. `-Base` defaults to `main`; a lead step passes the commit it started from. The checker
+reads committed changes only. Each finding is one line, `RULE path:line message` (line 0 is the
+whole file). Exit 0 is OK, 1 is at least one finding, 2 is a usage, setup or git error.
+`-ListPaths` also prints each allowed path with its reason. `-SelfTest` runs the fixtures of
+`.wt/_tools/ownership-v110-fixtures/` and exits 0 only when every fixture passes and every rule has
+one fixture with a finding and one without.
+
+Rules kept from v1.9:
+- **O (owner):** every changed main path belongs to the running area (`$Owned` first, then
+  `$Frozen`); a frozen, foreign or unowned path fails. A changed existing test is checked in
+  this order: `$FrozenTests` fail; `$LeadTests` fail for an area; the area's `$ExtraTestFiles`
+  pass; a `<Name>Test.kt`, `<Name>RobolectricTest.kt` or `<Name>UiTest.kt` beside a main
+  `<Name>.kt` passes only for that file's owner (the mirror rule); then v1.8's folder rule; else
+  it fails. New tests may go anywhere outside `$FrozenTests` and `$LeadTests`, and new test
+  resources anywhere; an existing test resource fails for everyone. Repository files outside
+  `app/src/main/java` are the lead's. An area fails on `.github/workflows/**`,
+  `app/build.gradle.kts`, `app/src/test/test-count*.txt`, `.wt/_tools/**` and `README.md`. In
+  `.wt/v110-full-backlog.txt` an area may only remove the lines that name it. The lead steps may
+  change every main path. Existing tests: F0 only those design 3.2 lists (`$LeadStepTests.F0`),
+  F1 any outside `$FrozenTests`, G2 any. A finding on a `$Sequential` path is reported as O.
+- **R (regions):** in each file of `$Regions` and in this file, every changed line lies strictly
+  inside one of the running area's regions. No marker line changes. A1, which owns
+  `tools/transform/DataLift.kt`, may change any line there outside the other areas' regions. An area that
+  changes a lead-owned region file where it has no region fails.
+- **S:** no added main line outside `engine/` holds `doc.layers.add`, `insertLayer(` or
+  `RemoveLayerAction(`. **L:** no added main line outside `ui/common/` holds a label of
+  `LabelsV18.kt`, `LabelsV19.kt` or `LabelsV110.kt` (as at the base) as a literal, unless the text
+  is also a literal elsewhere in the base's main sources. The check skips `LabelsV110.kt` while the base
+  has no such file (before `gate-v110-0`). **T:** no `TextCodec.decode(` or `encode(` outside
+  `TextCodec.kt`. **K:** for the areas and G2, no added `@Serializable`, `@EncodeDefault` or
+  `@SerialName` and no changed `VERSION =` line outside `storage/backup/**`. Every new persisted
+  field is the lead's.
+- **C (commits):** area subjects are `v110<x>: k/n <text>`, with the lowercase id (`v110a7`) and n
+  the plan size of design 4.4 in every subject. k starts at 1, never falls and rises by at most one
+  per commit. A branch ends below n only when the base holds `v110-lead: cut v110<x> k..n`.
+  `.wt/v110<x>-progress.txt` lists the same k values, each with a commit hash, and the cut (or
+  `none`). Lead subjects are `v110F0: `, `v110F1: `, `v110G2: ` and `v110-lead: `.
+
+New rules. They read only the lines a branch adds to the main sources (comments skipped), and the
+lead steps are exempt from M and F:
+- **P (pixel facade, I28):** a `.bitmap` or `.mask` read of a layer inside a loop or sequence over
+  layers (`forEach`, `map`, `filter`, `sumOf`, `any`, `count`, ... on `layers`, `allLayers` or
+  `visibleLayers`, or `for (... in ...layers)`) fails. So does a new read in a file that is neither
+  a C-RES file nor listed in `.wt/_tools/v110-bitmap-allow.txt`, and a mask presence test by
+  `== null` (`hasMask` comes with F1). A line ending in `// I28: one layer` passes, and the
+  allow-list's exempt engine files (A8-A11) are not checked. A read whose text is also on a removed
+  line of the same file is moved code and passes. The lead steps are exempt from the allow-list
+  check, and F0 from all of P: it moved v1.9's `doc.layers.count { it.mask != null }` into
+  `LayerBudgetV19`.
+- **M (memory sources):** `maxMemory()`, `ActivityManager.MemoryInfo`, `getMemoryInfo(`,
+  `StatFs(`, `Debug.getNative` or `getHistoricalProcessExitReasons` outside `engine/budget/**`.
+  The existing lines (`GovernorPolicyV19`, `BrushTool`, `ContentAwareFillJob`, `ExitReasons`) are
+  not added lines, so they never fail.
+- **E (engine level, I31):** `openSession(` or `closeSession(` outside `EditorSession.kt` and
+  `engine/EngineConfig.kt`; an assignment to `EngineConfig.residency`, `swapStore`,
+  `memoryProbe`, `storageProbe` or `exitInfo` outside `engine/tiles/ResidencyPolicy.kt`,
+  `engine/tiles/SlabSwapStore.kt`, `engine/EngineStartup.kt` and `engine/check/**`; `EngineLevel.`
+  in `ui/**` outside `ui/engine/**`.
+- **W (worker and main, I29):** `park(`, `unpark(`, `replaceTiles(` or `evict(` outside
+  `engine/tiles/**` (`engine/Undo.kt` may call `replaceTiles(`, `engine/NativeWatch.kt` `park(`
+  and `evict(`); `Deflater(` or `Inflater(` outside `engine/tiles/**`, `engine/check/**` and
+  v1.9's codec files; `Thread(`, `Executors.` or `HandlerThread(` in `engine/tiles/**` outside
+  `TileWorker.kt` and `SlabSwapStore.kt`.
+- **N (no new project files, I34):** any change inside `ProjectFormat.isDataFile`,
+  `referencedFiles` or `deleteUnreferenced` (with the `is*File` helpers and `*FilePattern` values `isDataFile` is made of);
+  a `noBackupFilesDir` or `"swap"` path outside `engine/tiles/SlabSwapStore.kt`,
+  `engine/tiles/SwapJanitor.kt`, `engine/check/**`, `engine/ExitWatch.kt`, `storage/engine/**`
+  and `storage/backup/**`; a new file kind in a project folder (a file name the project writers
+  add that is not one of v1.9's kinds).
+- **F (format, I30):** `ProjectFormat.writtenVersion(` outside `storage/ProjectFile.kt` and
+  `storage/ProjectRepository.kt`.
+- **G (generation, I28):** a new `.bitmap` or `.mask` identity comparison (`===` or `!==`). A
+  comparison with `Layer.FOLDER_BITMAP` passes, and so does one that is also on a removed line of
+  the same file.
+
+The signatures that are frozen inside area files (`PillColorCell`, `PillSharpCell`, the three F0
+functions of `ObjectActions`, `CurveTool.openObject` and `CurveTool.kindOf`, and F1's) are
+checked by `FrozenApiSignatureTest`, not by the script. `.wt/_tools/v110-frozen-api.md` holds
+every frozen declaration as pasted from the code at each gate.
 
 ### CI: shards, `unit-full` and the two floors
 
