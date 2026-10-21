@@ -169,6 +169,19 @@ android {
                 it.inputs.property("testShards", testShards?.toString() ?: "all")
                 it.systemProperty("bw.testForks", it.maxParallelForks.toString())
                 it.systemProperty("bw.testSet", if (bench) "bench" else if (soakOnly) "soak" else if (timingOnly) "timing" else if (ci) "main" else "all")
+                // v1.10 Gate 0 (design 3.1): -PengineMode=classic|tiles|full and -PparkChaos reach the
+                // unit-test JVMs only, as brushwork.engineMode and brushwork.parkChaos=true; only
+                // EngineConfig.testMode() (F1) reads them. Without -PengineMode nothing is set, so
+                // EngineConfig keeps its own default. Both are task inputs, like the shard above.
+                val engineMode = project.findProperty("engineMode")?.toString()?.trim()?.lowercase()
+                if (engineMode != null && engineMode !in setOf("classic", "tiles", "full")) {
+                    throw GradleException("-PengineMode is classic, tiles or full (got \"$engineMode\")")
+                }
+                val parkChaos = project.findProperty("parkChaos")?.toString()?.trim()?.lowercase().let { p -> p != null && p != "false" }
+                if (engineMode != null) it.systemProperty("brushwork.engineMode", engineMode)
+                if (parkChaos) it.systemProperty("brushwork.parkChaos", "true")
+                it.inputs.property("engineMode", engineMode ?: "unset")
+                it.inputs.property("parkChaos", parkChaos.toString())
                 // A failure prints its whole message (a timing guard's every measurement), so a CI
                 // log says why without the reports.
                 it.testLogging.exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
