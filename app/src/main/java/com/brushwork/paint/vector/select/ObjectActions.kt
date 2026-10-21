@@ -181,6 +181,29 @@ object ObjectActions {
         c.invalidateOverlay()
     }
 
+    // ------------------------------------------------------------------ v1.10 (F0 stubs, A6 bodies)
+
+    /**
+     * v1.10 (R10): why the object bar's Edit is disabled for the selection (a path of several
+     * parts, a path too small to edit), shown as its toast; null = Edit can open it. The signature
+     * is frozen (`FrozenApiSignatureTest`); F0 stub, A6 body.
+     */
+    fun editRefusal(c: EditorController): String? = null
+
+    /**
+     * v1.10 (R10): opens the one selected object in its own tool (a shape in the Shape tool, a path
+     * in the Curve, Path or Polyline tool through `CurveTool.kindOf`). True when an editor opened.
+     * The signature is frozen; F0 stub (opens nothing), A6 body.
+     */
+    fun openInEditor(c: EditorController): Boolean = false
+
+    /**
+     * v1.10 (R11): turns the one selected path into a shape in place (one step
+     * `ObjectBarLabels110.TO_SHAPE`), then opens the Shape tool on it. True when it was done. The
+     * signature is frozen; F0 stub (changes nothing), A6 body.
+     */
+    fun turnIntoShape(c: EditorController): Boolean = false
+
     // ------------------------------------------------------------------ helpers
 
     /** The Transform tool when it is current and has something lifted. */

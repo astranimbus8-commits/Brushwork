@@ -341,6 +341,42 @@ class EditorController(
 
     fun toast(text: String) { message = text }
 
+    /**
+     * v1.10 (F0, R11, finding 31): a long note waiting for the editor screen, which takes it (sets
+     * this back to null) and shows it as a Long message with a dismiss action, plus "Undo" when
+     * [PendingNote.undoable]. It waits for a tool switch made with it to settle, so the tool's own
+     * opening message never dismisses it, and a later [toast] waits behind it instead of replacing it.
+     */
+    var pendingNote by mutableStateOf<PendingNote?>(null)
+
+    /** A long note ([pendingNote]); [undoCount] is the history's size when it was asked for. */
+    data class PendingNote(val text: String, val undoable: Boolean, val undoCount: Int)
+
+    /**
+     * v1.10 (F0, R11): shows [text] as a long note ([pendingNote]); with [undoable] its "Undo"
+     * takes back the newest step, the one the note is about ([undoNote]). F0 has no caller (A6's
+     * "Turn into shape" calls it after the Shape tool opened).
+     */
+    fun showNote(text: String, undoable: Boolean) {
+        pendingNote = PendingNote(text, undoable, undoManager.undoCount)
+    }
+
+    /**
+     * v1.10 (F0): the "Undo" of [note]: takes back the step it is about, only while no other step
+     * was added since ([PendingNote.undoCount]); the current tool's open edit is dropped first, so
+     * the step itself is what goes. True when it was taken back.
+     */
+    fun undoNote(note: PendingNote): Boolean {
+        if (!note.undoable || filterSession != null || undoManager.undoCount != note.undoCount || note.undoCount == 0) return false
+        val tool = currentTool
+        if (tool.hasPendingWork) {
+            tool.discard()
+            invalidateOverlay()
+        }
+        undo()
+        return true
+    }
+
     // ------------------------------------------------------------------ memory / history
 
     // region v19-A7b layerCap
@@ -2810,7 +2846,8 @@ class EditorController(
     // region v110-A3 arrayBehind
     /**
      * v1.10 (R4, UQ4): "Behind" (the array on a new layer below) can run now. While false the
-     * selection bar, the object bar and the layer menu leave the item out. F0 stub (A3 body).
+     * selection bar, the object bar and the layer menu leave the item out. The editor screen reads
+     * it in a `derivedStateOf`, so a body reads snapshot state to be followed. F0 stub (A3 body).
      */
     val arrayBehindAvailable: Boolean get() = false
 

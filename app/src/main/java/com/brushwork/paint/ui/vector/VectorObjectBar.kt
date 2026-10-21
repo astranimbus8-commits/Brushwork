@@ -25,9 +25,11 @@ import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.outlined.Category
 import androidx.compose.material.icons.outlined.ControlPointDuplicate
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Deselect
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.FlipToBack
 import androidx.compose.material.icons.outlined.FlipToFront
 import androidx.compose.material.icons.outlined.FormatColorFill
@@ -68,11 +70,15 @@ import com.brushwork.paint.ColorModeOps
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.ui.common.ArrayLabels
+import com.brushwork.paint.ui.common.ArrayLabels110
 import com.brushwork.paint.ui.common.LocalHistoryTaps
 import com.brushwork.paint.ui.common.MirrorLabels18
+import com.brushwork.paint.ui.common.ObjectBarLabels110
 import com.brushwork.paint.ui.common.SheetBackground
 import com.brushwork.paint.ui.common.StripLabels18
+import com.brushwork.paint.ui.common.V110Tags
 import com.brushwork.paint.ui.common.V18Tags
+import com.brushwork.paint.ui.common.icons.arrayBehind
 import com.brushwork.paint.ui.common.longPressLabel
 import com.brushwork.paint.ui.editor.EditorIcons
 import com.brushwork.paint.ui.editor.endCanvasGesture
@@ -111,9 +117,23 @@ import kotlin.math.max
  *
  * Selecting another layer drops the object selection (the objects of a layer that isn't being
  * worked on are not acted on).
+ *
+ * v1.10 (F0, design 3.2; A6 owns the bar): [recolorIcon] is Recolor's icon (R3); [onEdit] adds
+ * [ObjectBarLabels110.EDIT] right after Transform (R10), [onToShape] adds
+ * [ObjectBarLabels110.TO_SHAPE] (2 units, as Detach) after Detach (R11), and [onArrayBehind] adds
+ * [ArrayLabels110.BEHIND] right after Array (R4). Each is hidden while its callback is null, so
+ * without them the bar is v1.9's; the ranks stay v1.9's until A6.
  */
 @Composable
-fun VectorObjectBar(controller: EditorController, modifier: Modifier, state: StripState? = null) {
+fun VectorObjectBar(
+    controller: EditorController,
+    modifier: Modifier,
+    state: StripState? = null,
+    recolorIcon: ImageVector = Icons.Outlined.FormatColorFill,
+    onEdit: (() -> Unit)? = null,
+    onToShape: (() -> Unit)? = null,
+    onArrayBehind: (() -> Unit)? = null,
+) {
     val strip = state ?: remember { StripState() }
     val v = controller.vectors
     val count by remember(controller) { derivedStateOf { v.selectedIds.size } }
@@ -153,7 +173,7 @@ fun VectorObjectBar(controller: EditorController, modifier: Modifier, state: Str
         })
         add(BarButton(1, RANK_RECOLOR) { w ->
             ObjectBarItem(
-                Icons.Outlined.FormatColorFill, "Recolor", "Recolor with the main color", w,
+                recolorIcon, "Recolor", "Recolor with the main color", w,
                 swatch = color,
                 longClickLabel = "Recolor the lines only",
                 onLongClick = { run { ObjectActions.recolor(controller, linesOnly = true) } },
@@ -164,6 +184,12 @@ fun VectorObjectBar(controller: EditorController, modifier: Modifier, state: Str
         add(BarButton(1, RANK_TRANSFORM) { w ->
             ObjectBarItem(EditorIcons.tool(ToolId.TRANSFORM), "Transform", "Transform the selected objects", w) { run { ObjectActions.transform(controller) } }
         })
+        // v1.10 (R10, F0): only while it has a callback (A6 decides when).
+        if (onEdit != null) {
+            add(BarButton(1, RANK_EDIT) { w ->
+                ObjectBarItem(Icons.Outlined.Edit, ObjectBarLabels110.EDIT, ObjectBarLabels110.EDIT_DESC, w, tag = V110Tags.OBJECTS_EDIT) { run(onEdit) }
+            })
+        }
         add(BarButton(1, RANK_DESELECT) { w -> ObjectBarItem(Icons.Outlined.Deselect, "Deselect", "Deselect the objects", w) { run { ObjectActions.deselect(controller) } } })
         // v1.7 (item 3): after Deselect, so the nine v1.6 buttons keep their places and sizes.
         add(BarButton(1, RANK_ARRAY) { w ->
@@ -171,10 +197,22 @@ fun VectorObjectBar(controller: EditorController, modifier: Modifier, state: Str
                 run { controller.arrayFromObjects(v.selectedIds.toSet()) }
             }
         })
+        // v1.10 (R4, F0): right after Array, the same rank; only while it has a callback.
+        if (onArrayBehind != null) {
+            add(BarButton(1, RANK_ARRAY) { w ->
+                ObjectBarItem(EditorIcons.arrayBehind, ArrayLabels110.BEHIND, ArrayLabels110.BEHIND_DESC, w) { run(onArrayBehind) }
+            })
+        }
         // v1.8 (I15): only while a selected object has live mirror copies; twice as wide (its
         // words stay readable), after Array.
         if (hasCopies) {
             add(BarButton(2, RANK_DETACH) { w -> ObjectBarItem(Icons.Outlined.LinkOff, MirrorLabels18.DETACH, MirrorLabels18.DETACH, w) { run { ObjectActions.detachCopies(controller) } } })
+        }
+        // v1.10 (R11, F0): 2 units as Detach, its rank; only while it has a callback.
+        if (onToShape != null) {
+            add(BarButton(2, RANK_DETACH) { w ->
+                ObjectBarItem(Icons.Outlined.Category, ObjectBarLabels110.TO_SHAPE, ObjectBarLabels110.TO_SHAPE, w, tag = V110Tags.OBJECTS_TO_SHAPE) { run(onToShape) }
+            })
         }
     }
     BoxWithConstraints(modifier) {
@@ -259,6 +297,9 @@ private const val RANK_RECOLOR = 6
 private const val RANK_TRANSFORM = 7
 private const val RANK_DESELECT = 8
 private const val RANK_DELETE = 9
+
+/** v1.10 (F0): Edit leaves row 1 with Transform until A6 sets the 1.10 ranks (R10, J26). */
+private const val RANK_EDIT = RANK_TRANSFORM
 
 /**
  * v1.8 (design §3.9): how the object bar's buttons share its width (pure; dp).
@@ -352,7 +393,7 @@ private fun ObjectMoreToggle(open: Boolean, onToggle: () -> Unit) {
 /**
  * Icon over a short label (the selection bar's look); [clickLabel] tells a screen reader what it
  * does, and a long press shows it in a bubble (v1.8). [swatch] shows a color dot on the icon;
- * [onLongClick] adds a long-press action instead of the bubble.
+ * [onLongClick] adds a long-press action instead of the bubble. v1.10: [tag] is its test tag.
  */
 @Composable
 private fun ObjectBarItem(
@@ -363,11 +404,13 @@ private fun ObjectBarItem(
     swatch: Color? = null,
     longClickLabel: String? = null,
     onLongClick: (() -> Unit)? = null,
+    tag: String? = null,
     onClick: () -> Unit,
 ) {
     val tint = BrushworkColors.OnChrome
     Column(
         Modifier
+            .then(if (tag != null) Modifier.testTag(tag) else Modifier)
             .width(width)
             .heightIn(min = MAX_ITEM_WIDTH)
             .clip(RoundedCornerShape(10.dp))

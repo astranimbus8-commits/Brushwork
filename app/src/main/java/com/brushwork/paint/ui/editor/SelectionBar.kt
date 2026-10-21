@@ -30,6 +30,7 @@ import androidx.compose.material.icons.outlined.ContentPaste
 import androidx.compose.material.icons.outlined.ControlPointDuplicate
 import androidx.compose.material.icons.outlined.Deselect
 import androidx.compose.material.icons.outlined.DeleteSweep
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.InvertColors
 import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material3.Icon
@@ -61,10 +62,14 @@ import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.remove.ContentAwareFillJob
 import com.brushwork.paint.tools.select.SelectionDuplicate
 import com.brushwork.paint.ui.common.ArrayLabels
+import com.brushwork.paint.ui.common.ArrayLabels110
 import com.brushwork.paint.ui.common.LayerLabels19
+import com.brushwork.paint.ui.common.ObjectBarLabels110
 import com.brushwork.paint.ui.common.SavedSelectionLabels
 import com.brushwork.paint.ui.common.SheetBackground
+import com.brushwork.paint.ui.common.V110Tags
 import com.brushwork.paint.ui.common.V19Tags
+import com.brushwork.paint.ui.common.icons.arrayBehind
 import com.brushwork.paint.ui.common.longPressLabel
 import com.brushwork.paint.ui.remove.ContentAwareFillSheet
 import com.brushwork.paint.ui.editor.chrome.ChromeTags
@@ -80,6 +85,10 @@ import kotlin.math.ceil
  * ([SelectionDuplicate]) after Save where it keeps the layer's kind. With no selection but
  * something copied, it offers Paste only, and
  * [onHide] (non-null then) hides it until something new is copied.
+ *
+ * v1.10 (F0, design 3.2; A6 owns the bar): [onEdit] adds [ObjectBarLabels110.EDIT] as the first
+ * item (R10) and [onArrayBehind] adds [ArrayLabels110.BEHIND] right after Array (R4); each is
+ * hidden while its callback is null, so without them the bar is v1.9's.
  */
 @Composable
 internal fun SelectionActionBar(
@@ -87,6 +96,8 @@ internal fun SelectionActionBar(
     onMore: () -> Unit,
     onHide: (() -> Unit)?,
     modifier: Modifier = Modifier,
+    onEdit: (() -> Unit)? = null,
+    onArrayBehind: (() -> Unit)? = null,
 ) {
     val hasSelection = controller.selection != null
     val canPaste = controller.clipboard != null
@@ -118,6 +129,12 @@ internal fun SelectionActionBar(
                 horizontalArrangement = Arrangement.spacedBy(0.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                // v1.10 (R10, F0): the first item whenever it shows (A6 decides when).
+                if (onEdit != null) {
+                    BarItem(Icons.Outlined.Edit, ObjectBarLabels110.EDIT, ObjectBarLabels110.EDIT_DESC, modifier = Modifier.testTag(V110Tags.SEL_EDIT)) {
+                        controller.endCanvasGesture(); onEdit()
+                    }
+                }
                 if (hasSelection) {
                     BarItem(Icons.Outlined.ContentCopy, "Copy", "Copy selection") {
                         controller.endCanvasGesture(); controller.copySelection()
@@ -146,6 +163,17 @@ internal fun SelectionActionBar(
                     // v1.7 (items 3 and 14), after More so the eight v1.6 items keep their places.
                     BarItem(EditorIcons.tool(ToolId.ARRAY), ArrayLabels.BUTTON, ArrayLabels.FROM_SELECTION) {
                         controller.endCanvasGesture(); controller.arrayFromSelection()
+                    }
+                    // v1.10 (R4, F0): right after Array, only while it has a callback.
+                    if (onArrayBehind != null) {
+                        BarItem(
+                            EditorIcons.arrayBehind,
+                            ArrayLabels110.BEHIND,
+                            ArrayLabels110.BEHIND_DESC,
+                            modifier = Modifier.testTag(V110Tags.SEL_ARRAY_BEHIND),
+                        ) {
+                            controller.endCanvasGesture(); onArrayBehind()
+                        }
                     }
                     BarItem(Icons.Outlined.BookmarkAdd, SavedSelectionLabels.SAVE_BUTTON, SavedSelectionLabels.SAVE) {
                         controller.endCanvasGesture(); controller.saveSelection()

@@ -56,6 +56,7 @@ import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
+import androidx.compose.material3.SnackbarVisuals
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
@@ -69,6 +70,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.ui.Alignment
@@ -148,6 +150,7 @@ import com.brushwork.paint.ui.tools.strip.LocalStripContext
 import com.brushwork.paint.ui.tools.strip.StripContext
 import com.brushwork.paint.ui.tools.strip.StripState
 import com.brushwork.paint.ui.vector.VectorObjectBar
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
@@ -339,14 +342,43 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
         }
     }
     val message = controller.message
+    // v1.10 (F0): the newest message waiting behind a long note (one at a time).
+    val behindNote = remember { arrayOfNulls<Job>(1) }
     LaunchedEffect(message) {
         if (message != null) {
             controller.message = null
             // Show in a separate coroutine: clearing the message restarts this effect.
             if (snackbar.currentSnackbarData?.visuals?.message != message) {
-                scope.launch {
-                    snackbar.currentSnackbarData?.dismiss()
-                    snackbar.showSnackbar(message, duration = SnackbarDuration.Short)
+                if (snackbar.currentSnackbarData?.visuals is NoteVisuals) {
+                    // v1.10 (finding 31): a long note stays; the message shows when it goes.
+                    behindNote[0]?.cancel()
+                    behindNote[0] = scope.launch { snackbar.showSnackbar(message, duration = SnackbarDuration.Short) }
+                } else {
+                    scope.launch {
+                        snackbar.currentSnackbarData?.dismiss()
+                        snackbar.showSnackbar(message, duration = SnackbarDuration.Short)
+                    }
+                }
+            }
+        }
+    }
+    // v1.10 (F0, R11, finding 31): a long note (EditorController.showNote), with the loadWarnings
+    // pattern (Long, a dismiss action) and the "Layer deleted" Undo when it is undoable. It waits
+    // two frames, so a tool switch made with it has settled and the tool's opening message is
+    // already up: the note replaces that message, never the other way round.
+    val note = controller.pendingNote
+    LaunchedEffect(note) {
+        if (note != null) {
+            controller.pendingNote = null
+            // A separate coroutine, as above: clearing the note restarts this effect.
+            scope.launch {
+                withFrameNanos { }
+                withFrameNanos { }
+                snackbar.currentSnackbarData?.dismiss()
+                val result = snackbar.showSnackbar(NoteVisuals(note.text, if (note.undoable) "Undo" else null))
+                if (result == SnackbarResult.ActionPerformed) {
+                    controller.endCanvasGesture()
+                    controller.undoNote(note)
                 }
             }
         }
@@ -472,6 +504,8 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
         (hasSelection || (clipboard != null && clipboard !== hiddenClipboard))
     // Selected vector objects (v1.5): their bar takes the selection bar's place.
     val objectBarVisible = objectsSelected && session == null && busy == null
+    // v1.10 (R4, F0): whether the bars offer "Behind" (A3 backs it with state; false in F0).
+    val arrayBehindAvailable by remember(controller) { derivedStateOf { controller.arrayBehindAvailable } }
 
     // ---------------------------------------------------------------- system insets (dp)
     val layoutDirection = LocalLayoutDirection.current
@@ -665,16 +699,25 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
             exit = fadeOut(tween(IbisDims.HideInterfaceFadeMs)),
             modifier = selectionModifier,
         ) {
+            // v1.10 (R4, F0): "Behind" on both bars while the array behind can run (A3's entry
+            // point); null hides it.
+            val onArrayBehind: (() -> Unit)? = if (arrayBehindAvailable) ({ controller.arrayBehind() }) else null
             if (objectBarVisible) {
                 // Selected vector objects get their own bar in the selection bar's place (v1.5); its More
                 // row (v1.8) closes by the strip's rules (D25), so it shares the strip's state.
-                VectorObjectBar(controller, Modifier.testTag(ChromeTags.SELECTION_BAR).onSizeChanged { selectionBarPx = it.height }, stripState)
+                VectorObjectBar(
+                    controller,
+                    Modifier.testTag(ChromeTags.SELECTION_BAR).onSizeChanged { selectionBarPx = it.height },
+                    stripState,
+                    onArrayBehind = onArrayBehind,
+                )
             } else {
                 SelectionActionBar(
                     controller = controller,
                     onMore = { openPanel(EditorPanel.SELECTION) },
                     onHide = if (hasSelection) null else ({ hiddenClipboard = controller.clipboard }),
                     modifier = Modifier.testTag(ChromeTags.SELECTION_BAR).onSizeChanged { selectionBarPx = it.height },
+                    onArrayBehind = onArrayBehind,
                 )
             }
         }
@@ -942,6 +985,16 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
 
 /** Room a minimized panel's pill takes above the bottom items (its 44 dp row and a gap). */
 private const val PILL_ROOM = 52f
+
+/**
+ * v1.10 (F0, R11): a long note's message ([EditorController.showNote]): Long, with a dismiss
+ * action, and [actionLabel] "Undo" when it is undoable. Its type tells it from a message, so a
+ * later message waits behind it instead of dismissing it.
+ */
+private class NoteVisuals(override val message: String, override val actionLabel: String?) : SnackbarVisuals {
+    override val withDismissAction: Boolean get() = true
+    override val duration: SnackbarDuration get() = SnackbarDuration.Long
+}
 
 /**
  * v1.9 (design 2.6 step 8): the frame-times overlay's semantics while the frame-times switch
