@@ -40,13 +40,42 @@ enum class ColorMode(val label: String) {
  *
  * Layers are identified by object identity (and a stable [id] for persistence); undo actions
  * hold Layer references, never indices.
+ *
+ * v1.10 (F0, design 3.2 C16 part 1): replacing [bitmap] or [mask] by another bitmap bumps
+ * [pixelGeneration], which staleness keys compare (with [contentVersion]) instead of bitmap
+ * identity; [owns] answers whether a bitmap is this layer's own.
  */
 class Layer(
     val id: Long,
     var name: String,
-    var bitmap: Bitmap,
+    bitmap: Bitmap,
 ) {
+    /** The content; replacing it by another bitmap bumps [pixelGeneration]. */
+    var bitmap: Bitmap = bitmap
+        set(value) {
+            if (value !== field) pixelGeneration++
+            field = value
+        }
+
+    /** The layer mask, if any; replacing, adding or removing it bumps [pixelGeneration]. */
     var mask: Bitmap? = null
+        set(value) {
+            if (value !== field) pixelGeneration++
+            field = value
+        }
+
+    /**
+     * v1.10 (F0, design 3.2 C16 part 1): increases whenever [bitmap] or [mask] is replaced by
+     * another bitmap (assigning the same one changes nothing), so a key holding it and
+     * [contentVersion] goes stale wherever v1.9's bitmap identity did. Pixel edits in place keep
+     * it ([contentVersion] counts them). Never persisted.
+     */
+    var pixelGeneration: Long = 0L
+        private set
+
+    /** v1.10 (F0): [b] is this layer's own bitmap or mask (identity; F1 answers it without materializing). */
+    fun owns(b: Bitmap?): Boolean = b != null && (b === bitmap || b === mask)
+
     var maskEnabled: Boolean = true
     /** When true, painting tools edit the mask instead of the pixels. */
     var editingMask: Boolean = false

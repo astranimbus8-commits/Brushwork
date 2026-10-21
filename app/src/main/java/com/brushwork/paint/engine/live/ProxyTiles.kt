@@ -26,6 +26,9 @@ import com.brushwork.paint.model.Layer
  * folders the adjustment layer is in lie above the split: the session runs only while they draw
  * their children as is (`LiveAdjust`). The proxy scale and tile are fixed per [ProxyTiles] instance. A render override drawing a layer below changes what it draws without
  * changing anything here: the cache is then never trusted ([matches] is false). Main thread.
+ *
+ * v1.10 (F0, C16): a layer's bitmap and mask are kept as its [Layer.pixelGeneration] (bumped
+ * whenever either is replaced), not as references.
  */
 internal class BelowKey {
     private var refs = arrayOfNulls<Any>(0)
@@ -43,9 +46,9 @@ internal class BelowKey {
         for (i in 0 until split) {
             val l = layers[i]
             val r = i * REFS
-            if (refs[r] !== l || refs[r + 1] !== l.bitmap || refs[r + 2] !== l.mask || refs[r + 3] !== l.adjustment || refs[r + 4] !== l.maskSpec) return false
+            if (refs[r] !== l || refs[r + 1] !== l.adjustment || refs[r + 2] !== l.maskSpec) return false
             val n = i * NUMS
-            if (nums[n] != l.contentVersion || nums[n + 1] != packed(l) || nums[n + 2] != l.parentId) return false
+            if (nums[n] != l.contentVersion || nums[n + 1] != packed(l) || nums[n + 2] != l.parentId || nums[n + 3] != l.pixelGeneration) return false
         }
         return true
     }
@@ -58,11 +61,12 @@ internal class BelowKey {
         for (i in 0 until split) {
             val l = doc.layers[i]
             val r = i * REFS
-            refs[r] = l; refs[r + 1] = l.bitmap; refs[r + 2] = l.mask; refs[r + 3] = l.adjustment; refs[r + 4] = l.maskSpec
+            refs[r] = l; refs[r + 1] = l.adjustment; refs[r + 2] = l.maskSpec
             val n = i * NUMS
             nums[n] = l.contentVersion
             nums[n + 1] = packed(l)
             nums[n + 2] = l.parentId
+            nums[n + 3] = l.pixelGeneration
         }
         this.split = split
         colorMode = doc.colorMode
@@ -88,8 +92,8 @@ internal class BelowKey {
     }
 
     companion object {
-        private const val REFS = 5
-        private const val NUMS = 3
+        private const val REFS = 3
+        private const val NUMS = 4
 
         /** True when [override] draws a layer of [0, split) (what it draws may change at any time). */
         fun overrideBelow(doc: Document, split: Int, override: LayerRenderOverride?): Boolean {

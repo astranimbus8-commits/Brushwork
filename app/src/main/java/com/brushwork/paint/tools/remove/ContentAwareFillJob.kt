@@ -197,7 +197,10 @@ object ContentAwareFillJob {
         val label: String,
         val busyText: String,
         val clip: Selection?,
-    )
+    ) {
+        /** v1.10 (F0, C16): the layer's [Layer.pixelGeneration] when the request was made ([bitmap] is its bitmap then). */
+        val pixelGeneration: Long = layer.pixelGeneration
+    }
 
     /** The layer can be written (not locked or hidden; says why otherwise). */
     private fun checkWritable(controller: EditorController, layer: Layer): Boolean = controller.checkEditable(layer)
@@ -234,9 +237,12 @@ object ContentAwareFillJob {
         }
     }
 
-    /** Is the layer still there, with the same pixels object, at the document's size? */
+    /**
+     * Is the layer still there, with the same pixels object, at the document's size? v1.10 (F0,
+     * C16): "the same pixels object" is an unchanged [Layer.pixelGeneration].
+     */
     private fun layerUsable(controller: EditorController, req: Request): Boolean {
-        val ok = controller.doc.indexOf(req.layer) >= 0 && req.layer.bitmap === req.bitmap && !req.bitmap.isRecycled &&
+        val ok = controller.doc.indexOf(req.layer) >= 0 && req.layer.pixelGeneration == req.pixelGeneration && !req.bitmap.isRecycled &&
             req.bitmap.width == controller.doc.width && req.bitmap.height == controller.doc.height
         if (!ok) controller.toast("The layer changed, so ${req.label.lowercase()} was cancelled")
         return ok

@@ -508,7 +508,7 @@ class VectorLayers internal constructor(private val c: EditorController) {
         preparing = prep
         updateRendering()
         val version = layer.contentVersion
-        val bitmap = layer.bitmap
+        val generation = layer.pixelGeneration
         val job = c.scope.async(worker.dispatcher) {
             val ctx = coroutineContext
             val r = renderEdit(null, plan, worker.tips, worker.cache, base) { ctx.isActive }
@@ -534,7 +534,7 @@ class VectorLayers internal constructor(private val c: EditorController) {
                 onReady(null)
                 return@launch
             }
-            val fresh = layer.vector === content && layer.contentVersion == version && layer.bitmap === bitmap && c.doc.indexOf(layer) >= 0
+            val fresh = layer.vector === content && layer.contentVersion == version && layer.pixelGeneration == generation && c.doc.indexOf(layer) >= 0
             if (!fresh) {
                 recycle(parts.first, parts.second)
                 if (attempt < MAX_ATTEMPTS) beginEditAttempt(layer, ids, onReady, attempt + 1) else onReady(null)
@@ -835,7 +835,8 @@ class VectorLayers internal constructor(private val c: EditorController) {
         /** v1.7: the layer's array when the render started (another array makes the render stale). */
         val arrayBefore: LayerArray? = layer.array
         val contentVersion = layer.contentVersion
-        val bitmap: Bitmap = layer.bitmap
+        /** v1.10 (F0, C16): the layer's bitmap and mask as they were (replaced: stale). */
+        val pixelGeneration = layer.pixelGeneration
         var job: Deferred<List<Bitmap>>? = null
         var finished = false
         val completion = CompletableDeferred<Unit>()
@@ -1081,7 +1082,7 @@ class VectorLayers internal constructor(private val c: EditorController) {
                 return
             }
             val layer = p.layer
-            val fresh = c.doc.indexOf(layer) >= 0 && layer.vector === p.base && layer.contentVersion == p.contentVersion && layer.bitmap === p.bitmap &&
+            val fresh = c.doc.indexOf(layer) >= 0 && layer.vector === p.base && layer.contentVersion == p.contentVersion && layer.pixelGeneration == p.pixelGeneration &&
                 layer.array === p.arrayBefore
             if (!fresh) {
                 // The layer changed meanwhile: the edit is re-based onto what it holds now.
@@ -1265,7 +1266,7 @@ class VectorLayers internal constructor(private val c: EditorController) {
             }
         } finally {
             // (createBitmap may hand back its source for a whole-bitmap subset: never recycle the layer.)
-            src?.takeIf { it !== layer.bitmap }?.recycle()
+            src?.takeIf { !layer.owns(it) }?.recycle()
         }
         return true
     }

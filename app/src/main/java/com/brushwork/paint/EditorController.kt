@@ -1753,7 +1753,7 @@ class EditorController(
         try {
             return copyFrom(layer, source)
         } finally {
-            if (source !== layer.bitmap) source.recycle()
+            if (!layer.owns(source)) source.recycle()
         }
     }
 

@@ -208,7 +208,7 @@ class MagneticLassoTool(controller: EditorController) : Tool(controller), PillPo
     private fun currentKey(): MapKey {
         val c = controller
         val layer = c.activeLayer
-        return if (settings.source == SampleSource.LAYER && layer.bitmap !== Layer.FOLDER_BITMAP) {
+        return if (settings.source == SampleSource.LAYER && !layer.isFolder) {
             MapKey(SampleSource.LAYER, layer, layer.bitmap, layer.contentVersion, 0, c.doc.width, c.doc.height)
         } else {
             var sum = 0L

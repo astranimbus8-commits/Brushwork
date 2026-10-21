@@ -119,6 +119,7 @@ class LayerBoundsCache(
                     val bmp = layer.bitmap
                     val mask = activeMask(layer)
                     val version = layer.contentVersion
+                    val generation = layer.pixelGeneration
                     if (bmp.isRecycled) continue
                     // Bounds already known (a small layer): only its lines are missing.
                     val known = current(layer)
@@ -145,8 +146,11 @@ class LayerBoundsCache(
                     }
                     if (scan == null) continue
                     // Changed (replaced, or recycled with a removed layer) while it was being scanned:
-                    // scan it again when asked.
-                    if (layer.contentVersion != version || layer.bitmap !== bmp || bmp.isRecycled || activeMask(layer) !== mask) continue
+                    // scan it again when asked. v1.10 (F0, C16): a replaced bitmap or mask bumped the
+                    // generation; a mask turned on or off (or recycled) changes what applies.
+                    if (layer.contentVersion != version || layer.pixelGeneration != generation || bmp.isRecycled ||
+                        (activeMask(layer) == null) != (mask == null)
+                    ) continue
                     store(layer, version, bmp, mask, scan.bounds, if (detectLines) scan.lines ?: emptyList() else emptyList())
                     onUpdated()
                 }

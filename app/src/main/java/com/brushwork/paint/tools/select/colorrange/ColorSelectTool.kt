@@ -271,7 +271,7 @@ class ColorSelectTool(controller: EditorController) : Tool(controller) {
         val c = controller
         val source = settings.source
         val layer = c.activeLayer
-        return if (source == SampleSource.LAYER && layer.bitmap !== Layer.FOLDER_BITMAP) {
+        return if (source == SampleSource.LAYER && !layer.isFolder) {
             ProxyKey(source, layer, layer.bitmap, layer.contentVersion, 0, c.doc.width, c.doc.height)
         } else {
             var sum = 0L
@@ -435,7 +435,7 @@ class ColorSelectTool(controller: EditorController) : Tool(controller) {
         val ix = floor(x).toInt(); val iy = floor(y).toInt()
         if (ix !in 0 until doc.width || iy !in 0 until doc.height) return null
         val layer = controller.activeLayer
-        val argb = if (settings.source == SampleSource.LAYER && layer.bitmap !== Layer.FOLDER_BITMAP) {
+        val argb = if (settings.source == SampleSource.LAYER && !layer.isFolder) {
             layer.bitmap.getPixel(ix, iy)
         } else {
             renderPixel(ix, iy)

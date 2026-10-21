@@ -71,6 +71,15 @@ class CanvasSnapshot(
     ) {
         /** The vector content (v1.5): scaling operations re-render it instead of resampling the cache. */
         val vector: VectorContent? get() = data.vector
+
+        /**
+         * v1.10 (F0, C16): [Layer.pixelGeneration] when the snapshot was taken (detects a bitmap or
+         * mask replaced in between).
+         */
+        val pixelGeneration: Long = layer.pixelGeneration
+
+        /** v1.10 (F0, C16): [b] is this snapshot's own bitmap or mask (as [Layer.owns]). */
+        fun owns(b: Bitmap?): Boolean = b != null && (b === bitmap || b === mask)
     }
 
     /** Number of full-size bitmaps (layers + masks). */
@@ -87,7 +96,7 @@ class CanvasSnapshot(
         for (l in doc.layers) {
             if (l.isFolder) continue
             val s = layers[i++]
-            if (!(l === s.layer && l.bitmap === s.bitmap && l.mask === s.mask && l.contentVersion == s.contentVersion)) return false
+            if (!(l === s.layer && l.pixelGeneration == s.pixelGeneration && l.contentVersion == s.contentVersion)) return false
         }
         return true
     }
@@ -680,7 +689,7 @@ object CanvasOps {
                 val sub = subProgress()
                 val bmp = content?.invoke(l, d, sub) ?: op(l.bitmap, false, sub)
                 // (A layer whose pixels stay keeps the snapshot's own bitmap: never freed here.)
-                pendingBitmap = bmp.takeIf { it !== l.bitmap }
+                pendingBitmap = bmp.takeIf { !l.owns(it) }
                 progress(++done / total)
                 val mask = if (transformMasks && l.mask != null) {
                     val msub = subProgress()

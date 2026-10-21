@@ -260,10 +260,13 @@ class AdjustmentScratch {
  * render override concerns the layer (a mask being painted or previewed changes without a
  * content version). The owner [clear]s it when the mask's pixels may have changed in another
  * way (a change it did not make). Main thread.
+ *
+ * v1.10 (F0, C16): "its mask bitmap" is kept as the layer's [Layer.pixelGeneration], which a
+ * replaced mask bumps (the mask sampled is always the layer's own).
  */
 class MaskFactorCache {
     private var layer: Layer? = null
-    private var mask: Bitmap? = null
+    private var generation = 0L
     private var version = 0L
     private val matrix = FloatArray(9)
     private val probe = FloatArray(9)
@@ -277,7 +280,6 @@ class MaskFactorCache {
     /** Forgets the factors (the next draw samples the mask again); the buffer is kept. */
     fun clear() {
         layer = null
-        mask = null
     }
 
     /** Frees everything. */
@@ -294,7 +296,7 @@ class MaskFactorCache {
         val bmp = target.bitmap
         target.docToTarget.getValues(probe)
         val cur = bytes
-        if (cur != null && this.layer === layer && this.mask === mask && version == layer.contentVersion &&
+        if (cur != null && this.layer === layer && generation == layer.pixelGeneration && version == layer.contentVersion &&
             width == bmp.width && height == bmp.height && probe.contentEquals(matrix)
         ) return cur
         val w = bmp.width; val h = bmp.height
@@ -321,7 +323,7 @@ class MaskFactorCache {
             y += ch
         }
         this.layer = layer
-        this.mask = mask
+        generation = layer.pixelGeneration
         version = layer.contentVersion
         width = w
         height = h

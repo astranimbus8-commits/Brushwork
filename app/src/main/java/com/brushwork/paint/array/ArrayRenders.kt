@@ -139,7 +139,8 @@ internal class ArrayRenders(private val c: EditorController) {
         val stats: Stats,
     ) {
         val contentVersion = layer.contentVersion
-        val bitmap: Bitmap = layer.bitmap
+        /** v1.10 (F0, C16): the layer's bitmap and mask as they were (replaced: stale). */
+        val pixelGeneration = layer.pixelGeneration
         val docW = c.doc.width
         val docH = c.doc.height
         /** The worker's time (ns), or -1 when it failed. */
@@ -431,7 +432,7 @@ internal class ArrayRenders(private val c: EditorController) {
             val present = c.doc.indexOf(layer) >= 0
             val sameData = present && layer.dataSnapshot() == p.before
             val fresh = sameData && c.doc.width == p.docW && c.doc.height == p.docH &&
-                layer.bitmap === p.bitmap && layer.contentVersion == p.contentVersion
+                layer.pixelGeneration == p.pixelGeneration && layer.contentVersion == p.contentVersion
             val patch = p.patch
             ok = when {
                 // A net, never expected: every other step lands this one first (see the class docs).

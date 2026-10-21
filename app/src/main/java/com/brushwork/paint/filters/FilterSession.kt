@@ -74,6 +74,9 @@ class FilterSession(val controller: EditorController, val filter: Filter) : InTo
 
     private val targetBitmap: Bitmap = if (target == EditTarget.MASK) layer.mask!! else layer.bitmap
 
+    /** v1.10 (F0, C16): the layer's [Layer.pixelGeneration] at the start (a replaced bitmap or mask bumps it). */
+    private val targetGeneration: Long = layer.pixelGeneration
+
     /** Parameters dragged on the canvas. */
     val pointParams: List<FilterParam.Point> = filter.params.filterIsInstance<FilterParam.Point>()
 
@@ -804,10 +807,13 @@ class FilterSession(val controller: EditorController, val filter: Filter) : InTo
     }
     // endregion
 
-    /** False (and the session is closed) if the target layer was removed or its bitmap replaced. */
+    /**
+     * False (and the session is closed) if the target layer was removed or its bitmap replaced.
+     * v1.10 (F0, C16): replaced is a changed [Layer.pixelGeneration], which the layer's bitmap and
+     * mask share.
+     */
     private fun checkTarget(): Boolean {
-        val current = if (target == EditTarget.MASK) layer.mask else layer.bitmap
-        val ok = controller.doc.indexOf(layer) >= 0 && current === targetBitmap && !targetBitmap.isRecycled &&
+        val ok = controller.doc.indexOf(layer) >= 0 && layer.pixelGeneration == targetGeneration && !targetBitmap.isRecycled &&
             targetBitmap.width == controller.doc.width && targetBitmap.height == controller.doc.height
         if (!ok) {
             controller.toast("The layer changed, so ${filter.name} was cancelled")
