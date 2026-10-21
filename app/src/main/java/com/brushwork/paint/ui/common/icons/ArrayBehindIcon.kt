@@ -12,7 +12,7 @@ import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.ui.editor.EditorIcons
 
 /**
- * v1.10 (R4, R3): the icon of "Behind" (an array on a new layer behind): the Array tool's icon
+ * v1.10 (R4, R3): the icon of `ArrayLabels110.BEHIND` (an array on a new layer behind): the Array tool's icon
  * ([EditorIcons.tool] of [ToolId.ARRAY]), a little smaller in the upper left, with a small
  * layer-below badge in the lower right (an outlined layer over a solid one). It is never
  * `Icons.Outlined.FlipToBack`, which already means "Backward" in the object bar.

@@ -746,7 +746,7 @@ internal fun CurveSettingsSheet(tool: CurveTool, onDismiss: () -> Unit) {
             )
         }
         // region v110-A6 turnIntoShape
-        // v1.10 (R11, optional): the settings sheet's "Turn into shape" entry (A6).
+        // v1.10 (R11, optional): the settings sheet's `ObjectBarLabels110.TO_SHAPE` entry (A6).
         // endregion
     }
 }

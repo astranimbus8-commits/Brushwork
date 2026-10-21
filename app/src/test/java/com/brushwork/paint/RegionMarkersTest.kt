@@ -92,7 +92,7 @@ class RegionMarkersTest {
         ),
         Expected110("ui/vector/CurveStrips.kt", "A2", "paintMode", listOf(listOf("strokeKindItem"))),
         Expected110("ui/vector/CurveToolOptions.kt", "A2", "paintMode", listOf(listOf("text:SectionHeader(\"Stroke\")"))),
-        Expected110("ui/vector/CurveToolOptions.kt", "A6", "turnIntoShape", listOf(listOf("text:\"Turn into shape\""))),
+        Expected110("ui/vector/CurveToolOptions.kt", "A6", "turnIntoShape", listOf(listOf("text:ObjectBarLabels110.TO_SHAPE"))),
         Expected110("ui/vector/CurveToolOptions.kt", "A5", "cornerChips", listOf(listOf("text:\"Sharp corner\""))),
         Expected110("ui/vector/ShapeStrip.kt", "A2", "paintMode", listOf(listOf("text:STYLE_LABEL"))),
         Expected110("ui/vector/ShapeStrip.kt", "A5", "sharpItems", listOf(listOf("text:SMOOTH_LABEL", "text:setSelectedSmooth"))),

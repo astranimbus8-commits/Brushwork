@@ -508,7 +508,7 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
         (hasSelection || (clipboard != null && clipboard !== hiddenClipboard))
     // Selected vector objects (v1.5): their bar takes the selection bar's place.
     val objectBarVisible = objectsSelected && session == null && busy == null
-    // v1.10 (R4, F0): whether the bars offer "Behind" (A3 backs it with state; false in F0).
+    // v1.10 (R4, F0): whether the bars offer `ArrayLabels110.BEHIND` (A3 backs it with state; false in F0).
     val arrayBehindAvailable by remember(controller) { derivedStateOf { controller.arrayBehindAvailable } }
 
     // ---------------------------------------------------------------- system insets (dp)
@@ -703,7 +703,7 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
             exit = fadeOut(tween(IbisDims.HideInterfaceFadeMs)),
             modifier = selectionModifier,
         ) {
-            // v1.10 (R4, F0): "Behind" on both bars while the array behind can run (A3's entry
+            // v1.10 (R4, F0): `ArrayLabels110.BEHIND` on both bars while the array behind can run (A3's entry
             // point); null hides it.
             val onArrayBehind: (() -> Unit)? = if (arrayBehindAvailable) ({ controller.arrayBehind() }) else null
             if (objectBarVisible) {

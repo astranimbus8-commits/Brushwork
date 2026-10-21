@@ -355,7 +355,7 @@ class EditorController(
     /**
      * v1.10 (F0, R11): shows [text] as a long note ([pendingNote]); with [undoable] its "Undo"
      * takes back the newest step, the one the note is about ([undoNote]). F0 has no caller (A6's
-     * "Turn into shape" calls it after the Shape tool opened).
+     * `ObjectBarLabels110.TO_SHAPE` calls it after the Shape tool opened).
      */
     fun showNote(text: String, undoable: Boolean) {
         pendingNote = PendingNote(text, undoable, undoManager.undoCount)
@@ -2845,7 +2845,7 @@ class EditorController(
 
     // region v110-A3 arrayBehind
     /**
-     * v1.10 (R4, UQ4): "Behind" (the array on a new layer below) can run now. While false the
+     * v1.10 (R4, UQ4): `ArrayLabels110.BEHIND` (the array on a new layer below) can run now. While false the
      * selection bar, the object bar and the layer menu leave the item out. The editor screen reads
      * it in a `derivedStateOf`, so a body reads snapshot state to be followed. F0 stub (A3 body).
      */
