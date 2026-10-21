@@ -104,6 +104,8 @@ import com.brushwork.paint.exchange.VectorFormat
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.StabilizerMode
 import com.brushwork.paint.storage.ExportFormat
+import com.brushwork.paint.tools.ColoredObjectTool
+import com.brushwork.paint.tools.points.CornerTool
 import com.brushwork.paint.ui.assist.GridPanel
 import com.brushwork.paint.ui.assist.RulerPanel
 import com.brushwork.paint.ui.assist.StabilizerPanel
@@ -146,6 +148,8 @@ import com.brushwork.paint.ui.theme.BrushworkColors
 import com.brushwork.paint.ui.theme.IbisColors
 import com.brushwork.paint.ui.theme.IbisDims
 import com.brushwork.paint.ui.tools.CoordinatePill
+import com.brushwork.paint.ui.tools.PillColorCell
+import com.brushwork.paint.ui.tools.PillSharpCell
 import com.brushwork.paint.ui.tools.strip.LocalStripContext
 import com.brushwork.paint.ui.tools.strip.StripContext
 import com.brushwork.paint.ui.tools.strip.StripState
@@ -684,7 +688,7 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
                     .padding(top = pillTop.dp, start = IbisDims.PillStart, end = IbisDims.PillStart),
             ) {
                 // Left out of the canvas fit inset, so it never moves the canvas.
-                Box(Modifier.testTag(ChromeTags.PILL_SLOT).onSizeChanged { pillPx = it.height }) { CoordinatePill(controller) }
+                Box(Modifier.testTag(ChromeTags.PILL_SLOT).onSizeChanged { pillPx = it.height }) { EditorPill(controller) }
             }
         }
 
@@ -994,6 +998,23 @@ private const val PILL_ROOM = 52f
 private class NoteVisuals(override val message: String, override val actionLabel: String?) : SnackbarVisuals {
     override val withDismissAction: Boolean get() = true
     override val duration: SnackbarDuration get() = SnackbarDuration.Long
+}
+
+/**
+ * v1.10 (J20, J28; F0): the X / Y pill with the current tool's Object colors cell (while its
+ * `ColoredObjectTool.objectColors` is not null; A2) and Sharp / Smooth cell (while its
+ * `CornerTool.pointCorners` has a `corner`; A5). Its own composable, so a change of either editor
+ * recomposes the pill and not the screen. No tool has either editor at `gate-v110-0`, so the pill
+ * is v1.9's there.
+ */
+@Composable
+private fun EditorPill(controller: EditorController) {
+    val tool = controller.tools[controller.activeToolId]
+    val colors = (tool as? ColoredObjectTool)?.objectColors
+    val corners = (tool as? CornerTool)?.pointCorners?.takeIf { it.corner != null }
+    val colorCell: (@Composable () -> Unit)? = remember(colors) { colors?.let { e -> { PillColorCell(e) } } }
+    val sharpCell: (@Composable () -> Unit)? = remember(corners) { corners?.let { e -> { PillSharpCell(e) } } }
+    CoordinatePill(controller, colorCell = colorCell, sharpCell = sharpCell)
 }
 
 /**

@@ -7,8 +7,10 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredHeight
@@ -43,6 +45,7 @@ import androidx.compose.ui.input.pointer.AwaitPointerEventScope
 import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.CustomAccessibilityAction
@@ -65,6 +68,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.brushwork.paint.EditorController
@@ -134,9 +140,24 @@ import kotlinx.serialization.builtins.serializer
  * tag [V18Tags.PILL_SEVERAL]) while the tool's [PointEditor.selectSeveralAvailable]:
  * `[✥][X][Y][# 10][🗑][sel]`, folded `[✥][🗑][sel]`; with points but no position yet the pill
  * shows reduced to `[sel]` ([pillRow1]). The strips' "Select several" chips are gone.
+ *
+ * v1.10 (J20, J28; F0): two more cells, each shown only while the caller passes it. [colorCell]
+ * (Object colors, `PillCell.COLOR`; A2's `PillColorCell`) is the first cell of row 2, under the
+ * move icon, at every width, so row 1 stays v1.9's and X and Y keep their widths. [sharpCell]
+ * (Sharp / Smooth, `PillCell.SHARP`; A5's `PillSharpCell`) ends row 2 under "Select several"
+ * (both rows then span the pill's width), or follows COLOR when row 1 does not end with "Select
+ * several", so it is never under the trash ([pillRow2]). Folded, both join row 1:
+ * `[✥][color][🗑][sel][sharp]`. Row 2's Scale cells give way first (each at most
+ * [scaleRowMaxWidth]'s share), so "Keep scale proportions", "Scale increments" and the new cells
+ * stay whole at 360 dp and font scale 2.0. With neither cell the pill is v1.9's.
  */
 @Composable
-fun CoordinatePill(controller: EditorController, modifier: Modifier = Modifier) {
+fun CoordinatePill(
+    controller: EditorController,
+    modifier: Modifier = Modifier,
+    colorCell: (@Composable () -> Unit)? = null,
+    sharpCell: (@Composable () -> Unit)? = null,
+) {
     val tool = controller.tools[controller.activeToolId] ?: return
     // Read once per tool (CurveTool.splinePointPosition is one stable instance, frozen API note).
     val source = remember(tool) { coordinateSourceOf(tool) } ?: return
@@ -156,7 +177,10 @@ fun CoordinatePill(controller: EditorController, modifier: Modifier = Modifier) 
     }
     // v1.7: the trash cell's label (null hides it) and the scale (null hides row 2), observed state.
     val deleteLabel = if (p != null) (tool as? DeletingTool)?.objectDeletion?.deleteLabel else null
-    val cells = pillRow1(hasPosition = p != null, folded = folded, trash = deleteLabel != null, several = editor != null && severalShown)
+    val cells = pillRow1(
+        hasPosition = p != null, folded = folded, trash = deleteLabel != null, several = editor != null && severalShown,
+        color = colorCell != null, sharp = sharpCell != null,
+    )
     if (cells.isEmpty()) return
     controller.docVersion // (the canvas size can change)
     val doc = controller.doc
@@ -172,9 +196,21 @@ fun CoordinatePill(controller: EditorController, modifier: Modifier = Modifier) 
         }
     }
     val uniformOnly = (tool as? ScaledTool)?.objectScale?.uniformOnly == true
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(IbisDims.PillRowGap)) {
+    val pct = percent
+    // v1.10 (J20, J28): row 2's cells; [PillCell.SCALE] alone is v1.9's Scale row.
+    val row2 = pillRow2(
+        hasPosition = p != null, folded = folded, scaleRow = pct != null, color = colorCell != null, sharp = sharpCell != null,
+        row1LastIsSeveral = cells.last() == PillCell.SEVERAL,
+    )
+    // SHARP ends row 2 under row 1's last cell ("Select several"): both rows span the pill (the
+    // widest row's width). Otherwise SHARP follows COLOR, and the rows keep their own widths.
+    val span = row2 != null && PillCell.SHARP in row2 && cells.last() == PillCell.SEVERAL
+    Column(
+        if (span) modifier.width(IntrinsicSize.Max) else modifier,
+        verticalArrangement = Arrangement.spacedBy(IbisDims.PillRowGap),
+    ) {
         Row(
-            Modifier
+            (if (span) Modifier.fillMaxWidth() else Modifier)
                 .height(IbisDims.PillHeight)
                 .background(IbisColors.Pill, RoundedCornerShape(IbisDims.PillRadius))
                 // The gaps between the cells don't fall through to the canvas.
@@ -182,7 +218,7 @@ fun CoordinatePill(controller: EditorController, modifier: Modifier = Modifier) 
                 // What is being placed ("Center", "Point 2", "Source"), for screen readers.
                 .semantics { if (label.isNotEmpty()) contentDescription = label },
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(IbisDims.PillGap),
+            horizontalArrangement = if (span) PillLastAtEnd else Arrangement.spacedBy(IbisDims.PillGap),
         ) {
             for (cell in cells) {
                 when (cell) {
@@ -201,30 +237,159 @@ fun CoordinatePill(controller: EditorController, modifier: Modifier = Modifier) 
                     PillCell.TRASH -> if (deleteLabel != null) TrashCell(controller, tool, deleteLabel)
                     // v1.8 (F4): so does "Select several".
                     PillCell.SEVERAL -> if (editor != null) SeveralCell(controller, editor)
+                    // v1.10 (J20, J28): folded only (unfolded they are row 2's).
+                    PillCell.COLOR -> colorCell?.invoke()
+                    PillCell.SHARP -> sharpCell?.invoke()
+                    PillCell.SCALE -> {}
                 }
             }
         }
-        val pct = percent
-        if (p != null && !folded && pct != null) ScaleRow(controller, tool, pct, uniformOnly, snap)
+        if (row2 != null && pct != null && row2 == listOf(PillCell.SCALE)) {
+            // v1.9's row 2, exactly.
+            ScaleRow(controller, tool, pct, uniformOnly, snap)
+        } else if (row2 != null) {
+            val usable = LocalConfiguration.current.screenWidthDp - 2 * IbisDims.PillStart.value
+            PillRow2(row2, span, scaleRowMaxWidth(usable, sharp = sharpCell != null, color = colorCell != null), colorCell, sharpCell) { m ->
+                if (pct != null) ScaleRow(controller, tool, pct, uniformOnly, snap, m, chrome = false)
+            }
+        }
     }
 }
 
-/** v1.8 (F4, design §3.2): a cell of the pill's first row, in [pillRow1]'s order. */
-internal enum class PillCell { FOLD, X, Y, STEP, TRASH, SEVERAL }
+/**
+ * v1.8 (F4, design §3.2): a cell of the pill's rows, in [pillRow1]'s and [pillRow2]'s order.
+ * v1.10 (J20, J28): [COLOR] and [SHARP]; [SCALE] stands for v1.9's whole Scale row in [pillRow2].
+ */
+internal enum class PillCell { FOLD, COLOR, X, Y, STEP, TRASH, SEVERAL, SHARP, SCALE }
 
 /**
  * v1.8 (F4, design §3.2 and D5): the cells of the pill's first row. With a position:
  * `[✥][X][Y][#][🗑][sel]`, folded `[✥][🗑][sel]` (the trash cell while the tool deletes
  * something, [trash]; "Select several" while it is available, [several]). Without one: only
  * `[sel]` (the tool has points but no position yet), else nothing (no pill, as in v1.7).
+ *
+ * v1.10 (J20, J28): unfolded, exactly v1.9's row 1 at every width ([color] and [sharp] are row
+ * 2's, [pillRow2]). Folded: `[✥][color][🗑][sel][sharp]`. Without a position, v1.9's too (no
+ * COLOR or SHARP: an object or a selected point always has a position).
  */
-internal fun pillRow1(hasPosition: Boolean, folded: Boolean, trash: Boolean, several: Boolean): List<PillCell> {
+internal fun pillRow1(
+    hasPosition: Boolean,
+    folded: Boolean,
+    trash: Boolean,
+    several: Boolean,
+    color: Boolean = false,
+    sharp: Boolean = false,
+): List<PillCell> {
     if (!hasPosition) return if (several) listOf(PillCell.SEVERAL) else emptyList()
     val cells = mutableListOf(PillCell.FOLD)
     if (!folded) cells += listOf(PillCell.X, PillCell.Y, PillCell.STEP)
+    if (folded && color) cells += PillCell.COLOR
     if (trash) cells += PillCell.TRASH
     if (several) cells += PillCell.SEVERAL
+    if (folded && sharp) cells += PillCell.SHARP
     return cells
+}
+
+/**
+ * v1.10 (J20, J28; F0): the pill's unfolded row 2, null for none. COLOR first, under the move icon,
+ * at every width; then the Scale row ([PillCell.SCALE], while [scaleRow]: the tool has a scale);
+ * SHARP last, so it ends under row 1's last cell, "Select several" (both rows then span the pill's
+ * width, a flexible space before SHARP). When row 1's last cell is not "Select several"
+ * ([row1LastIsSeveral] false), SHARP follows COLOR instead (`[color][sharp][Scale row]`), so it is
+ * never directly under the trash (a delete with no confirmation). Today SHARP always comes with
+ * "Select several": it needs a selected point, so `PointEditor.selectSeveralAvailable` holds.
+ * Folded or without a position there is no row 2 ([pillRow1] holds COLOR and SHARP then).
+ * Without [color] and [sharp] it is v1.9's: `[SCALE]` while [scaleRow], else null.
+ */
+internal fun pillRow2(
+    hasPosition: Boolean,
+    folded: Boolean,
+    scaleRow: Boolean,
+    color: Boolean,
+    sharp: Boolean,
+    row1LastIsSeveral: Boolean,
+): List<PillCell>? {
+    if (!hasPosition || folded) return null
+    val cells = ArrayList<PillCell>(3)
+    if (color) cells += PillCell.COLOR
+    if (sharp && !row1LastIsSeveral) cells += PillCell.SHARP
+    if (scaleRow) cells += PillCell.SCALE
+    if (sharp && row1LastIsSeveral) cells += PillCell.SHARP
+    return cells.takeIf { it.isNotEmpty() }
+}
+
+/**
+ * v1.10 (J28, finding 32; F0): the widest the Scale row may be in row 2, in dp, on a pill
+ * [usableDp] wide (the window less the pill's 8 dp margins: 376 at 392 dp, 344 at 360 dp): v1.9's
+ * 328 ([IbisDims.PillScaleRowMaxWidth]) less 44 (a 40 dp cell and a 4 dp gap) for each of SHARP
+ * and COLOR beside it. 256 at 360 dp with both: Keep 40, "Scale increments" 40-56 and three gaps
+ * leave 74-82 dp per Scale cell (they give way first; at least 72).
+ */
+internal fun scaleRowMaxWidth(usableDp: Float, sharp: Boolean, color: Boolean): Float =
+    minOf(IbisDims.PillScaleRowMaxWidth.value, usableDp - (if (sharp) 44f else 0f) - (if (color) 44f else 0f))
+
+/**
+ * v1.10 (J28; F0): row 1's arrangement while SHARP ends row 2: the cells [IbisDims.PillGap] apart
+ * from the start, as `Arrangement.spacedBy`, but the last ("Select several") at the row's end, so
+ * it stays over SHARP when row 1's cells leave room (X and Y give way to their content, a larger
+ * font, a wider row 2).
+ */
+private object PillLastAtEnd : Arrangement.Horizontal {
+    override val spacing: Dp get() = IbisDims.PillGap
+
+    override fun Density.arrange(totalSize: Int, sizes: IntArray, layoutDirection: LayoutDirection, outPositions: IntArray) {
+        if (sizes.isEmpty()) return
+        val gap = spacing.roundToPx()
+        var x = 0
+        for (i in sizes.indices) {
+            outPositions[i] = x
+            x += sizes[i] + gap
+        }
+        val last = sizes.lastIndex
+        outPositions[last] = maxOf(outPositions[last], totalSize - sizes[last])
+        if (layoutDirection == LayoutDirection.Rtl) for (i in sizes.indices) outPositions[i] = totalSize - outPositions[i] - sizes[i]
+    }
+}
+
+/**
+ * v1.10 (J20, J28): row 2 with COLOR or SHARP: one pill background (the Scale row inside draws
+ * none, so the translucent pill is never drawn twice), the [cells] of [pillRow2] in order. The
+ * Scale row ([scaleRow], given its modifier) sits in a flexible box at most [scaleMaxDp] wide;
+ * with [span] the box (or a flexible space when there is no Scale row) fills the rest of the row,
+ * so SHARP ends at the pill's right edge, under "Select several". COLOR and SHARP are measured
+ * before the Scale row, so they never give way.
+ */
+@Composable
+private fun PillRow2(
+    cells: List<PillCell>,
+    span: Boolean,
+    scaleMaxDp: Float,
+    colorCell: (@Composable () -> Unit)?,
+    sharpCell: (@Composable () -> Unit)?,
+    scaleRow: @Composable (Modifier) -> Unit,
+) {
+    Row(
+        (if (span) Modifier.fillMaxWidth() else Modifier)
+            .height(IbisDims.PillHeight)
+            .background(IbisColors.Pill, RoundedCornerShape(IbisDims.PillRadius))
+            .blockCanvasTouches(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(IbisDims.PillGap),
+    ) {
+        for (cell in cells) {
+            when (cell) {
+                PillCell.COLOR -> colorCell?.invoke()
+                PillCell.SCALE -> Box(Modifier.weight(1f, fill = span), contentAlignment = Alignment.CenterStart) {
+                    scaleRow(Modifier.widthIn(max = scaleMaxDp.coerceAtLeast(0f).dp))
+                }
+                PillCell.SHARP -> {
+                    if (span && PillCell.SCALE !in cells) Spacer(Modifier.weight(1f))
+                    sharpCell?.invoke()
+                }
+                else -> {}
+            }
+        }
+    }
 }
 
 // ------------------------------------------------------------------ v1.8 (F4, §3.2): "Select several"
@@ -297,19 +462,34 @@ private const val KEEP_PROPORTIONS_KEY = "pill.keepProportions"
 /**
  * Row 2: "Keep scale proportions", Scale X, Scale Y (hidden when [uniformOnly]) and "Scale
  * increments", for the [percent] (rounded to 0.1) of the tool's [ScaledTool.objectScale].
+ *
+ * v1.10 (J28, finding 32): the Scale cells give way first (`weight(1f, fill = false)`: Keep and
+ * "Scale increments" are measured before them), so on a narrow row the step cell never vanishes;
+ * where v1.9's row fits (360 dp and wider) the cells are as wide as in v1.9. Inside v1.10's row 2
+ * ([chrome] false) the row draws no pill background and blocks no touches of its own (the row
+ * around it does both), and [modifier] caps its width ([scaleRowMaxWidth]).
  */
 @Composable
-private fun ScaleRow(controller: EditorController, tool: Tool, percent: Vec2, uniformOnly: Boolean, snap: Boolean) {
+private fun ScaleRow(
+    controller: EditorController,
+    tool: Tool,
+    percent: Vec2,
+    uniformOnly: Boolean,
+    snap: Boolean,
+    modifier: Modifier = Modifier,
+    chrome: Boolean = true,
+) {
     var keepSetting by remember {
         mutableStateOf(runCatching { controller.settings.getObject(KEEP_PROPORTIONS_KEY, Boolean.serializer()) }.getOrNull() ?: true)
     }
     val keep = keepSetting || uniformOnly
     Row(
-        Modifier
+        modifier
             .testTag(V17Tags.PILL_SCALE_ROW)
             .height(IbisDims.PillHeight)
-            .background(IbisColors.Pill, RoundedCornerShape(IbisDims.PillRadius))
-            .blockCanvasTouches(),
+            .then(
+                if (chrome) Modifier.background(IbisColors.Pill, RoundedCornerShape(IbisDims.PillRadius)).blockCanvasTouches() else Modifier,
+            ),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(IbisDims.PillGap),
     ) {
@@ -317,8 +497,8 @@ private fun ScaleRow(controller: EditorController, tool: Tool, percent: Vec2, un
             keepSetting = v
             controller.settings.putObject(KEEP_PROPORTIONS_KEY, Boolean.serializer(), v)
         }
-        ScaleCell(controller, tool, onX = true, percent, keep, snap)
-        if (!uniformOnly) ScaleCell(controller, tool, onX = false, percent, keep, snap)
+        ScaleCell(controller, tool, onX = true, percent, keep, snap, Modifier.weight(1f, fill = false))
+        if (!uniformOnly) ScaleCell(controller, tool, onX = false, percent, keep, snap, Modifier.weight(1f, fill = false))
         StepCell(controller, IncrementKind.SCALE, PillLabels.SCALE_INCREMENTS)
     }
 }
@@ -352,7 +532,15 @@ private fun KeepCell(on: Boolean, enabled: Boolean, onChange: (Boolean) -> Unit)
  * the other axis follows ([scaleTarget]).
  */
 @Composable
-private fun ScaleCell(controller: EditorController, tool: Tool, onX: Boolean, percent: Vec2, keep: Boolean, snap: Boolean) {
+private fun ScaleCell(
+    controller: EditorController,
+    tool: Tool,
+    onX: Boolean,
+    percent: Vec2,
+    keep: Boolean,
+    snap: Boolean,
+    modifier: Modifier = Modifier,
+) {
     val haptics = LocalHapticFeedback.current
     val inc = controller.increments
     val name = if (onX) PillLabels.SCALE_X else PillLabels.SCALE_Y
@@ -384,7 +572,7 @@ private fun ScaleCell(controller: EditorController, tool: Tool, onX: Boolean, pe
 
     val shown = formatScale(value)
     Box(
-        Modifier
+        modifier
             .requiredHeight(IbisDims.PillCellTouch)
             .semantics {
                 contentDescription = name
