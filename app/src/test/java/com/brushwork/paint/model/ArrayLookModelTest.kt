@@ -24,6 +24,7 @@ class ArrayLookModelTest {
     private val look = ArrayLook(
         opacityStart = 0.9f, opacityEnd = 0.2f, sizeStart = 1.5f, sizeEnd = 0.5f, turnStart = 10f, turnEnd = 90f,
         easing = ArrayEasing.EASE_IN_OUT, tint = listOf(VStop(0f, red), VStop(1f, blue)), tintStrength = 0.6f,
+        colorMode = ArrayColorMode.RECOLOR, // v1.10 (F0, R5): every property differs from its default
     )
 
     @Test

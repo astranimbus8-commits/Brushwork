@@ -43,6 +43,13 @@ internal class LayerStructure(private val c: EditorController) {
         return if (i < 0) insertionPoint() else Insertion(i + 1, layer.parentId)
     }
 
+    /**
+     * v1.10 (F0, R4): directly below [layer] at its level, in its folder ("Array behind": the new
+     * layer takes [layer]'s place in the stack and [layer] stays right above it). The caller
+     * copies [layer]'s clipping, so a clipped source and its copy clip onto the same base.
+     */
+    fun below(layer: Layer): Insertion = Insertion(doc.indexOf(layer), layer.parentId)
+
     // region v110-A7 blank
     /**
      * Every live insert of a new layer goes through here (sweep rule S): the v1.6 AddLayerAction

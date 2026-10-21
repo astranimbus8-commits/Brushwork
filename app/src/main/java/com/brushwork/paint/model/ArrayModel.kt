@@ -19,6 +19,13 @@ enum class ArrayMode { LINE, CIRCLE, CURVE, TRANSFORM }
 enum class ArrayEasing { LINEAR, EASE_IN, EASE_OUT, EASE_IN_OUT }   // labels: ArrayLabels18.EVEN, SPEEDS_UP, SLOWS_DOWN, S_CURVE
 
 /**
+ * v1.10 (F0, R5): how [ArrayLook.tint] colors the copies: TINT is v1.9's tint; RECOLOR (A3)
+ * replaces each copy's colors as `ColorUtils.recolor` does. An unknown future value reads as TINT.
+ */
+@Serializable
+enum class ArrayColorMode { TINT, RECOLOR }   // labels: ArrayLabels110.TINTED, RECOLORED
+
+/**
  * v1.8 (item 2): how copies change from the first to the last. The source never changes (I19).
  * Copy k of n placed instances takes each value at t_k ([ArrayInstances.of]): opacity, size and
  * turn are lerped from start to end, and the tint color is [tint] sampled at t_k, applied with
@@ -36,6 +43,10 @@ data class ArrayLook(
     /** 0 or 2..MAX_STOPS stops, offsets ascending in 0..1. */
     val tint: List<VStop> = emptyList(),
     val tintStrength: Float = 0f,   // 0..1
+    /** v1.10 (F0, R5): how [tint] applies; TINT (v1.9's) is never written, so v1.9 reads the rest. */
+    @OptIn(ExperimentalSerializationApi::class)
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val colorMode: ArrayColorMode = ArrayColorMode.TINT,
 ) {
     /** Draws exactly as no look: opacities and sizes 1, turns 0, and no tint (empty or strength 0). */
     val isIdentity: Boolean
@@ -63,6 +74,7 @@ data class ArrayLook(
             easing = easing,
             tint = if (stops.size < 2) emptyList() else stops,
             tintStrength = f(tintStrength, 0f, 0f, 1f),
+            colorMode = colorMode,
         )
         return if (n == this) this else n
     }
@@ -117,6 +129,13 @@ data class ArraySpec(
     @OptIn(ExperimentalSerializationApi::class)
     @EncodeDefault(EncodeDefault.Mode.NEVER)
     val look: ArrayLook? = null,
+    /**
+     * v1.10 (F0, R4): copy 0 (the source) is not drawn, exported or applied ("Array behind": the
+     * copies sit on their own layer below the source); false (v1.9) is never written.
+     */
+    @OptIn(ExperimentalSerializationApi::class)
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val hideSource: Boolean = false,
 ) {
     /**
      * Usable values only (damaged or crafted data): count 1..[MAX_COUNT]; every number finite
@@ -156,6 +175,7 @@ data class ArraySpec(
             pivotY = opt(pivotY),
             editingSource = editingSource,
             look = look?.sanitized()?.takeUnless { it.isIdentity },
+            hideSource = hideSource,
         )
         return if (n == this) this else n
     }

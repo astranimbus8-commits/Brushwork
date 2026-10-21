@@ -18,6 +18,8 @@ import java.lang.reflect.Modifier
  * property, so a property they forget is silently reset to its default. Every constructor property
  * of the fixture differs from the default (checked per serial element, so a new property fails
  * here until the fixture sets it), and each one survives sanitized() and mapped(). JVM.
+ *
+ * v1.10 (F0, R4, R5): the fixture sets [ArraySpec.hideSource] and the look's [ArrayLook.colorMode].
  */
 class ArraySpecFieldsTest {
     private val json = Json { encodeDefaults = true; allowSpecialFloatingPointValues = true }
@@ -29,6 +31,7 @@ class ArraySpecFieldsTest {
     private val look = ArrayLook(
         opacityStart = 0.9f, opacityEnd = 0.2f, sizeStart = 1.5f, sizeEnd = 0.5f, turnStart = 10f, turnEnd = 90f,
         easing = ArrayEasing.EASE_IN_OUT, tint = listOf(VStop(0f, 0xFFFF0000.toInt()), VStop(1f, 0xFF0000FF.toInt())), tintStrength = 0.6f,
+        colorMode = ArrayColorMode.RECOLOR,
     )
 
     /** Every property set to a usable value other than its default. */
@@ -37,7 +40,7 @@ class ArraySpecFieldsTest {
         centerX = 300f, centerY = 200f, sweepDeg = 270f, rotateCopies = false,
         guide = VSubpath(listOf(VAnchor(0f, 0f), VAnchor(100f, 50f, inX = -20f, inY = 0f, outX = 20f, outY = 0f), VAnchor(200f, 0f))),
         spacing = 40f, alignToCurve = false, moveX = 12f, moveY = -3f, turnDeg = 15f, scale = 0.9f, pivotX = 10f, pivotY = 20f,
-        editingSource = true, look = look,
+        editingSource = true, look = look, hideSource = true,
     )
 
     @Test
