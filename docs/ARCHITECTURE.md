@@ -120,6 +120,10 @@ I1–I19 stay as they are. I10 now reads `ui/common/LabelsV19.kt` (tags in `V19T
 - **I26 UI memory is not history.** State that must survive history taps (the open More rows) lives in `UiPrefs` (the file "brushwork_ui"), never in the journaled `AppSettings` ("UiPrefs versus AppSettings" below). Checked by `UiPrefsJournalTest` and `UiPrefsStickyRowsTest`.
 - **I27 Large text never clips a strip.** `StripLayout` sizes cells by their declared widths (I18), so every new v1.9 strip cell, popup and sheet control keeps its text inside its cell at font scale 1.3 and 2.0, at 392 and 360 dp: a label wraps, shrinks (to 11 sp at least) or moves the control to the next line rather than overflow. Each area's narrow UI test for its new cells runs at those scales and calls `Qa19Ui.assertNoTextOverflow()`; the lead's `StripFontScaleTest` (gate 2, design 3.4) checks every tool with all areas merged.
 
+## Invariants (v1.10)
+I1–I27 stay as they are. I10 also reads `ui/common/LabelsV110.kt` (tags in `V110Tags`), checked by `LabelsV110Test`. v1.10 adds eight, I28–I35 (design 0.4): the lead writes I35 with the UI seams (F0) and I28–I34 with the engine contracts (F1). Where an invariant names an area's work, the foundation put the seam in place ("v1.10 foundation (gates 0 and 1)" below):
+- **I35 Object colors go through one walker.** Every per-object color change (R2 pill, R5 vector recolor, R6 filter, R7 previews) reads and writes colors through `vector/ObjectColorSlots`, which applies the fill-follows pin (C4).
+
 ## v1.6 foundation contracts (frozen APIs the areas build on)
 - **Tools:** `ToolId.PATH` (a third `CurveKind` of `CurveTool`) and `ToolId.TEXT_FRAMES`
   (`tools/text/frames/TextFrameTool`), appended after `MASK`. `ui/editor/ToolMenu` lists the
@@ -2313,6 +2317,194 @@ unused by product code. The CI flake of `FringePerfTest` is in "Testing and CI (
 - Shipped off, pending the Gate 3 device A/B: A6's P3 (`StrokeBelowCache.FOR_STROKES`), R11a
   (`StrokeBelowCache.FOR_ERASER`) and P4 (`StrokePreview.SHIPPED`, the "Drawing preview"
   setting hidden).
+
+## v1.10 foundation (gates 0 and 1)
+
+The lead's part of v1.10 (design sections 3 and 4). The lead builds the foundation on branch
+`v110-foundation` from `main` at `ce5b7550` (v1.9.0): G0 (the ownership check and its tables),
+F0 (the UI seams, the limit seam, identity and every region marker; tag `gate-v110-0`) and F1
+(the engine contracts; tag `gate-v110-1`). Eleven areas then build in parallel, A1-A6 from
+`gate-v110-0` and A7-A11 from `gate-v110-1`; each writes its section under "v1.10 areas" below.
+The invariants are in "Invariants (v1.10)" above.
+
+### Steps, areas and ownership
+
+- Gates are tagged `gate-v110-0`, `gate-v110-1` and `gate-v110-2`. Areas work in `.wt/v110<x>`
+  on branch `v110-<x>`. Lead commits are `v110F<n>: <text>` and `v110G2: <text>`; lead
+  bookkeeping is `v110-lead: <text>`.
+- The UI areas: A1 mirror sides, A2 object colors, A3 array behind and recolored arrays, A4
+  Change Drawing Color on objects, A5 group snapping and the sharp / smooth cell, A6 Edit and
+  Turn into shape. The engine areas: A7 budgets and limits, A8 tiles and residency, A9 the
+  compositor on tiles, A10 swap and the automatic check, A11 streamed load and save.
+- Default merge order: F0, F1, A7, A11, A5, A6, A1, A2, A4, A3, A8, A9, A10, then G2.
+  `$Sequential` (rule O of `.wt/_tools/ownership-check-v110.ps1`) holds three files:
+  `EditorSession.kt` (A11 before A10), `engine/LayerStructure.kt` (A7 before A8) and
+  `tools/transform/DataLift.kt` (A1 before A8). The later area passes only once the earlier
+  area's merge (recorded in `.wt/_tools/v110-merges.json`) is an ancestor of its HEAD.
+- Each area keeps `.wt/v110<x>-progress.txt`, seeded by the lead from
+  `.wt/_tools/v110-progress-template.txt`; rule C reads it.
+
+### The UI seams (F0)
+
+Every seam is hidden or a no-op until its area fills it, so the app at `gate-v110-0` behaves as
+v1.9 except the Shape style labels (R3: "Stroke only", "Fill only" and "Stroke and fill", the
+Curve tool's `CurveLabels17` texts).
+
+- Texts and tags: `ui/common/LabelsV110.kt` (one constant per new text; areas use the constant
+  and never retype it) and `ui/common/V110Tags.kt`, checked by `LabelsV110Test`.
+- `vector/select/TapCycle.kt` (R1; A1): the spatial tap cycle, without a timer.
+- `core/ColorUtils.recolor` and `recolorMatrix` (C3; A3, A4): v1.9's Change Drawing Color.
+  `Filter.colorMapper` (A4) is null by default.
+- `vector/ObjectColorSlots.kt` (I35, C4; A2, A3, A4): the one walker of object colors.
+- `tools/ObjectColorEditor.kt` and `ColoredObjectTool` (R2; A2): what the pill's Object colors
+  cell edits. The Shape, Curve and Text tools hold `objectColors = null` in their regions
+  `v110-A2 colors`.
+- `tools/points/PointCornerEditor.kt` and `CornerTool` (R12; A5): what the Sharp / Smooth cell
+  edits. The Shape and Curve tools hold `pointCorners = null` in their regions
+  `v110-A5 corners`.
+- `ui/common/PaintModeControls.kt` (R3; A2): `PaintMode`, `PaintModeGlyph` and
+  `PaintModeSegments`.
+- `ColorPickerDialog(onPreview)` (R7): a live preview; Cancel and Back restore the start color.
+- The coordinate pill: `PillCell.COLOR` starts row 2, under the move icon, and `PillCell.SHARP`
+  sits under SEVERAL (never under the trash); `pillRow1`, `pillRow2` and `scaleRowMaxWidth`.
+  `ui/tools/PillColorCell.kt` (A2) and `ui/tools/PillSharpCell.kt` (A5) are stubs with frozen
+  signatures. Each cell shows only while its tool's editor is not null. Checked by
+  `PillBudgetTest` (392 and 360 dp, folded, font scale 2.0).
+- The bars (A6, with A3's entry point): `SelectionActionBar(onEdit, onArrayBehind)` and
+  `VectorObjectBar(recolorIcon, onEdit, onToShape, onArrayBehind)`. Each new item is hidden
+  while its callback is null. `EditorIcons.arrayBehind` is in
+  `ui/common/icons/ArrayBehindIcon.kt`. `ObjectActions.editRefusal`, `openInEditor` and
+  `turnIntoShape` are stubs; `CurveTool.kindOf` is the curve kind of a path and
+  `CurveTool.openObject` is a stub in the region `v110-A6 openObject`. The editor screen passes
+  `onArrayBehind` to both bars while `EditorController.arrayBehindAvailable` is true (A3's
+  region; false at F0). A6 wires Edit and Turn into shape inside its own bar files.
+- The long-note channel (R11): `EditorController.showNote(text, undoable)` sets `pendingNote`.
+  The editor screen shows the note two frames later, so a tool switch made with it has settled.
+  The note is a Long message with a dismiss action, plus "Undo" when undoable. Its Undo
+  (`EditorController.undoNote`) works only while the note's step is still the newest. A later
+  message waits behind the note instead of replacing it. Checked by `ShowNoteChannelTest`.
+- `UiPrefs`: `hintArrayBehind` (`hint.arrayBehind`; A3) and `hintSidePicks`
+  (`hint.sidePicks`; A1).
+
+### The limit seam and identity (F0)
+
+Written with F0's limit seam (design 3.2): `LayerBudget`, `LayerBudgetV19`, the limit sites and
+the identity-check migration.
+
+### The engine contracts (F1)
+
+Written at F1 (design 3.3): the frozen declarations listed in `.wt/_tools/v110-frozen-api.md`.
+
+### Region markers and rules P, M, E, W, N, F and G
+
+F0 placed every marker of design 4.2 around the code its area changes: `// region v110-<X>
+<name>` ... `// endregion` in Kotlin, and `<!-- v110-<X> -->` ... `<!-- /v110-<X> -->` under
+"v1.10 areas" below. One owner may repeat a name: `v110-A11 canvasOps` is three blocks in
+`EditorController.kt`, `v110-A8 duplicate` two in `engine/LayerStructure.kt`, `v110-A1 copies`
+five in `vector/VectorLayers.kt`, `v110-A5 snap` two in each of `ShapeTool.kt` and
+`CurveTool.kt`, `v110-A5 sharpItems` three in `CurveStrips.kt`, `v110-A3 arrayExport` two in
+`ExportSceneBuilder.kt`, `v110-A8 pins` two in `DataLift.kt` and `v110-A10 session` two in
+`EditorSession.kt`. At least three lines separate a block from any other region. Markers never
+change after F0 (rule R); `RegionMarkersTest` pins them with v1.9's. An area cannot add an
+import to a file it does not own, so its code inside a region of such a file uses fully
+qualified names. Rules P, M, E, W, N, F and G (design 6.3) are described at F1.
+
+### CI: shards, `unit-full` and the two floors
+
+Written at F1 (design 6.5).
+
+## v1.10 areas
+
+One block per area, in area order. Each area writes its section only inside its own block
+(rule R), in its last plan step before its cut steps; the heading above each block stays.
+
+### Mirror sides: tap cycle, linked isometries, detach, delete one side (A1)
+
+<!-- v110-A1 -->
+
+(A1 writes this section.)
+
+<!-- /v110-A1 -->
+
+### Object colors: the sheet, the delegates, the pill cell, one paint-mode control (A2)
+
+<!-- v110-A2 -->
+
+(A2 writes this section.)
+
+<!-- /v110-A2 -->
+
+### Array behind and Recolored arrays (A3)
+
+<!-- v110-A3 -->
+
+(A3 writes this section.)
+
+<!-- /v110-A3 -->
+
+### Change Drawing Color on objects: `colorMapper` and object mode (A4)
+
+<!-- v110-A4 -->
+
+(A4 writes this section.)
+
+<!-- /v110-A4 -->
+
+### Group snapping and the sharp / smooth cell (A5)
+
+<!-- v110-A5 -->
+
+(A5 writes this section.)
+
+<!-- /v110-A5 -->
+
+### Edit and Turn into shape on the bars (A6)
+
+<!-- v110-A6 -->
+
+(A6 writes this section.)
+
+<!-- /v110-A6 -->
+
+### Budgets J and R, `LayerBudgetV110`, limits and the layers panel (A7)
+
+<!-- v110-A7 -->
+
+(A7 writes this section.)
+
+<!-- /v110-A7 -->
+
+### Tiles, residency, activation and undo on tiles (A8)
+
+<!-- v110-A8 -->
+
+(A8 writes this section.)
+
+<!-- /v110-A8 -->
+
+### The compositor on tiles, projections, `PixelReads`, thumbnails (A9)
+
+<!-- v110-A9 -->
+
+(A9 writes this section.)
+
+<!-- /v110-A9 -->
+
+### Swap, the automatic check, safety nets, "Layer storage" settings, `EngineStats` (A10)
+
+<!-- v110-A10 -->
+
+(A10 writes this section.)
+
+<!-- /v110-A10 -->
+
+### Streamed load and save, format 4, multi-layer operations, import and export (A11)
+
+<!-- v110-A11 -->
+
+(A11 writes this section.)
+
+<!-- /v110-A11 -->
 
 ## Core model (`model/`)
 - `Document` — size, dpi, color mode, `layers` (index 0 = bottom), `activeLayerIndex`, grid + ruler settings.
