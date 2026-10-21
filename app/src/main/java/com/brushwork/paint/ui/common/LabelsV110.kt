@@ -58,7 +58,7 @@ object PointLabels110 {     // R12
     const val POLYLINE_ALWAYS_SHARP = "Polyline points are always sharp"
 }
 
-object ObjectBarLabels110 { // R8, R9
+object ObjectBarLabels110 { // R10, R11
     const val EDIT = "Edit"; const val EDIT_DESC = "Edit the selected object in its tool"
     const val NO_EDITOR_PARTS = "This path has several parts. Edit it with Transform"
     const val NO_EDITOR_SMALL = "This path is too small to edit"
@@ -72,7 +72,7 @@ object ObjectBarLabels110 { // R8, R9
     const val REFUSE_POINTS = "This path has too many points for the Shape tool"
 }
 
-object LayersLabels110 {    // R10, R11
+object LayersLabels110 {    // R13
     fun count(n: Int): String = if (n == 1) "1 layer" else "$n layers"
     const val GUARD = "An artwork can have at most 10,000 layers"
     const val PAYLOAD_TOO_MANY = "The share format holds at most 1000 layers. Export as PSD, or merge some layers first."
