@@ -15,7 +15,7 @@ object AdjustmentLayerOps {
     /** "New adjustment layer (Tone)": a Tone adjustment above the active layer (one step), then its Adjust sheet. */
     fun createDefault(c: EditorController) {
         if (!c.canAddAdjustmentLayer) {
-            c.toast("Layer limit reached (${c.maxLayers}) for this canvas size")
+            c.toast(c.layerLimitMessage())
             return
         }
         c.addAdjustmentLayer(AdjustmentEffects.defaultSpec(drawingColor = c.color), null) ?: return
@@ -57,7 +57,7 @@ object AdjustmentLayerOps {
             return null
         }
         if (!c.canAddAdjustmentLayer) {
-            c.toast("Layer limit reached (${c.maxLayers}) for this canvas size")
+            c.toast(c.layerLimitMessage())
             return null
         }
         val sel = c.selection

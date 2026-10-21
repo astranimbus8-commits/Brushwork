@@ -40,6 +40,7 @@ import com.brushwork.paint.tools.select.POINT_GUIDE_EPS
 import com.brushwork.paint.tools.select.pointBox
 import com.brushwork.paint.tools.select.pointLines
 import com.brushwork.paint.tools.text.frames.FrameGeometry
+import com.brushwork.paint.tools.text.frames.TextThreads
 import com.brushwork.paint.tools.transform.DocBox
 import com.brushwork.paint.tools.transform.SnapAxis
 import com.brushwork.paint.tools.transform.SnapGuide
@@ -329,7 +330,7 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
         endNodes()
         val join = joinTarget()
         if (join == null && !controller.canAddLayer) {
-            controller.toast("Layer limit reached (${controller.maxLayers}) for this canvas size: delete or merge a layer to add text")
+            controller.toast(controller.layerLimitMessage(TextThreads.LIMIT_SUFFIX))
             return
         }
         rememberVectorLayer()

@@ -36,7 +36,7 @@ internal class EditorActions(private val controller: EditorController, private v
     fun importPicture(uri: Uri) {
         if (!readyForDocumentAction()) return
         if (!controller.canAddLayer) {
-            controller.toast("Layer limit reached (${controller.maxLayers}) for this canvas size")
+            controller.toast(controller.layerLimitMessage())
             return
         }
         val doc = controller.doc

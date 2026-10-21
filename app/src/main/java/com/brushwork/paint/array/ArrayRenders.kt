@@ -16,6 +16,7 @@ import com.brushwork.paint.EditorController
 import com.brushwork.paint.engine.ArrayDraw
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.EditTarget
+import com.brushwork.paint.engine.LayerBudget
 import com.brushwork.paint.engine.LayerDataAction
 import com.brushwork.paint.model.ArrayInstances
 import com.brushwork.paint.model.Layer
@@ -111,7 +112,7 @@ internal class ArrayRenders(private val c: EditorController) {
     internal var workerHook: (() -> Unit)? = null
 
     /** Test seam: the bytes a patch may take (larger: synchronous). */
-    internal var patchBudget: () -> Long = { Runtime.getRuntime().maxMemory() / 8 }
+    internal var patchBudget: () -> Long = { LayerBudget.current.renderCacheCap() }
 
     /**
      * Nanoseconds per cost unit: [KIND_PIXELS] (bitmap pixels drawn) and [KIND_SOURCE] (text and

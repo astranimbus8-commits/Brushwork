@@ -667,7 +667,7 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool,
         }
         if (layer == null) {
             if (!controller.canAddAdjustmentLayer) {
-                controller.toast("Layer limit reached (${controller.maxLayers}) for this canvas size")
+                controller.toast(controller.layerLimitMessage())
                 return
             }
         } else if (!MaskEdits.usable(controller, layer)) {

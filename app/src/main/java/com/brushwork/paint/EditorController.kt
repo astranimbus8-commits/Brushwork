@@ -35,6 +35,8 @@ import com.brushwork.paint.engine.EditInvalidation
 import com.brushwork.paint.engine.EditTarget
 import com.brushwork.paint.engine.FolderComposite
 import com.brushwork.paint.engine.LambdaAction
+import com.brushwork.paint.engine.LayerBudget
+import com.brushwork.paint.engine.LayerBudgetV19
 import com.brushwork.paint.engine.LayerConvert
 import com.brushwork.paint.engine.LayerDataAction
 import com.brushwork.paint.engine.LayerMerge
@@ -425,15 +427,13 @@ class EditorController(
         return trimmed.bytes
     }
 
-    /** Maximum number of layers for this canvas size given the heap. */
-    val maxLayers: Int
-        get() {
-            val budget = (maxHeap * 0.55).toLong()
-            val per = max(1L, doc.layerBytes)
-            return (budget / per - 3).toInt().coerceIn(2, 100)
-        }
+    /**
+     * Maximum number of layers for this canvas size given the heap. v1.10 (F0, C15): this and the
+     * members below delegate to [LayerBudget.current] ([LayerBudgetV19]: v1.9's formulas).
+     */
+    val maxLayers: Int get() = LayerBudget.current.maxLayers(doc)
 
-    val canAddLayer: Boolean get() = effectiveLayerCount < maxLayers
+    val canAddLayer: Boolean get() = LayerBudget.current.canAdd(doc)
 
     /**
      * v1.7 (I14): what [maxLayers] counts: the pixel layers (folders count 0) plus the array
@@ -446,16 +446,13 @@ class EditorController(
      * checks it) and the layer window's "n / max" counts masks. An artwork already over the
      * limit still opens; only adding stops.
      */
-    val effectiveLayerCount: Int
-        get() {
-            val per = max(1L, doc.layerBytes)
-            val arrayBytes = doc.layers.sumOf { it.array?.pixels?.bytes ?: 0L }
-            val masks = doc.layers.count { it.mask != null }
-            return doc.pixelLayerCount + masks + ((arrayBytes + per - 1) / per).toInt()
-        }
+    val effectiveLayerCount: Int get() = LayerBudget.current.used(doc)
 
-    /** The message shown when a new layer would pass [maxLayers]. */
-    internal fun layerLimitMessage(): String = "Layer limit reached (${maxLayers}) for this canvas size"
+    /**
+     * The message shown when a new layer would pass [maxLayers]. v1.10 (F0, C15): [suffix] follows
+     * after a colon (the text tools' `TextThreads.LIMIT_SUFFIX`).
+     */
+    internal fun layerLimitMessage(suffix: String? = null): String = LayerBudget.current.refusal(doc, suffix)
     // endregion
 
     fun pushUndo(action: UndoAction) {
@@ -1529,7 +1526,7 @@ class EditorController(
      * inserted, so the step and the tool's re-activation see it complete.
      */
     private fun addLayerWith(name: String?, index: Int?, label: String, init: (Layer) -> Unit): Layer? {
-        if (!canAddLayer) { toast("Layer limit reached (${maxLayers}) for this canvas size"); return null }
+        if (!canAddLayer) { toast(layerLimitMessage()); return null }
         val bmp = try { BitmapUtils.createLayerBitmap(doc.width, doc.height) } catch (e: OutOfMemoryError) { toast("Not enough memory for another layer"); return null }
         // v1.6 (V4): the step's edit scope sits INSIDE withToolPaused, so the tool's pending work
         // commits first (its own steps and events), and a layer-list listener amends this step.
@@ -1549,7 +1546,7 @@ class EditorController(
      * [textData] / [shapeData] make it an editable text / shape layer.
      */
     fun addLayerWithContent(name: String, label: String, textData: String? = null, shapeData: String? = null, draw: (Canvas) -> Unit): Layer? {
-        if (!canAddLayer) { toast("Layer limit reached (${maxLayers}) for this canvas size"); return null }
+        if (!canAddLayer) { toast(layerLimitMessage()); return null }
         val bmp = try {
             BitmapUtils.createLayerBitmap(doc.width, doc.height).also { b ->
                 // v1.7 (I14): the array seam; a new layer has no array yet (ArrayOps adds one
@@ -3078,7 +3075,7 @@ class EditorController(
     // ------------------------------------------------------------------ adjustment layers & editable masks (v1.5, §4.3)
 
     /** An adjustment layer needs two layer slots (its bitmap and its mask). */
-    val canAddAdjustmentLayer: Boolean get() = effectiveLayerCount + 2 <= maxLayers
+    val canAddAdjustmentLayer: Boolean get() = LayerBudget.current.canAddAdjustment(doc)
 
     /**
      * Adds an adjustment layer with effect [spec] above the active layer (named after the effect:
@@ -3086,7 +3083,7 @@ class EditorController(
      * Returns null at the layer limit or without memory.
      */
     fun addAdjustmentLayer(spec: AdjustmentSpec, mask: MaskSpec?, label: String = "New adjustment layer"): Layer? {
-        if (!canAddAdjustmentLayer) { toast("Layer limit reached (${maxLayers}) for this canvas size"); return null }
+        if (!canAddAdjustmentLayer) { toast(layerLimitMessage()); return null }
         val maskBmp = try {
             mask?.let { renderMaskSpec(it) }
         } catch (e: OutOfMemoryError) {

@@ -426,7 +426,7 @@ class TextThreads(private val c: EditorController) : EditListener, LayerListList
         }
         val news = chain.count { it.layer == null }
         if (c.effectiveLayerCount + news > c.maxLayers) {
-            c.toast(LAYER_LIMIT.format(c.maxLayers))
+            c.toast(c.layerLimitMessage(LIMIT_SUFFIX))
             return null
         }
         var result: List<Layer>? = null
@@ -472,8 +472,14 @@ class TextThreads(private val c: EditorController) : EditListener, LayerListList
         /** Decoded data kept beyond what the layers hold now (undo and redo bring it back). */
         private const val STALE_DECODED = 32
 
-        /** The Text tool's message at the layer limit. */
+        /**
+         * The Text tool's message at the layer limit. v1.10 (F0, C15): the tools show
+         * `layerLimitMessage(LIMIT_SUFFIX)` instead, the same text.
+         */
         const val LAYER_LIMIT = "Layer limit reached (%d) for this canvas size: delete or merge a layer to add text"
+
+        /** v1.10 (F0, C15): what the text tools' layer-limit message adds after the colon ([LAYER_LIMIT]'s ending). */
+        const val LIMIT_SUFFIX = "delete or merge a layer to add text"
 
         /**
          * Cheap test of stored text [data] (JSON): false when it is certainly no frame (its

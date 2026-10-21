@@ -144,7 +144,7 @@ object ContentAwareFillJob {
         if (options.output == CafOutput.CURRENT_LAYER && !checkWritable(controller, layer)) { restoreUndone(); return false }
         if (options.output == CafOutput.NEW_LAYER && !controller.canAddLayer) {
             restoreUndone()
-            controller.toast("Layer limit reached (${controller.maxLayers}) for this canvas size")
+            controller.toast(controller.layerLimitMessage())
             return false
         }
         val hole = try { holeOf(sel, controller.doc.width, controller.doc.height) } catch (e: OutOfMemoryError) {

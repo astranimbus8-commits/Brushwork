@@ -12,6 +12,7 @@ import com.brushwork.paint.brush.TipCache
 import com.brushwork.paint.engine.ArrayDraw
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.CanvasOps
+import com.brushwork.paint.engine.LayerBudget
 import com.brushwork.paint.model.ArrayPixels
 import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.Layer
@@ -29,7 +30,6 @@ import com.brushwork.paint.vector.VShape
 import com.brushwork.paint.vector.VectorContent
 import com.brushwork.paint.vector.VectorOps
 import com.brushwork.paint.vector.render.VectorLayerRenderer
-import kotlin.math.max
 
 /**
  * v1.7 (item 3, area E): what the array operations share: the kind of an array's source, how a
@@ -114,15 +114,10 @@ internal object ArraySources {
      * `EditorController.effectiveLayerCount`): `pixelLayerCount + masks + newLayers + ⌈array
      * bytes / layerBytes⌉ ≤ maxLayers`, which is `canAddLayer` for one new layer without pixels.
      * v1.9 (A7b step 6, the lead at A7b's merge): the layer masks count, as there.
+     * v1.10 (F0, C15): asked of [LayerBudget.current] (`canAdd`), the same rule.
      */
-    fun hasRoom(c: EditorController, newLayers: Int, addBytes: Long, freedBytes: Long = 0L): Boolean {
-        val doc = c.doc
-        val per = max(1L, doc.layerBytes)
-        val bytes = max(0L, doc.layers.sumOf { it.array?.pixels?.bytes ?: 0L } - freedBytes + addBytes)
-        val masks = doc.layers.count { it.mask != null }
-        val count = doc.pixelLayerCount.toLong() + masks + newLayers + (bytes + per - 1) / per
-        return count <= c.maxLayers
-    }
+    fun hasRoom(c: EditorController, newLayers: Int, addBytes: Long, freedBytes: Long = 0L): Boolean =
+        LayerBudget.current.canAdd(c.doc, newLayers, addBytes - freedBytes)
 
     /** "Array N" with the smallest N ≥ 1 that no layer uses yet. */
     fun newName(c: EditorController): String {

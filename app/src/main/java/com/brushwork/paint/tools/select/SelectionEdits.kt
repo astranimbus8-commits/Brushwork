@@ -233,7 +233,7 @@ object SelectionEdits {
         val sel = controller.selection ?: return null
         val src = controller.activeLayer
         if (!controller.checkEditable(src)) return null
-        if (!controller.canAddLayer) { controller.toast("Layer limit reached (${controller.maxLayers}) for this canvas size"); return null }
+        if (!controller.canAddLayer) { controller.toast(controller.layerLimitMessage()); return null }
         controller.currentTool.onDeactivate()
         val layer = cut(controller, src, sel)
         controller.currentTool.onActivate()

@@ -177,7 +177,8 @@ object CanvasOps {
     /** Bytes needed by [bitmapCount] ARGB bitmaps of [width] x [height]. */
     fun estimateBytes(bitmapCount: Int, width: Int, height: Int): Long = bitmapCount.toLong() * width * height * 4
 
-    fun memoryBudget(): Long = (Runtime.getRuntime().maxMemory() * MEMORY_FRACTION).toLong()
+    /** v1.10 (F0, C15): [LayerBudget.canvasBudgetBytes] ([LayerBudgetV19]: `maxMemory` x [MEMORY_FRACTION], as v1.9). */
+    fun memoryBudget(): Long = LayerBudget.current.canvasBudgetBytes()
 
     /** Returns null when a [width] x [height] document with [bitmapCount] bitmaps is allowed, else why not. */
     fun validateSize(width: Int, height: Int, bitmapCount: Int, budget: Long = memoryBudget()): String? {

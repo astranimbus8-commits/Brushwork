@@ -252,7 +252,7 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
     /** Opens the story editor for a new frame whose outer box is [r] (document px). */
     private fun startNewFrame(r: RectF) {
         if (!controller.canAddLayer) {
-            controller.toast(TextThreads.LAYER_LIMIT.format(controller.maxLayers))
+            controller.toast(controller.layerLimitMessage(TextThreads.LIMIT_SUFFIX))
             return
         }
         val template = FrameGeometry.placed(TextItem(spec = specForNewFrame()), r.left, r.top, r.right, r.bottom)
@@ -278,7 +278,7 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
         val target = storyTarget
         val id = storyIdEditing
         if (new && cur.text.isNotBlank() && !controller.canAddLayer) {
-            controller.toast(TextThreads.LAYER_LIMIT.format(controller.maxLayers))
+            controller.toast(controller.layerLimitMessage(TextThreads.LIMIT_SUFFIX))
             return
         }
         // Nothing pending from here on: writing pauses this tool (withToolPaused), which must
@@ -930,7 +930,7 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
         cancelLink()
         val item = threads.frameOf(from) ?: return null
         if (!controller.canAddLayer) {
-            controller.toast(TextThreads.LAYER_LIMIT.format(controller.maxLayers))
+            controller.toast(controller.layerLimitMessage(TextThreads.LIMIT_SUFFIX))
             return null
         }
         val frames = threads.framesOf(item.thread.storyId)

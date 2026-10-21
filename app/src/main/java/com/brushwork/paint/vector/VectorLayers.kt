@@ -21,6 +21,7 @@ import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.engine.ArrayDraw
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.EditTarget
+import com.brushwork.paint.engine.LayerBudget
 import com.brushwork.paint.engine.LayerDataAction
 import com.brushwork.paint.engine.ViewTransform
 import com.brushwork.paint.model.Layer
@@ -579,7 +580,7 @@ class VectorLayers internal constructor(private val c: EditorController) {
         // endregion
 
         // The memory guard (see beginEdit): hole + floating within the budget, else both smaller.
-        val budget = Runtime.getRuntime().maxMemory() / 8
+        val budget = LayerBudget.current.renderCacheCap()
         // region v110-A1 copies
         val fw = floatingRect.width().toLong()
         val fh = floatingRect.height().toLong()
@@ -1243,7 +1244,7 @@ class VectorLayers internal constructor(private val c: EditorController) {
         val touch = listOfNotNull(oldOnCanvas, if (anyLanding) landing else null)
         if (touch.isEmpty()) return false
         val bytes = touch.sumOf { it.width().toLong() * it.height() * 4L }
-        if (bytes > Runtime.getRuntime().maxMemory() / 8) return false
+        if (bytes > LayerBudget.current.renderCacheCap()) return false
         val src = try {
             if (anyLanding) {
                 val from = Rect(landing).apply { offset(-dx, -dy) }
