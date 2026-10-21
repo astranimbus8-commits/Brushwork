@@ -3,6 +3,7 @@ package com.brushwork.paint.tools.vector
 import com.brushwork.paint.core.Geometry
 import com.brushwork.paint.core.IncrementMath
 import com.brushwork.paint.core.Vec2
+import com.brushwork.paint.ui.common.CurveLabels17
 import kotlinx.serialization.Serializable
 import kotlin.math.PI
 import kotlin.math.abs
@@ -39,11 +40,15 @@ enum class ShapeType(val label: String) {
     val hasCorners: Boolean get() = this == RECTANGLE || this == POLYGON || this == STAR || this == COG
 }
 
+/**
+ * The Shape tool's paint mode. v1.10 (R3, F0): the labels are the Curve tool's ([CurveLabels17]), so
+ * one paint mode reads the same in both tools (v1.9 had shorter words of its own).
+ */
 @Serializable
 enum class ShapeStyle(val label: String, val stroke: Boolean, val fill: Boolean) {
-    STROKE("Stroke", true, false),
-    FILL("Fill", false, true),
-    STROKE_FILL("Stroke + fill", true, true),
+    STROKE(CurveLabels17.STROKE_ONLY, true, false),
+    FILL(CurveLabels17.FILL_ONLY, false, true),
+    STROKE_FILL(CurveLabels17.BOTH, true, true),
 }
 
 /** Live-corner treatment of polygon vertices (like Illustrator's corner widget). */

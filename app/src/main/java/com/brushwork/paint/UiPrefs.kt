@@ -24,10 +24,28 @@ class UiPrefs(context: Context) {
         get() = prefs.getBoolean(OBJECT_BAR_MORE_OPEN, false)
         set(v) = prefs.edit { putBoolean(OBJECT_BAR_MORE_OPEN, v) }
 
+    /**
+     * v1.10 (R4, F0): the array-behind hint (`ArrayLabels110.BEHIND_HINT`) was shown on this
+     * install; false by default (missing = not shown yet). A3 reads and sets it.
+     */
+    var hintArrayBehind: Boolean
+        get() = prefs.getBoolean(HINT_ARRAY_BEHIND, false)
+        set(v) = prefs.edit { putBoolean(HINT_ARRAY_BEHIND, v) }
+
+    /**
+     * v1.10 (R1, F0): how many times one mirror side was picked on this phone, across sessions; 0
+     * by default. `MirrorLabels110.SIDE_HINT` shows while it is below 3. A1 counts it.
+     */
+    var hintSidePicks: Int
+        get() = prefs.getInt(HINT_SIDE_PICKS, 0)
+        set(v) = prefs.edit { putInt(HINT_SIDE_PICKS, v) }
+
     companion object {
         /** The preferences file (never `brushwork_settings`, which is journaled). */
         const val FILE = "brushwork_ui"
         const val STRIP_OPEN_ROWS = "strip.openRows"
         const val OBJECT_BAR_MORE_OPEN = "objectBar.moreOpen"
+        const val HINT_ARRAY_BEHIND = "hint.arrayBehind"
+        const val HINT_SIDE_PICKS = "hint.sidePicks"
     }
 }

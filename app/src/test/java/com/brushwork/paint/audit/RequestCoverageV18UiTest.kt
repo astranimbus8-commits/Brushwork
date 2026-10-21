@@ -1362,7 +1362,7 @@ internal class RequestCoverageV18 private constructor(private val h: ChromeHarne
         assertFalse("the sheet closed", has(CogLabels18.TEETH, exact = true))
         StripTestKit.closeMoreRow()
         click("Shape style", exact = true)
-        click("Fill", exact = true)
+        click(ShapeStyle.FILL.label, exact = true)
         assertEquals(ShapeStyle.FILL, tool.settings.style)
         StripTestKit.closeMoreRow()
         ui.stroke(100f to 50f, 200f to 150f, 300f to 250f)
