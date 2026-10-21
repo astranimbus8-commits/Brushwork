@@ -6,7 +6,8 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 
 /**
- * Pure-Kotlin color helpers (no android.graphics dependency, so they work in JVM unit tests).
+ * Pure-Kotlin color helpers (no android.graphics dependency, so they work in JVM unit tests;
+ * v1.10's [recolorMatrix] alone returns an android.graphics.ColorMatrix).
  * Colors are packed 0xAARRGGBB ints, NON-premultiplied unless a function says otherwise.
  */
 object ColorUtils {
@@ -46,6 +47,39 @@ object ColorUtils {
             (red(c1) + (red(c2) - red(c1)) * u).roundToInt(),
             (green(c1) + (green(c2) - green(c1)) * u).roundToInt(),
             (blue(c1) + (blue(c2) - blue(c1)) * u).roundToInt(),
+        )
+    }
+
+    /**
+     * v1.10 (C3): Change Drawing Color's math on unpremultiplied ARGB, bit for bit v1.9's
+     * `ChangeDrawingColorFilter.apply` per pixel: m = (rgb and 0xFFFFFF) or (c and 0xFF000000.toInt());
+     * if (s >= 1f) m else [lerp] (c, m, s) (lerp rounds each channel with roundToInt). A pixel with
+     * alpha 0 is returned unchanged, as is every color at s <= 0 (or NaN). Alpha is kept and the
+     * target's alpha ignored. A4 makes `ChangeDrawingColorFilter.apply` and CDC's colorMapper call
+     * it; A3's Recolor mode calls it.
+     */
+    @JvmStatic fun recolor(c: Int, rgb: Int, s: Float): Int {
+        if (c ushr 24 == 0 || !(s > 0f)) return c
+        val m = (rgb and 0xFFFFFF) or (c and 0xFF000000.toInt())
+        return if (s >= 1f) m else lerp(c, m, s)
+    }
+
+    /**
+     * v1.10 (C3): [recolor] as a ColorMatrix (unpremultiplied, as Android applies one): each color
+     * channel becomes (1 - s) x + s t, alpha is kept, [s] is clamped to 0..1 and the alpha of
+     * [target] is ignored. drawBitmap with it equals recolor() within +-1 per channel on pixels
+     * with alpha > 0.
+     */
+    @JvmStatic fun recolorMatrix(target: Int, s: Float): android.graphics.ColorMatrix {
+        val k = if (s > 0f) clamp01(s) else 0f
+        val u = 1f - k
+        return android.graphics.ColorMatrix(
+            floatArrayOf(
+                u, 0f, 0f, 0f, k * red(target),
+                0f, u, 0f, 0f, k * green(target),
+                0f, 0f, u, 0f, k * blue(target),
+                0f, 0f, 0f, 1f, 0f,
+            ),
         )
     }
 

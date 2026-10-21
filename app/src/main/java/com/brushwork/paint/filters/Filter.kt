@@ -38,6 +38,14 @@ abstract class Filter(
      */
     open fun pixelMapper(values: FilterValues): PixelMapper? = null
 
+    /**
+     * v1.10 (R6): a per-color map equal to [apply] on a 1 x 1 bitmap of that color (unpremultiplied
+     * ARGB in and out; ColorMapperContractTest). null = pixels only: the filter rasterizes a data
+     * layer. Only Change Drawing Color returns one in 1.10 (A4), and the objects of a vector, text
+     * or shape layer are then recolored through `ObjectColorSlots` without rasterizing.
+     */
+    open fun colorMapper(values: FilterValues): ((Int) -> Int)? = null
+
     /** True when this filter can be the live effect of an adjustment layer. */
     val isAdjustmentCapable: Boolean get() = !generatesContent && pixelMapper(defaultValues()) != null
 
