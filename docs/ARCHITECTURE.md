@@ -2388,8 +2388,62 @@ Curve tool's `CurveLabels17` texts).
 
 ### The limit seam and identity (F0)
 
-Written with F0's limit seam (design 3.2): `LayerBudget`, `LayerBudgetV19`, the limit sites and
-the identity-check migration.
+**The limit seam (C15).** `engine/LayerBudget.kt` answers every layer and canvas limit: for a
+document `used`, `maxLayers`, `canAdd(doc, layers, extraBytes)`, `room`, `canAddAdjustment`,
+`refusal(doc, suffix)` and `canTransformCanvas`; for a size before a document exists
+`rawMaxLayers`, `canvasFits`, `canvasCheck`, `importMaxSide` and `capacity`; and the byte budgets
+`canvasBudgetBytes` (canvas operations) and `renderCacheCap` (the vector render caches and the
+array patches). `LayerBudget.current` is `LayerBudgetV19`, v1.9's formulas exactly (55 % of the
+heap less three layer buffers, clamped to 2..100 layers; a mask counts as a layer and array
+sources by their bytes; an eighth of the heap for the render caches), until F1 resolves the
+engine. No policy reports more than `MAX_LAYERS_GUARD` layers.
+
+- Sites that read it: the `layerCap` region of `EditorController` (`maxLayers`, `canAddLayer`,
+  `effectiveLayerCount`, `layerLimitMessage(suffix)`) and `canAddAdjustmentLayer`; every
+  literal refusal (`layerLimitMessage()`); the text tools' refusals
+  (`layerLimitMessage(TextThreads.LIMIT_SUFFIX)`, the same text as `TextThreads.LAYER_LIMIT`,
+  which stays declared); `ArraySources.hasRoom` (`canAdd(doc, newLayers, addBytes -
+  freedBytes)`); `CanvasOps.memoryBudget()`; the render caches of `VectorLayers` and
+  `ArrayRenders.patchBudget`. Code that reads the controller members is unchanged. The gallery,
+  import and resize dialogs keep the heap-taking forms (`CanvasLimits`, `CanvasPresets`,
+  `NewArtwork.for*`, `CanvasOps.validateSize`) in F0.
+- `LayerBudgetV19ParityTest` compares every member with v1.9's formulas, copied, on 12 canvas
+  sizes times 6 document states, then the controller members and the sites on a real editor,
+  and shows with a stand-in policy that each site reads `LayerBudget.current`.
+
+**Identity (C16 part 1).** The `Layer.bitmap` and `Layer.mask` setters bump
+`Layer.pixelGeneration` when they replace the bitmap by another one (adding or removing a mask
+too). Assigning the same bitmap and pixel edits in place do not (`contentVersion` counts those).
+`Layer.owns(b)` is true for the layer's own bitmap or mask only.
+
+- Staleness keys compare `pixelGeneration` with `contentVersion` instead of bitmap identity:
+  the live adjustments' `BelowKey`, the pending renders of `ArrayRenders` and `VectorLayers`
+  (and a vector edit's start), the `LayerBoundsCache` worker, the content-aware fill request,
+  `CanvasSnapshot.matches` (through `LayerSnapshot.pixelGeneration`), the filter session's
+  target and the adjustment stage's mask-factor cache. One generation covers the bitmap and
+  the mask, so a mask added or removed on the filtered layer during a content filter session
+  ends the session (v1.9 went on). A key also goes stale after a replacement that is taken back
+  by assigning the old bitmap again (an edit session's blank swap), where v1.9's key was fresh:
+  one redraw of the same pixels.
+- Folder sentinels in `ColorSelectTool` and `MagneticLassoTool` test `isFolder`;
+  `EditorController.verifyTree` and `Undo` keep comparing with `Layer.FOLDER_BITMAP`.
+- Own-bitmap tests use `owns`: `copySelection`, the vector shift and the canvas operations'
+  pending bitmap (`LayerSnapshot.owns`).
+- `Undo`'s `DocumentBitmapsAction.Entry` defaults and the snapshot diffs of `CanvasOps` keep
+  bitmap identity until F1 and A11.
+- `GenerationReplacesIdentityTest` checks the setters, `owns` and the keys. Rule G of the
+  ownership check refuses a new `.bitmap` or `.mask` identity comparison.
+
+**Model seams (R4, R5).** `LayerStructure.below(layer)` is the insertion point directly below a
+layer, at its index and in its folder; the caller copies the layer's clipping
+(`BelowInsertionTest`). `ArraySpec.hideSource` and `ArrayLook.colorMode`
+(`ArrayColorMode.TINT` or `RECOLOR`) are written only when set, so a v1.9 file reads and writes
+the same; `sanitized()` and `mapped()` keep them (`ArraySpecFieldsTest`).
+
+**Frozen signatures.** `FrozenApiSignatureTest` (test root) reads the main sources and pins the
+F0 declarations the areas build against: each signature as written (whitespace and a trailing
+comma aside) inside its blocks, and the exact members of each frozen interface, enum and
+object. F1 adds its part to `PARTS`.
 
 ### The engine contracts (F1)
 
