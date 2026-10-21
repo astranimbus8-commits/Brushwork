@@ -37,8 +37,10 @@ import com.brushwork.paint.model.IncrementKind
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.LayerBlendMode
 import com.brushwork.paint.model.Selection
+import com.brushwork.paint.tools.ColoredObjectTool
 import com.brushwork.paint.tools.DeletingTool
 import com.brushwork.paint.tools.ErasableTool
+import com.brushwork.paint.tools.ObjectColorEditor
 import com.brushwork.paint.tools.ObjectDeletion
 import com.brushwork.paint.tools.ObjectPosition
 import com.brushwork.paint.tools.ObjectScale
@@ -49,8 +51,10 @@ import com.brushwork.paint.tools.Tool
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
 import com.brushwork.paint.tools.points.BevelPoint
+import com.brushwork.paint.tools.points.CornerTool
 import com.brushwork.paint.tools.points.Mixed
 import com.brushwork.paint.tools.points.PointBevel
+import com.brushwork.paint.tools.points.PointCornerEditor
 import com.brushwork.paint.tools.points.PointEditor
 import com.brushwork.paint.tools.points.PointGizmo
 import com.brushwork.paint.tools.points.PointGroupMath
@@ -294,7 +298,8 @@ data class ShapeSettings(
  * the Scale step from its start. Per axis a guide wins, then the grid, then the step; the readout
  * (`increments.readout`) says where a stepped gesture is.
  */
-class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, PillPositionTool, ScaledTool, DeletingTool, ErasableTool {
+class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, PillPositionTool, ScaledTool, DeletingTool, ErasableTool,
+    ColoredObjectTool, CornerTool {
     override val id = ToolId.SHAPE
 
     /** Current options (Compose state); change them with [update]. */
@@ -1549,6 +1554,11 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
     /** v1.7 (item 13): the pill's trash cell while a shape is pending ([ShapeObjectDeletion]). */
     override val objectDeletion: ObjectDeletion? get() = if (box != null) deletion else null
 
+    // region v110-A2 colors
+    /** v1.10 (R2): the pill's Object colors cell. F0: none, so the cell stays hidden (A2 body). */
+    override val objectColors: ObjectColorEditor? = null
+    // endregion
+
     /**
      * The points the pill acts on as a group, with their selection: in Points mode with at least
      * one point selected; null otherwise (the pill acts on the whole shape).
@@ -1559,6 +1569,11 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         val sel = pointSelection.resized(anchors.size)
         return if (sel.isEmpty) null else anchors to sel
     }
+
+    // region v110-A5 corners
+    /** v1.10 (R12): the pill's Sharp / Smooth cell. F0: none, so the cell stays hidden (A5 body). */
+    override val pointCorners: PointCornerEditor? = null
+    // endregion
 
     /**
      * "Delete shape" (the pill's trash cell, design §3.13): ONE controller step "Delete shape"
@@ -2084,6 +2099,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         return if ((s.layer.vector?.objects?.size ?: 0) <= 1) listOf(s.layer) else emptyList()
     }
 
+    // region v110-A5 snap
     /** Starts snapping for a gesture on the pending shape (see the class comment). */
     private fun beginSnap() {
         val exclude = snapExclude()
@@ -2107,6 +2123,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
             else -> snap.begin(exclude = exclude)
         }
     }
+    // endregion
 
     override fun onMove(p: ToolPoint) {
         val pt = Vec2(p.x, p.y)
@@ -2365,6 +2382,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         applyAnchors(startAnchors.mapIndexed { i, a -> if (i == dragIndex) a.moved(target) else a }, start.rotationDeg)
     }
 
+    // region v110-A5 snap
     /** The selected points dragged by one of them: it snaps (and steps) like a dragged point, the others follow. */
     private fun dragGroup(pt: Vec2) {
         val d = pt - downPoint
@@ -2381,6 +2399,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         if (inc.enabled) stepReadout = gizmoReadout(m)
         setGroupTransform(m)
     }
+    // endregion
 
     /** What a stepped gizmo drag shows: the move, the scale or the angle. */
     private fun gizmoReadout(m: Affine2): String? = when (gizmoPart) {
@@ -3485,6 +3504,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         return false
     }
 
+    // region v110-A6 open
     /**
      * Opens shape object [id] of vector layer [layer] for editing (v1.5): the layer becomes
      * active, the object is shown through an edit session (the layer with a hole, the edited
@@ -3524,6 +3544,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         }
         return opened || !answered
     }
+    // endregion
 
     private fun startObjectEdit(session: VectorEditSession, current: VShape) {
         val shape = current.shape

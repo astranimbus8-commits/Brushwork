@@ -24,7 +24,9 @@ import com.brushwork.paint.fonts.ImportedFont
 import com.brushwork.paint.model.GridType
 import com.brushwork.paint.model.IncrementKind
 import com.brushwork.paint.model.Layer
+import com.brushwork.paint.tools.ColoredObjectTool
 import com.brushwork.paint.tools.DeletingTool
+import com.brushwork.paint.tools.ObjectColorEditor
 import com.brushwork.paint.tools.ObjectDeletion
 import com.brushwork.paint.tools.ObjectPosition
 import com.brushwork.paint.tools.ObjectScale
@@ -95,7 +97,8 @@ import kotlin.math.max
  * snaps so its outline touches a line. The text layer being edited is never a target. Pinching
  * isn't snapped.
  */
-class TextTool(controller: EditorController) : Tool(controller), TextEditorHost, KerningEditor, PillPositionTool, ScaledTool, DeletingTool {
+class TextTool(controller: EditorController) : Tool(controller), TextEditorHost, KerningEditor, PillPositionTool, ScaledTool, DeletingTool,
+    ColoredObjectTool {
     override val id = ToolId.TEXT
 
     // v1.6 TextEditorHost capability flags: the Text tool offers everything.
@@ -1343,6 +1346,11 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
 
     /** v1.7 (item 13): the pill's trash cell, "Delete text", while a text is open. */
     override val objectDeletion: ObjectDeletion? get() = if (item != null) textDeletion else null
+
+    // region v110-A2 colors
+    /** v1.10 (R2): the pill's Object colors cell. F0: none, so the cell stays hidden (A2 body). */
+    override val objectColors: ObjectColorEditor? = null
+    // endregion
 
     /**
      * The pill's trash cell (item 13), without a confirmation: a text never committed is dropped

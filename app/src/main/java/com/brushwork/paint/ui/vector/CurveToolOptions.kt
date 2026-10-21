@@ -644,6 +644,7 @@ internal fun CurveSettingsSheet(tool: CurveTool, onDismiss: () -> Unit) {
     fun set(f: (CurveSettings) -> CurveSettings) = tool.update(f)
 
     BwSheet(title = tool.id.label, onDismiss = onDismiss) {
+        // region v110-A2 paintMode
         SectionHeader("Stroke")
         ChoiceChips(CurveStroke.entries.map { it.label }, s.stroke.ordinal, { i ->
             val e = CurveStroke.entries[i]
@@ -703,6 +704,7 @@ internal fun CurveSettingsSheet(tool: CurveTool, onDismiss: () -> Unit) {
             // A reopened path with a gradient fill (an imported SVG) keeps it until a color is picked.
             FillColorRow(s.fillColor, controller.color, keptLabel = if (tool.reopenedGradientFill) "Gradient (kept)" else null) { col -> set { it.copy(fillColor = col) } }
         }
+        // endregion
 
         SectionHeader("Thickness")
         Hint("Select a point to set its thickness (0–300 %). The line blends smoothly from point to point.")
@@ -743,6 +745,9 @@ internal fun CurveSettingsSheet(tool: CurveTool, onDismiss: () -> Unit) {
                 Modifier.padding(top = 8.dp), description = CurveLabels19.OWN_LAYER_DESC,
             )
         }
+        // region v110-A6 turnIntoShape
+        // v1.10 (R11, optional): the settings sheet's "Turn into shape" entry (A6).
+        // endregion
     }
 }
 
@@ -868,11 +873,13 @@ internal fun CurveNumbersSheet(tool: CurveTool, onDismiss: () -> Unit) {
             )
             val anchor = if (tool.isPath) null else tool.anchors.getOrNull(sel)
             Row(Modifier.fillMaxWidth().padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                // region v110-A5 cornerChips
                 if (!tool.polyline && anchor != null) {
                     ChoiceChips(listOf("Smooth", "Sharp corner"), if (anchor.sharp) 1 else 0, { i -> tool.setSharp(sel, i == 1) }, Modifier.weight(1f))
                 } else {
                     Spacer(Modifier.weight(1f))
                 }
+                // endregion
                 TextButton(onClick = { tool.deleteAnchor(sel) }) {
                     Icon(Icons.Outlined.Delete, contentDescription = null, tint = BrushworkColors.Danger, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(4.dp))

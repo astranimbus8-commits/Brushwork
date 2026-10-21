@@ -43,6 +43,7 @@ internal class LayerStructure(private val c: EditorController) {
         return if (i < 0) insertionPoint() else Insertion(i + 1, layer.parentId)
     }
 
+    // region v110-A7 blank
     /**
      * Every live insert of a new layer goes through here (sweep rule S): the v1.6 AddLayerAction
      * without folders, else one LayerTreeAction. [at] null = [insertionPoint]. The new layer becomes
@@ -83,6 +84,7 @@ internal class LayerStructure(private val c: EditorController) {
         if (layer.isFolder && folderCount() >= LayerTree.MAX_FOLDERS) { c.toast(FolderLabels.COUNT_LIMIT); return null }
         return applied(label, LayerTree.inserted(doc.layers, pos, listOf(layer), ins.parentId))
     }
+    // endregion
 
     /**
      * Applies [plan] as ONE [LayerTreeAction] named [label]. False when the plan breaks I11 (too
@@ -152,6 +154,7 @@ internal class LayerStructure(private val c: EditorController) {
         true
     }
 
+    // region v110-A8 duplicate
     /**
      * Duplicates [layer] directly above itself (above its block), the copy active. A layer: as
      * v1.6's "Duplicate layer" (with a selection, only the selected pixels: "Duplicate selection";
@@ -197,7 +200,11 @@ internal class LayerStructure(private val c: EditorController) {
         c.queueLayerList(LayerListEvent(LayerListKind.DUPLICATED, copy, layer, stepLabel))
         return copy
     }
+    // endregion
 
+    // A folder: its whole block (every child and its mask), new ids, parents remapped.
+
+    // region v110-A8 duplicate
     private fun duplicateFolder(folder: Layer, label: String): Layer? {
         val idx = doc.indexOf(folder)
         val members = doc.layers.subList(LayerTree.block(doc.layers, idx).first, idx + 1).toList()
@@ -235,6 +242,7 @@ internal class LayerStructure(private val c: EditorController) {
         for ((m, copy) in members.zip(copies)) c.queueLayerList(LayerListEvent(LayerListKind.DUPLICATED, copy, m, label))
         return copies.last()
     }
+    // endregion
 
     /**
      * Moves [layer] (a folder with its block) so that its top lands at flat index [toIndex] of the

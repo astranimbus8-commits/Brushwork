@@ -329,6 +329,7 @@ class VectorLayers internal constructor(private val c: EditorController) {
     /** Everything [obj] can paint (document px, including the brush radius). */
     fun paintBounds(obj: VObject): RectF = VectorOps.bounds(obj)
 
+    // region v110-A1 copies
     /**
      * The topmost object of [layer] under [p] within [tolDoc] px; [below] = only objects under
      * that id, and when none is, from the top again (repeated taps cycle through overlaps).
@@ -357,6 +358,7 @@ class VectorLayers internal constructor(private val c: EditorController) {
         }
         return null
     }
+    // endregion
 
     /** Ids of the objects of [layer] that [sel] touches. */
     fun touching(layer: Layer, sel: Selection): Set<Long> {
@@ -385,6 +387,7 @@ class VectorLayers internal constructor(private val c: EditorController) {
         }
     }
 
+    // region v110-A1 copies
     /**
      * Prepares an edit preview of the objects [ids] (hole + floating) and installs it as the
      * render override (with no [VectorEditSession.inner]: a painting tool's live stroke is
@@ -428,6 +431,7 @@ class VectorLayers internal constructor(private val c: EditorController) {
         }
         beginEditAttempt(layer, ids, onReady, 0)
     }
+    // endregion
 
     private fun cancelPreparing(p: PreparingEdit) {
         if (p.done) return
@@ -550,6 +554,7 @@ class VectorLayers internal constructor(private val c: EditorController) {
 
     private fun recycle(vararg b: Bitmap?) { for (x in b) if (x != null && !x.isRecycled) x.recycle() }
 
+    // region v110-A1 copies
     /**
      * v1.7 (I14): on an arrayed layer ([array] non-null) the cache also shows the copies, so a
      * lift is never "every object" (a copy of the cache would carry the copies along), and the
@@ -571,8 +576,11 @@ class VectorLayers internal constructor(private val c: EditorController) {
         val holeRect = Rect(floatingRect)
         if (!holeRect.intersect(0, 0, docW, docH)) holeRect.setEmpty()
         holeRect.set(gridRect(holeRect))
+        // endregion
 
+        // The memory guard (see beginEdit): hole + floating within the budget, else both smaller.
         val budget = Runtime.getRuntime().maxMemory() / 8
+        // region v110-A1 copies
         val fw = floatingRect.width().toLong()
         val fh = floatingRect.height().toLong()
         val holeArea = if (all) 0L else holeRect.width().toLong() * holeRect.height()
@@ -598,6 +606,7 @@ class VectorLayers internal constructor(private val c: EditorController) {
             floatingCut = if (docRect.contains(floatingRect)) docRect else null,
         )
     }
+    // endregion
 
     /** Cost units of preparing [plan] (every object lifted: only what is drawn past the canvas). */
     private fun editUnits(plan: EditPlan): Double {
@@ -628,6 +637,7 @@ class VectorLayers internal constructor(private val c: EditorController) {
         return b
     }
 
+    // region v110-A1 copies
     /**
      * Renders an edit session's floating and hole bitmaps. An every-object lift copies [cache]
      * (the layer's bitmap, read on the main thread only), or takes [prefilled] (that copy, made on
@@ -674,6 +684,7 @@ class VectorLayers internal constructor(private val c: EditorController) {
         }
         return floating to hole
     }
+    // endregion
 
     private fun install(layer: Layer, plan: EditPlan, floating: Bitmap?, hole: Bitmap?, onReady: (VectorEditSession?) -> Unit) {
         val session = VectorEditSession(c, layer, plan.present, floating, plan.floatingRect, plan.fScale, plan.holeRect, hole, plan.hScale)

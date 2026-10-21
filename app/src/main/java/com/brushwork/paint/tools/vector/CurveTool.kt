@@ -33,8 +33,10 @@ import com.brushwork.paint.engine.ViewTransform
 import com.brushwork.paint.model.GridType
 import com.brushwork.paint.model.IncrementKind
 import com.brushwork.paint.model.Layer
+import com.brushwork.paint.tools.ColoredObjectTool
 import com.brushwork.paint.tools.DeletingTool
 import com.brushwork.paint.tools.ErasableTool
+import com.brushwork.paint.tools.ObjectColorEditor
 import com.brushwork.paint.tools.ObjectDeletion
 import com.brushwork.paint.tools.ObjectPosition
 import com.brushwork.paint.tools.ObjectScale
@@ -44,7 +46,9 @@ import com.brushwork.paint.tools.Tool
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
 import com.brushwork.paint.tools.points.BevelPoint
+import com.brushwork.paint.tools.points.CornerTool
 import com.brushwork.paint.tools.points.PointBevel
+import com.brushwork.paint.tools.points.PointCornerEditor
 import com.brushwork.paint.tools.points.PointEditor
 import com.brushwork.paint.tools.points.PointGizmo
 import com.brushwork.paint.tools.points.PointGroupMath
@@ -243,7 +247,7 @@ data class CurveSettings(
  *   With increments off every gesture is exactly v1.5.
  */
 class CurveTool(controller: EditorController, val kind: CurveKind) :
-    Tool(controller), PointEditor, PillPositionTool, ScaledTool, DeletingTool, ErasableTool {
+    Tool(controller), PointEditor, PillPositionTool, ScaledTool, DeletingTool, ErasableTool, ColoredObjectTool, CornerTool {
     /** v1.5 constructor: the Polyline tool when [polyline], else the Curve tool. */
     constructor(controller: EditorController, polyline: Boolean) : this(controller, if (polyline) CurveKind.POLYLINE else CurveKind.CURVE)
 
@@ -1915,11 +1919,21 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
     /** The pill's trash cell, whenever a path is open (Compose state). */
     override val objectDeletion: ObjectDeletion? get() = if (pointCount > 0) pillDeletion else null
 
+    // region v110-A2 colors
+    /** v1.10 (R2): the pill's Object colors cell. F0: none, so the cell stays hidden (A2 body). */
+    override val objectColors: ObjectColorEditor? = null
+    // endregion
+
     /** The points the pill's group edits act on: the selection with two or more selected, else every point. */
     private fun pillTargets(): PointSelection {
         val sel = pointSelection
         return if (sel.count >= 2) sel else PointSelection.all(pointCount)
     }
+
+    // region v110-A5 corners
+    /** v1.10 (R12): the pill's Sharp / Smooth cell. F0: none, so the cell stays hidden (A5 body). */
+    override val pointCorners: PointCornerEditor? = null
+    // endregion
 
     /**
      * The points of [sel] of [baseAnchors] (Curve, Polyline) or [baseSpline] (Path) mapped by [m],
@@ -2419,6 +2433,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         return if (isPath) (if (s != null) SplineEditing.nearestPoint(s.points, p, tol) else -1) else nearestAnchor(p, tol)
     }
 
+    // region v110-A5 snap
     /**
      * The touch at [pt] belongs to the point group (true; [drag] is set): with "Select several",
      * or with two or more points selected. The gizmo's handles win over a point unless the point
@@ -2528,6 +2543,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         gizmoLayout = null
         gizmoPart = PointGizmo.Part.NONE
     }
+    // endregion
 
     /**
      * A two-finger pinch that starts inside the gizmo box (a finger or their midpoint on it)
@@ -2999,6 +3015,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         preview.interacting = on
     }
 
+    // region v110-A5 snap
     /**
      * Starts snapping for this touch. The anchors (all but [except]) are point targets as they
      * are now (a copy: the dragged point never becomes its own target when targets are rebuilt);
@@ -3013,6 +3030,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         else anchors.forEachIndexed { i, a -> if (!skip(i)) others += a.pos }
         snap.begin(includeSelection = true) { pointLines(others, POINT_LABEL) }
     }
+    // endregion
 
     /**
      * An anchor at [p]: snapped to objects / the other anchors when "Snap to objects" is on, and
@@ -3067,7 +3085,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
 
     /**
      * A path object of the active vector layer under [p] that a tap reopens, and the kind of tool
-     * that edits it ([editorKindOf]): this one, or Path for a Curve / Polyline tapping a spline
+     * that edits it ([kindOf]): this one, or Path for a Curve / Polyline tapping a spline
      * path, or Curve / Polyline for Path tapping a plain path. v1.9 (R14): Curve and Polyline
      * reopen each other's paths too, each in its own tool (up to v1.8 they left them alone).
      */
@@ -3079,24 +3097,13 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         val tol = controller.docLength(PATH_HIT_DP)
         val hit = controller.vectors.hitTest(layer, p, tol) as? VPath ?: return null
         if (!hit.isCurveEditable || hit.subpaths[0].anchors.size < 2) return null
-        val k = editorKindOf(hit)
+        val k = kindOf(hit)
         // A filled path with a visible line reopens from its line: a tap inside its fill starts
         // a new path there (curves are drawn over filled shapes; a fill alone reopens anywhere).
         // v1.8 (item 1a): the line of any of its copies reopens the path itself (its source).
         val reach = lineReach(hit)
         if (hit.fill != null && reach > 0f && !ObjectCopies.hits(hit.copies, p, tol) { q, t -> distanceToLine(hit, q) <= reach + t }) return null
         return hit to k
-    }
-
-    /**
-     * The tool that edits [p]: Path when it keeps a spline that passes the I9 check
-     * ([SplineBezier.matches]; else the spline is stale and the path is a plain Bézier path),
-     * otherwise Polyline or Curve by its corners.
-     */
-    private fun editorKindOf(p: VPath): CurveKind = when {
-        p.spline != null && SplineBezier.matches(p) -> CurveKind.PATH
-        p.polyline -> CurveKind.POLYLINE
-        else -> CurveKind.CURVE
     }
 
     /** How far [p]'s line paints from its centre line (document px): 0 when it paints nothing. */
@@ -3123,10 +3130,10 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
 
     /**
      * True for a single-subpath path this tool edits: curves in the Curve tool, polylines in the
-     * Polyline tool, splines that pass the I9 check in the Path tool ([editorKindOf]).
+     * Polyline tool, splines that pass the I9 check in the Path tool ([kindOf]).
      */
     private fun canReopen(p: VPath): Boolean =
-        p.isCurveEditable && p.subpaths[0].anchors.size >= 2 && editorKindOf(p) == kind
+        p.isCurveEditable && p.subpaths[0].anchors.size >= 2 && kindOf(p) == kind
 
     /** A path object being edited again (see [reopen]). */
     private class Reopened(
@@ -3215,6 +3222,14 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         val path = layer.vector?.byId(objectId) as? VPath ?: return
         tool.reopenSelecting(path, select)
     }
+
+    // region v110-A6 openObject
+    /**
+     * v1.10 (R10): opens path object [id] of layer [layerId] in the tool of [kind] ([kindOf]), for
+     * the bars' Edit. True when it opened. F0 stub: false (A6 body and its guard).
+     */
+    fun openObject(layerId: Long, id: Long, kind: CurveKind): Boolean = false
+    // endregion
 
     private fun open(session: VectorEditSession, layer: Layer, path: VPath, select: IntArray? = null) {
         val st = path.stroke
@@ -4506,6 +4521,19 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
                 (tools[ToolId.PATH] as? CurveTool)?.slotFlash.orZero()
 
         private fun Int?.orZero(): Int = this ?: 0
+
+        /**
+         * The tool that edits [p]: Path when it keeps a spline that passes the I9 check
+         * ([SplineBezier.matches]; else the spline is stale and the path is a plain Bézier path),
+         * otherwise Polyline or Curve by its corners. v1.10 (F0): in the companion, so the bars'
+         * Edit (A6) opens a path in its own tool.
+         */
+        fun kindOf(p: VPath): CurveKind = when {
+            p.spline != null && SplineBezier.matches(p) -> CurveKind.PATH
+            p.polyline -> CurveKind.POLYLINE
+            else -> CurveKind.CURVE
+        }
+
         /** Undo label of ✓ of a new Path-tool path. */
         const val PATH_LABEL = "Path"
         /** Shown when ✓ of the Curve tool stores a former Path-tool path without its spline. */

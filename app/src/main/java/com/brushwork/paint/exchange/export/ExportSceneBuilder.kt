@@ -499,6 +499,7 @@ class ExportSceneBuilder(
         return items
     }
 
+    // region v110-A3 arrayExport
     /**
      * v1.7 (§6.2, I14): a text array as every copy's filled outlines: the parts the text paints
      * ([TextSource.parts]) mapped by each [ArrayLayout] matrix, measured from the bounds the
@@ -555,6 +556,7 @@ class ExportSceneBuilder(
         }
         return out
     }
+    // endregion
 
     /**
      * One `<text>` of [runs] (the letters; their outline stroke is drawn behind the fill). v1.9
@@ -634,6 +636,7 @@ class ExportSceneBuilder(
 
     // ------------------------------------------------------------------ pictures
 
+    // region v110-A11 layerExport
     /** [layer]'s pixels cropped to their content (null when empty). */
     private fun layerImage(layer: Layer, prefix: String = "img"): SceneImage? {
         val r = contentBounds(layer) ?: return null
@@ -741,6 +744,7 @@ class ExportSceneBuilder(
             }
         }
     }
+    // endregion
 
     // ------------------------------------------------------------------ vector objects
 
@@ -772,6 +776,7 @@ class ExportSceneBuilder(
         class Picture(val obj: VObject) : Part()
     }
 
+    // region v110-A3 arrayExport
     /**
      * v1.7 (item 3, I14): a vector array's objects as its cache shows them: the source's objects
      * mapped by each [ArrayLayout] matrix (measured from the objects' paint bounds, as
@@ -794,6 +799,7 @@ class ExportSceneBuilder(
         }
         return out
     }
+    // endregion
 
     /**
      * The outline of [s] for "Outlines": v1.7 (item 18), one envelope per symmetry copy

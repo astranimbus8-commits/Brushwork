@@ -336,7 +336,9 @@ internal fun curveSpec(tool: CurveTool, f: CurveStripFacts, ui: CurveStripUi): S
             items += strokeKindItem(tool, f, StripRow.ROW1, kindRank)
             if (cell != null) items += cell
             if (f.generated != null) items += generatorItem(tool, f.generated, ui, if (cell != null) StripRow.MORE else StripRow.ROW1, if (cell != null) 0 else 1)
+            // region v110-A5 sharpItems
             if (f.sharp != SharpState.NONE) items += sharpItem(tool, f)
+            // endregion
             // The host composes items by position: an item that a control's use brings in comes
             // after that control, so the control (an open Handles popup, a slider being dragged)
             // keeps its place: Auto tangent follows Handles; All points 100 % joins the More line
@@ -397,7 +399,9 @@ internal fun curveSpec(tool: CurveTool, f: CurveStripFacts, ui: CurveStripUi): S
             items += strokeKindItem(tool, f, StripRow.ROW1, 1)
             if (cell != null) items += cell
             items += endpointItem(tool)
+            // region v110-A5 sharpItems
             if (f.sharp != SharpState.NONE) items += sharpItem(tool, f)
+            // endregion
             if (f.anyThickness) items += all100Item(tool)
             items += selectAllItem(tool, f)
             if (f.generated != null) items += generatorItem(tool, f.generated, ui, StripRow.MORE, 0)
@@ -495,6 +499,7 @@ private fun shapesItem(tool: CurveTool) = item(CurveKeys.SHAPES, PATH_SHAPES, CU
 
 private const val PATH_SHAPES = "Path shapes"
 
+// region v110-A2 paintMode
 /**
  * "Stroke kind": the paint mode's icon; its dropdown holds v1.7's three segments ("Stroke",
  * "Fill", "Both", known as [CurveLabels17.STROKE_ONLY], [CurveLabels17.FILL_ONLY] and
@@ -548,6 +553,7 @@ private fun strokeKindItem(tool: CurveTool, f: CurveStripFacts, row: StripRow, r
             )
         }
     }
+// endregion
 
 /**
  * v1.9 (R11 a): the row-1 mode cell while the tool erases a vector or shape layer
@@ -692,6 +698,7 @@ private fun endpointItem(tool: CurveTool) = item(CurveKeys.ENDPOINT, "Endpoint",
     IconCell(Icons.Filled.Commit, "Endpoint", onClick = { tool.setEndpoint(!on) }, selected = on, enabled = !tool.pathCyclic)
 }
 
+// region v110-A5 sharpItems
 /** The sharp item: "Sharp corner", "Smooth", "Sharp corner: Mixed" or (greyed) "Ends are always sharp". */
 private fun sharpItem(tool: CurveTool, f: CurveStripFacts): StripItem {
     val label = when (f.sharp) {
@@ -712,6 +719,7 @@ private fun sharpItem(tool: CurveTool, f: CurveStripFacts): StripItem {
         }
     }
 }
+// endregion
 
 private fun autoTangentItem(tool: CurveTool, index: Int) = item(CurveKeys.AUTO_TANGENT, "Auto tangent", CURVE_ICON_DP, StripRow.MORE) {
     IconCell(Icons.Filled.Timeline, "Auto tangent", onClick = { tool.resetTangent(index) })

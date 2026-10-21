@@ -1435,6 +1435,7 @@ class EditorController(
         selectLayer(target)
     }
 
+    // region v110-A8 activate
     fun selectLayer(layer: Layer) {
         if (layer === activeLayer) return
         // An Object bar action waiting for a vector render is made on its layer first (v1.5; it
@@ -1449,6 +1450,7 @@ class EditorController(
         currentTool.onActivate()
         invalidateOverlay()
     }
+    // endregion
 
     private fun uniqueLayerName(base: String): String {
         val names = doc.layers.map { it.name }.toSet()
@@ -2183,6 +2185,7 @@ class EditorController(
         override fun redo(c: EditorController) { flipBitmap(c); setSpec(c, after = true) }
     }
 
+    // region v110-A11 canvasOps
     private fun flipLayerNow(layer: Layer, horizontal: Boolean) = editScope {
         val flip: (EditorController) -> Unit = { c ->
             c.structural {
@@ -2218,6 +2221,7 @@ class EditorController(
         // A committed edit of the layer (text wrapped around it re-flows).
         queueEdit(EditEvent(layer, EditTarget.CONTENT, null, label))
     }
+    // endregion
 
     /** Applies property changes with undo. Use [previewLayerProps] for live slider dragging. */
     fun setLayerProps(layer: Layer, props: LayerProps, label: String = "Layer properties") =
@@ -2275,6 +2279,7 @@ class EditorController(
     fun renameLayer(layer: Layer, name: String) = setLayerProps(layer, layer.props().copy(name = name.ifBlank { layer.name }), "Rename layer")
     fun setBlendMode(layer: Layer, mode: LayerBlendMode) = setLayerProps(layer, layer.props().copy(blendMode = mode), "Blend mode")
 
+    // region v110-A11 canvasOps
     /**
      * Clears the layer (or only the selected area). Follows the edit target: when the layer's mask
      * is being edited, the mask is cleared to black (hidden). Refused on alpha-locked content.
@@ -2303,6 +2308,7 @@ class EditorController(
             commitEdit(rec, label)
         }
     }
+    // endregion
 
     /**
      * Fills the layer (or the selection) with [fill]. When the mask is being edited the mask is
@@ -2372,6 +2378,7 @@ class EditorController(
         }
     }
 
+    // region v110-A11 canvasOps
     /** Bakes the mask into the layer's pixels and removes it. */
     fun applyMask(layer: Layer = activeLayer) {
         val m = layer.mask ?: return
@@ -2394,6 +2401,7 @@ class EditorController(
             queueEdit(EditEvent(layer, EditTarget.CONTENT, null, "Apply mask"))
         }
     }
+    // endregion
 
     fun invertMask(layer: Layer = activeLayer) {
         val m = layer.mask ?: return
@@ -2799,8 +2807,20 @@ class EditorController(
     /** The layer ⋮ "Array…". */
     fun arrayWholeLayer(layer: Layer): Boolean = ArrayOps.fromLayer(this, layer)
 
+    // region v110-A3 arrayBehind
+    /**
+     * v1.10 (R4, UQ4): "Behind" (the array on a new layer below) can run now. While false the
+     * selection bar, the object bar and the layer menu leave the item out. F0 stub (A3 body).
+     */
+    val arrayBehindAvailable: Boolean get() = false
+
+    /** v1.10 (R4): the array on a new layer below the main one, from the selection. F0 stub (A3 body). */
+    fun arrayBehind() {}
+    // endregion
+
     // ------------------------------------------------------------------ filters
 
+    // region v110-A4 startFilter
     fun startFilter(filter: Filter) {
         // An adjustment layer's effect is edited with the Masks tool (vector layers are
         // allowed: applying the filter turns them into raster layers, undoably). Refused before
@@ -2822,6 +2842,7 @@ class EditorController(
         // A session that closes itself during start() (target not usable) must not stay installed.
         filterSession = FilterSession(this, filter).also { it.start() }.takeUnless { it.isClosed }
     }
+    // endregion
 
     // ------------------------------------------------------------------ busy work
 

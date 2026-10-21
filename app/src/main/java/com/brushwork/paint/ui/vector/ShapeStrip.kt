@@ -326,6 +326,7 @@ internal object ShapeStripItems {
                 ) { Icon(shapeIcon(type), contentDescription = null, tint = BrushworkColors.Accent) }
             },
         )
+        // region v110-A2 paintMode
         add(
             StripItem(STYLE, if (lineLike) LINE_ENDS_LABEL else STYLE_LABEL, STYLE_DP.dp, shown = info.styleShown) {
                 val s = tool.settings
@@ -354,6 +355,7 @@ internal object ShapeStripItems {
                 }
             },
         )
+        // endregion
         val widthText = info.widthText
         add(
             StripItem(WIDTH, widthText ?: "", WIDTH_DP.dp, overflowRank = 1, shown = widthText != null) {
@@ -436,6 +438,7 @@ internal object ShapeStripItems {
             })
             val smooth = info.smooth
             if (smooth != null) {
+                // region v110-A5 sharpItems
                 val sharpens = smooth == Mixed.Same(true)
                 val smoothLabel = if (sharpens) SHARP_LABEL else SMOOTH_LABEL
                 add(more(SMOOTH, smoothLabel) {
@@ -445,6 +448,7 @@ internal object ShapeStripItems {
                         state = if (smooth is Mixed.Spread) PointLabels.MIXED else null,
                     ) { tool.setSelectedSmooth(!sharpens) }
                 })
+                // endregion
                 if (info.explicitHandles) {
                     add(more(AUTO_TANGENT, AUTO_TANGENT_LABEL) { ShapeIconAction(Icons.Filled.Restore, AUTO_TANGENT_LABEL) { tool.resetSelectedTangents() } })
                 }

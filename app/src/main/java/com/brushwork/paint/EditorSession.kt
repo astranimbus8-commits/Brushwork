@@ -35,12 +35,17 @@ class EditorSession(private val app: BrushworkApp, val projectId: String) {
     var state by mutableStateOf<State>(State.Loading)
         private set
 
+    // region v110-A10 session
+    // v1.10 (A10): the swap session directory, NativeWatch and the editor-open marker start here.
+    // endregion
+
     private var controller: EditorController? = null
     private val saveMutex = Mutex()
     private var lastSavedEdit = 0
     var closed = false
         private set
 
+    // region v110-A11 open
     init {
         scope.launch {
             try {
@@ -66,6 +71,7 @@ class EditorSession(private val app: BrushworkApp, val projectId: String) {
             }
         }
     }
+    // endregion
 
     private suspend fun autosaveLoop(c: EditorController) {
         while (scope.isActive) {
@@ -120,6 +126,10 @@ class EditorSession(private val app: BrushworkApp, val projectId: String) {
     private var leavingSaves = 0
     // endregion
 
+    // ------------------------------------------------------------------ saving
+
+    // region v110-A11 save
+    /** Saves the document and its thumbnail if there are unsaved edits, one save at a time. */
     suspend fun save() {
         saveMutex.withLock {
             val c = controller ?: return
@@ -139,7 +149,11 @@ class EditorSession(private val app: BrushworkApp, val projectId: String) {
             }
         }
     }
+    // endregion
 
+    // ------------------------------------------------------------------ closing
+
+    // region v110-A10 session
     /** Commits pending tool work, saves, releases memory, then calls [onClosed]. */
     fun close(onClosed: () -> Unit) {
         if (closed) return
@@ -172,6 +186,7 @@ class EditorSession(private val app: BrushworkApp, val projectId: String) {
             onClosed()
         }
     }
+    // endregion
 
     /** v1.9 (A7a): what closing could not finish is kept as a handled report (a cancellation is none). */
     private fun kept(e: Throwable, where: String) {

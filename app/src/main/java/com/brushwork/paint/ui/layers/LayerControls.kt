@@ -451,6 +451,7 @@ private fun LayerMenu(env: LayerWindowEnv) {
             // v1.7 (item 3): a live array on the whole layer ("Array…"), or the three array actions.
             // A folder is never arrayed (the Array tool refuses it too).
             if (!row.isFolder) {
+                // region v110-A3 arrayMenu
                 if (row.hasArray) {
                     // Through ArrayOps.fromLayer: it reopens the sheet even when the Array tool is already current on this layer.
                     MenuItem(ArrayLabels.EDIT, EditorIcons.tool(ToolId.ARRAY)) { act { c.arrayWholeLayer(layer) } }
@@ -467,6 +468,7 @@ private fun LayerMenu(env: LayerWindowEnv) {
                 } else {
                     MenuItem(ArrayLabels.OPEN, EditorIcons.tool(ToolId.ARRAY)) { act { c.arrayWholeLayer(layer) } }
                 }
+                // endregion
                 HorizontalDivider(color = BrushworkColors.ChromeBorder)
                 MenuItem("Rename…", Icons.Filled.DriveFileRenameOutline) { close(); env.onRename() }
                 HorizontalDivider(color = BrushworkColors.ChromeBorder)

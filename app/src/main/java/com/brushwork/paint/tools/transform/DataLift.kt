@@ -254,9 +254,11 @@ internal class DataLift(
         return c.updateLayerData(layer, d.copy(text = null, shape = null, vector = null, array = null), label, area, draw = {})
     }
 
+    // region v110-A8 pins
     override fun release() {
         if (!floating.isRecycled) floating.recycle()
     }
+    // endregion
 }
 
 /**
@@ -279,6 +281,7 @@ internal class DataLiftProvider(private val c: EditorController, private val map
         }
     }
 
+    // region v110-A8 pins
     override fun lift(layer: Layer, onReady: (ObjectLift?) -> Unit): Boolean {
         val kind = kindOf(layer) ?: return false
         val m = maps()
@@ -301,6 +304,7 @@ internal class DataLiftProvider(private val c: EditorController, private val map
         onReady(DataLift(c, layer, kind, m, rect, floating))
         return true
     }
+    // endregion
 
     override fun tapped(p: Vec2): Boolean = false
 

@@ -123,6 +123,7 @@ object VectorObjectSelection {
     private val solid = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; color = ACCENT }
     private var dashDensity = 0f
 
+    // region v110-A1 overlay
     /**
      * Dashed boxes around the selected objects of the active layer (screen space; [t] maps
      * document -> screen), plus their common box while the Transform tool is not active (it
@@ -200,6 +201,7 @@ object VectorObjectSelection {
             canvas.drawPath(screenPath, solid)
         }
     }
+    // endregion
 
     private fun addQuad(path: Path, q: Array<Vec2>) {
         path.moveTo(q[0].x, q[0].y)
