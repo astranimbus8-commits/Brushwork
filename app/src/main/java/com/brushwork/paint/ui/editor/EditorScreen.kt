@@ -1084,6 +1084,9 @@ private fun FeedbackChips(
  * [MenuLabels18.BRING_IN], [MenuLabels18.SEND_OUT], [MenuLabels18.VIEW] and
  * [MenuLabels18.THIS_ARTWORK]. The entries keep their labels and, within a section, their order;
  * "Canvas…" moves from before "Flip view" to the head of the last section.
+ *
+ * v1.10 (F1, design 2.11, J14): "Settings" leaves "This artwork" for a last section of its own
+ * ([MENU_SECTION_APP], under a divider, no header): its settings are the app's, not the artwork's.
  */
 private fun moreMenuEntries(
     controller: EditorController,
@@ -1126,7 +1129,7 @@ private fun moreMenuEntries(
     MenuEntry("Canvas…", Icons.Filled.AspectRatio, section = MenuLabels18.THIS_ARTWORK, enabled = docActionsEnabled) { onCanvas() },
     MenuEntry("Increments…", Icons.Filled.Numbers, checked = controller.increments.enabled, section = MenuLabels18.THIS_ARTWORK) { onIncrements() },
     MenuEntry("Save now", Icons.Filled.Save, section = MenuLabels18.THIS_ARTWORK) { onSaveNow() },
-    MenuEntry("Settings", Icons.Filled.Settings, section = MenuLabels18.THIS_ARTWORK) { onSettings() },
+    MenuEntry("Settings", Icons.Filled.Settings, section = MENU_SECTION_APP) { onSettings() },
 )
 
 /** Where a floating window is, relative to the editor's root box (both set by onGloballyPositioned). */

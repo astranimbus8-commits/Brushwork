@@ -49,6 +49,7 @@ import androidx.compose.ui.unit.dp
 import com.brushwork.paint.ui.common.V18Tags
 import com.brushwork.paint.ui.common.closeOnSecondFinger
 import com.brushwork.paint.ui.common.longPressLabel
+import com.brushwork.paint.ui.editor.MENU_SECTION_APP
 import com.brushwork.paint.ui.editor.MenuEntry
 import com.brushwork.paint.ui.editor.blockCanvasTouches
 import com.brushwork.paint.ui.theme.BrushworkColors
@@ -181,7 +182,10 @@ private fun MoreMenu(expanded: Boolean, onDismiss: () -> Unit, header: String, e
         HorizontalDivider(color = BrushworkColors.ChromeBorder)
         var section: String? = null
         entries.forEach { e ->
-            if (e.section != null && e.section != section) SectionHeader(e.section)
+            if (e.section != null && e.section != section) {
+                // v1.10 (F1, J14): the headerless last section (Settings) is set apart by a divider.
+                if (e.section == MENU_SECTION_APP) HorizontalDivider(color = BrushworkColors.ChromeBorder) else SectionHeader(e.section)
+            }
             section = e.section
             DropdownMenuItem(
                 text = { Text(e.label) },

@@ -58,6 +58,13 @@ data class MenuEntry(
 )
 
 /**
+ * v1.10 (F1, design 2.11, J14): the [MenuEntry.section] of the More menu's last section, which has
+ * no header: the menu draws a divider above it. "Settings" sits there, apart from "This artwork",
+ * since its settings are the app's on this phone, not the artwork's.
+ */
+internal const val MENU_SECTION_APP = ""
+
+/**
  * Drops a canvas stroke that is still in progress before a chrome button acts. A button click
  * fires on release, possibly while another finger is still drawing; undo, tool switches or
  * committing tool work must never run in the middle of a tool gesture. The canvas' remaining
