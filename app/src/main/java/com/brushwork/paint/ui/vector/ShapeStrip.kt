@@ -439,15 +439,19 @@ internal object ShapeStripItems {
             val smooth = info.smooth
             if (smooth != null) {
                 // region v110-A5 sharpItems
-                val sharpens = smooth == Mixed.Same(true)
-                val smoothLabel = if (sharpens) SHARP_LABEL else SMOOTH_LABEL
-                add(more(SMOOTH, smoothLabel) {
-                    ShapeIconAction(
-                        if (sharpens) Icons.Filled.ChangeHistory else Icons.Filled.Gesture,
-                        smoothLabel,
-                        state = if (smooth is Mixed.Spread) PointLabels.MIXED else null,
-                    ) { tool.setSelectedSmooth(!sharpens) }
-                })
+                // v1.10 (R12): the X / Y pill's Sharp / Smooth cell replaces the More item (kept for the lead's fallback).
+                if (com.brushwork.paint.tools.points.CornerEditors.SHOW_IN_MORE) {
+                    // Mixed means Sharp (UQ9), as the pill's cell.
+                    val sharpens = smooth != Mixed.Same(false)
+                    val smoothLabel = if (sharpens) SHARP_LABEL else SMOOTH_LABEL
+                    add(more(SMOOTH, smoothLabel) {
+                        ShapeIconAction(
+                            if (sharpens) Icons.Filled.ChangeHistory else Icons.Filled.Gesture,
+                            smoothLabel,
+                            state = if (smooth is Mixed.Spread) PointLabels.MIXED else null,
+                        ) { tool.setSelectedSmooth(!sharpens) }
+                    })
+                }
                 // endregion
                 if (info.explicitHandles) {
                     add(more(AUTO_TANGENT, AUTO_TANGENT_LABEL) { ShapeIconAction(Icons.Filled.Restore, AUTO_TANGENT_LABEL) { tool.resetSelectedTangents() } })

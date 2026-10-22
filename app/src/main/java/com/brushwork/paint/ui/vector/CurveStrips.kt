@@ -337,7 +337,8 @@ internal fun curveSpec(tool: CurveTool, f: CurveStripFacts, ui: CurveStripUi): S
             if (cell != null) items += cell
             if (f.generated != null) items += generatorItem(tool, f.generated, ui, if (cell != null) StripRow.MORE else StripRow.ROW1, if (cell != null) 0 else 1)
             // region v110-A5 sharpItems
-            if (f.sharp != SharpState.NONE) items += sharpItem(tool, f)
+            // v1.10 (R12): the X / Y pill's Sharp / Smooth cell replaces the More item (kept for the lead's fallback).
+            if (com.brushwork.paint.tools.points.CornerEditors.SHOW_IN_MORE && f.sharp != SharpState.NONE) items += sharpItem(tool, f)
             // endregion
             // The host composes items by position: an item that a control's use brings in comes
             // after that control, so the control (an open Handles popup, a slider being dragged)
@@ -400,7 +401,8 @@ internal fun curveSpec(tool: CurveTool, f: CurveStripFacts, ui: CurveStripUi): S
             if (cell != null) items += cell
             items += endpointItem(tool)
             // region v110-A5 sharpItems
-            if (f.sharp != SharpState.NONE) items += sharpItem(tool, f)
+            // v1.10 (R12): the X / Y pill's Sharp / Smooth cell replaces the More item (kept for the lead's fallback).
+            if (com.brushwork.paint.tools.points.CornerEditors.SHOW_IN_MORE && f.sharp != SharpState.NONE) items += sharpItem(tool, f)
             // endregion
             if (f.anyThickness) items += all100Item(tool)
             items += selectAllItem(tool, f)

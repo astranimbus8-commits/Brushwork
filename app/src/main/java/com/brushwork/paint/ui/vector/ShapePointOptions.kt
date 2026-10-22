@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.RoundedCorner
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Timeline
+import androidx.compose.material.icons.outlined.ChangeHistory
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
@@ -209,20 +210,21 @@ private fun TurnIntoPathButton(tool: ShapeTool, refusal: String?) {
 /**
  * The selected points' "Smooth" as a three-state chip: all smooth reads "Sharp corner" (a tap
  * makes them sharp corners), all sharp reads "Smooth" (as v1.6 with one point), and a mix reads
- * "Smooth" with "Mixed" (state description "Mixed"); a tap on it makes them all smooth.
+ * "Sharp corner" with "Mixed" (state description "Mixed"); a tap on it makes them all sharp
+ * corners (v1.10, UQ9: Mixed means Sharp, as the X / Y pill's cell; v1.9 made them smooth).
  */
 @Composable
 private fun SmoothChip(state: Mixed<Boolean>, onSet: (Boolean) -> Unit) {
     when (state) {
-        Mixed.Same(true) -> ActionChip("Sharp corner", Icons.Filled.ChangeHistory) { onSet(false) }
-        is Mixed.Same -> ActionChip("Smooth", Icons.Filled.Gesture) { onSet(true) }
+        Mixed.Same(true) -> ActionChip(ShapeStripItems.SHARP_LABEL, Icons.Filled.ChangeHistory) { onSet(false) }
+        is Mixed.Same -> ActionChip(ShapeStripItems.SMOOTH_LABEL, Icons.Filled.Gesture) { onSet(true) }
         is Mixed.Spread -> AssistChip(
-            onClick = { onSet(true) },
+            onClick = { onSet(false) },
             label = {
-                Text("Smooth", maxLines = 1)
+                Text(ShapeStripItems.SHARP_LABEL, maxLines = 1)
                 Text(" · ${PointLabels.MIXED}", maxLines = 1, color = BrushworkColors.OnChromeDim)
             },
-            leadingIcon = { Icon(Icons.Filled.Gesture, contentDescription = null, modifier = Modifier.size(18.dp)) },
+            leadingIcon = { Icon(Icons.Outlined.ChangeHistory, contentDescription = null, modifier = Modifier.size(18.dp)) },
             colors = AssistChipDefaults.assistChipColors(labelColor = BrushworkColors.OnChrome, leadingIconContentColor = BrushworkColors.OnChrome),
             modifier = Modifier
                 .padding(horizontal = 3.dp)
@@ -497,7 +499,7 @@ internal fun ShapePointFields(tool: ShapeTool, unit: LengthUnit, dpi: Double) {
         LengthField("Y", p.y.toDouble(), { y -> tool.movePoint(sel, Vec2(p.x, y.toFloat())) }, unit, dpi, Modifier.weight(1f), step = null, minPx = -MAX, maxPx = MAX)
     }
     Row(Modifier.fillMaxWidth().padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-        ChoiceChips(listOf("Sharp corner", "Smooth"), if (a.smooth) 1 else 0, { i -> tool.setPointSmooth(sel, i == 1) }, Modifier.weight(1f))
+        ChoiceChips(listOf(ShapeStripItems.SHARP_LABEL, ShapeStripItems.SMOOTH_LABEL), if (a.smooth) 1 else 0, { i -> tool.setPointSmooth(sel, i == 1) }, Modifier.weight(1f))
         TextButton(onClick = { tool.deletePoint(sel) }, enabled = info.count > tool.minPoints) {
             Icon(Icons.Outlined.Delete, contentDescription = null, tint = BrushworkColors.Danger, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(4.dp))

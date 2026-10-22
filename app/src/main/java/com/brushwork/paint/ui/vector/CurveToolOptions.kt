@@ -875,7 +875,8 @@ internal fun CurveNumbersSheet(tool: CurveTool, onDismiss: () -> Unit) {
             Row(Modifier.fillMaxWidth().padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                 // region v110-A5 cornerChips
                 if (!tool.polyline && anchor != null) {
-                    ChoiceChips(listOf("Smooth", "Sharp corner"), if (anchor.sharp) 1 else 0, { i -> tool.setSharp(sel, i == 1) }, Modifier.weight(1f))
+                    // v1.10 (R3 row 8): Sharp before Smooth, as Shape's point sheet.
+                    ChoiceChips(listOf("Sharp corner", "Smooth"), if (anchor.sharp) 0 else 1, { i -> tool.setSharp(sel, i == 0) }, Modifier.weight(1f))
                 } else {
                     Spacer(Modifier.weight(1f))
                 }

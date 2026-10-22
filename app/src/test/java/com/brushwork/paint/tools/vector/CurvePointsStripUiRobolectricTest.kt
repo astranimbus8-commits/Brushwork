@@ -10,13 +10,14 @@ import com.brushwork.paint.smoke.SmokeUi.settle
 import com.brushwork.paint.testing.PillTestKit
 import com.brushwork.paint.tools.points.PointSelection
 import com.brushwork.paint.ui.common.PointLabels
+import com.brushwork.paint.ui.common.PointLabels110
 import com.brushwork.paint.ui.editor.chrome.ChromeHarness
 import com.brushwork.paint.ui.editor.chrome.ChromeScreen
 import com.brushwork.paint.ui.points.ThicknessRowLabels
 import com.brushwork.paint.ui.vector.PATH_WIDTH_CAPTION
 import com.brushwork.paint.ui.vector.POINT_THICKNESS_LABEL
 import com.brushwork.paint.ui.vector.POINT_WEIGHT_LABEL
-import com.brushwork.paint.ui.vector.SHARP_MIXED
+import com.brushwork.paint.ui.vector.ShapeStripItems
 import com.brushwork.paint.ui.vector.TYPE_POINT_WEIGHT
 import com.brushwork.paint.ui.vector.pathCaptionApplies
 import org.junit.Assert.assertEquals
@@ -32,9 +33,9 @@ import org.robolectric.shadows.ShadowLog
  * v1.7 (items 1 and 4, design §3.1a and §3.4a) on the real editor at the user's phone width: the
  * points bar of the Curve and Path tools. "Select several" (the X / Y pill's cell since v1.8, F4;
  * the hint under the bar), "Select all points" / "Deselect all points", the group's "Point
- * thickness" (typed: one step for all), the three-state sharp chip, "Delete point" on the group;
- * a Path's "Sharp corner" pair for a middle point (one in-tool step), disabled at an open end, and
- * the thickness caption of a smooth middle point.
+ * thickness" (typed: one step for all), the three-state sharp cell (the X / Y pill's since v1.10,
+ * R12), "Delete point" on the group; a Path's "Sharp corner" / "Smooth" for a middle point (one
+ * in-tool step), greyed at an open end, and the thickness caption of a smooth middle point.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = "w392dp-h873dp-xxhdpi")
@@ -95,15 +96,17 @@ class CurvePointsStripUiRobolectricTest {
             assertEquals(listOf(1f, 0.5f, 0.5f, 0.5f, 1f), tool.anchors.map { it.width })
             assertEquals("one step", n + 1, steps(tool))
 
-            // The sharp chip: all smooth, then all sharp, then mixed (a tap makes all sharp).
-            click("Sharp corner", exact = true)
+            // The sharp cell (v1.10, R12: the X / Y pill's, no More item): all smooth, then all sharp,
+            // then mixed (a tap makes all sharp).
+            assertEquals(ShapeStripItems.SHARP_LABEL, PillTestKit.sharpName())
+            PillTestKit.tapSharp()
             assertEquals(listOf(false, true, true, true, false), tool.anchors.map { it.sharp })
-            assertTrue(has("Smooth", exact = true))
+            assertEquals(ShapeStripItems.SMOOTH_LABEL, PillTestKit.sharpName())
             assertTrue(tool.undoStep())
             tool.setSharp(2, true)
             settle()
-            assertTrue(SmokeUi.shown().toString(), has(SHARP_MIXED, exact = true))
-            click(SHARP_MIXED, exact = true)
+            assertEquals(SmokeUi.shown().toString(), PointLabels110.MIXED_MAKES_SHARP, PillTestKit.sharpName())
+            PillTestKit.tapSharp()
             assertEquals(listOf(false, true, true, true, false), tool.anchors.map { it.sharp })
 
             // Delete point: the three go (one step), two stay.
@@ -126,27 +129,31 @@ class CurvePointsStripUiRobolectricTest {
             // (Undoing everything empties the path, and so its selection: select it again.)
             tool.select(2)
             settle()
-            click("Sharp corner", exact = true)
+            assertEquals(ShapeStripItems.SHARP_LABEL, PillTestKit.sharpName())
+            PillTestKit.tapSharp()
             assertTrue(tool.spline!!.points[2].sharp)
             assertEquals("one in-tool step", n + 1, steps(tool))
             // (Undoing everything empties the path, and so its selection: select it again.)
             tool.select(2)
             settle()
-            assertTrue(has("Smooth", exact = true))
+            assertEquals(ShapeStripItems.SMOOTH_LABEL, PillTestKit.sharpName())
             assertFalse("a corner is reached: no caption", pathCaptionApplies(tool))
             // The open path's ends are always reached.
             tool.select(0)
             settle()
-            assertTrue(has(PointLabels.ENDS_SHARP, exact = true))
-            assertFalse(SmokeUi.isEnabled(PointLabels.ENDS_SHARP))
+            assertEquals(PointLabels.ENDS_SHARP, PillTestKit.sharpName())
+            assertEquals("greyed", true, PillTestKit.sharpGreyed())
             assertFalse(pathCaptionApplies(tool))
-            // Several: weight and thickness fields, the sharp chip counts the middle points only.
+            // Several: weight and thickness fields, the sharp cell counts the middle points only.
             tool.selectPoints(PointSelection.of(5, 0, 1, 2))
+            settle()
+            // v1.10: the sharp cell is the pill's, so no More-row click has opened the More row yet.
+            SmokeUi.openMoreRow()
             settle()
             assertTrue(has(POINT_WEIGHT_LABEL, exact = true))
             assertTrue(has(ThicknessRowLabels.TYPE, exact = true))
-            assertTrue("1 smooth, 2 sharp: ${SmokeUi.shown()}", has(SHARP_MIXED, exact = true))
-            click(SHARP_MIXED, exact = true)
+            assertEquals("1 smooth, 2 sharp: ${SmokeUi.shown()}", PointLabels110.MIXED_MAKES_SHARP, PillTestKit.sharpName())
+            PillTestKit.tapSharp()
             assertEquals(listOf(false, true, true, false, false), tool.spline!!.points.map { it.sharp })
             // v1.8: the weight is a popup of the More row's "Point weight" item.
             click(POINT_WEIGHT_LABEL, exact = true)

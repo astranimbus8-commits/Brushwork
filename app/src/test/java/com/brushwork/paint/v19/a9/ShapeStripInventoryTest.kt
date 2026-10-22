@@ -116,11 +116,13 @@ class ShapeStripInventoryTest {
         val s = spec(c, tool)
         val keys = s.items.map { it.key }
         for (k in listOf(
-            mode, ShapeStripItems.POINTS, ShapeStripItems.STROKE_WITH, ShapeStripItems.SELECT_ALL, ShapeStripItems.SMOOTH,
+            mode, ShapeStripItems.POINTS, ShapeStripItems.STROKE_WITH, ShapeStripItems.SELECT_ALL,
             ShapeStripItems.AUTO_TANGENT, ShapeStripItems.DELETE_POINT, ShapeStripItems.DESELECT_POINT, ShapeStripItems.ROUNDNESS,
             ShapeStripItems.RESET_ROUNDNESS, ShapeStripItems.HANDLES, ShapeStripItems.RESET_SHAPE, ShapeStripItems.REMOVE_COPIES,
             StripKeysV19.BEVEL.key,
         )) assertTrue("$what, Points mode: $k in $keys", k in keys)
+        // v1.10 (R12): Sharp / Smooth is the X / Y pill's cell, no longer a More item.
+        assertFalse("$what, Points mode: no ${ShapeStripItems.SMOOTH}", ShapeStripItems.SMOOTH in keys)
         for (k in listOf(
             ShapeStripItems.EDITABLE, ShapeStripItems.TO_PATH, ShapeStripItems.CENTER, ShapeStripItems.PROPORTIONAL,
             StripKeysV19.DUPLICATE.key, StripKeysV19.FORWARD.key, StripKeysV19.BACKWARD.key,
