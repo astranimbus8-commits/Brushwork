@@ -3317,7 +3317,8 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         if (tool.hasPendingWork) tool.commit()
         val current = layer.vector?.byId(id) as? VPath ?: return false
         val started = tool.reopenSelecting(current, null)
-        tool.openingObject = if (tool.opening) layer to id else null
+        // (A refused open, e.g. while another path is still opening, leaves that path's guard.)
+        if (started) tool.openingObject = if (tool.opening) layer to id else null
         return started
     }
 

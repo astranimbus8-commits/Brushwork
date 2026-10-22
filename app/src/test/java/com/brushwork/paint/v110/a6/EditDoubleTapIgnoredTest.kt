@@ -5,6 +5,8 @@ import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.vector.CurveKind
 import com.brushwork.paint.tools.vector.CurveTool
 import com.brushwork.paint.tools.vector.ShapeTool
+import com.brushwork.paint.vector.VSubpath
+import com.brushwork.paint.vector.VectorLayers
 import com.brushwork.paint.vector.select.ObjectActions
 import com.brushwork.paint.vector.select.ObjectTestKit
 import com.brushwork.paint.vector.select.PendingRenders
@@ -90,6 +92,29 @@ class EditDoubleTapIgnoredTest {
         assertTrue(tool.editShapeObject(c.vec, id))
         kit.idle()
         assertTrue(tool.editingObject && tool.hasPendingWork)
+        assertEquals(steps, c.undoManager.undoCount)
+    }
+
+    /**
+     * Review fix (7/7): while one path still opens (its edit session prepared in the background),
+     * a refused open of another path leaves the first one's guard: the other path is not taken for
+     * the one opening, and the first still counts as opening, so it opens once.
+     */
+    @Test
+    fun aRefusedOpenKeepsTheGuardOfThePathStillOpening() {
+        val c = kit.controller()
+        val other = A6Paths.curve().let { p -> p.copy(subpaths = listOf(VSubpath(p.subpaths[0].anchors.take(3).map { a -> a.copy(y = a.y + 60f) }))) }
+        val ids = A6Paths.add(kit, c, A6Paths.curve(), other)
+        c.vectors.policy = VectorLayers.Policy.ASYNC
+        val tool = c.tools.getValue(ToolId.CURVE) as CurveTool
+        val steps = c.undoManager.undoCount
+        assertTrue("the first path opens in the background", tool.openObject(c.vec.id, ids[0], CurveKind.CURVE))
+        assertFalse("not open yet", tool.isReopened)
+        assertFalse("the other path is refused while the first opens", tool.openObject(c.vec.id, ids[1], CurveKind.CURVE))
+        assertFalse("and is not taken for the one opening", tool.openObject(c.vec.id, ids[1], CurveKind.CURVE))
+        assertTrue("the first still counts as opening", tool.openObject(c.vec.id, ids[0], CurveKind.CURVE))
+        assertTrue("it opens", kit.idleUntil { tool.isReopened })
+        assertEquals("the first path's 4 points", 4, tool.pointCount)
         assertEquals(steps, c.undoManager.undoCount)
     }
 

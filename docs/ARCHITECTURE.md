@@ -2718,7 +2718,8 @@ row's lines (`ObjectBarLayout.split`).
   with `kind = CurveTool.kindOf(path)` (Curve, Polyline or Path).
 - Both tools ignore a second open of the object they are opening or already have open. The Shape
   tool keeps `openingObject` with its `reopenToken`; the Curve tool keeps `openingObject` and
-  `isOpening`. So a double tap never applies the open edit and opens it again.
+  `isOpening`, and an open it refuses (another path still opening) leaves that guard as it was.
+  So a double tap never applies the open edit and opens it again.
 - The button records no step: the editor's ✓ records its own ("Edit shape", "Edit path"), and ✕
   records none. The user stays in that tool afterwards (UQ10).
 
@@ -2773,7 +2774,8 @@ pair ("Array", then "Behind" while passed) comes before Save, Duplicate and Hide
 - The open path's layer and id are private to `CurveTool`.
 - A path changed in the tool would convert as two steps (the edit's own, then "Turn into shape").
 
-Tests: `test:v110/a6/` (the layout, Edit, PathToShape and TurnIntoShape classes) and
+Tests: `test:v110/a6/` (the layout, Edit, PathToShape and TurnIntoShape classes; a converted
+path saved and reopened through the project repository: `TurnIntoShapeSaveReopenTest`) and
 `test:qa110/Qa110EditUiTest`, `test:qa110/Qa110ConvertUiTest` (392 and 360 dp, font scale 1, 1.3
 and 2.0).
 
