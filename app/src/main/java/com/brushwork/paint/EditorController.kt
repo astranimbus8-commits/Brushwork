@@ -2900,7 +2900,7 @@ class EditorController(
         // (What the tool's commit rendered in the background lands too.)
         vectors.flushPending()
         if (!checkEditable()) return
-        if (keptIds.isNotEmpty() && vectors.selectedIds.isEmpty()) vectors.setSelection(activeLayer, keptIds)
+        if (keptIds.isNotEmpty() && vectors.selectedIds.isEmpty() && filter.colorMapper(filter.defaultValues()) != null) vectors.setSelection(activeLayer, keptIds)
         val ids = vectors.selectedIds.takeIf { vectors.selectedLayer === activeLayer }.orEmpty()
         Breadcrumbs.add("filter:${filter.id}")
         // A session that closes itself during start() (target not usable) must not stay installed.

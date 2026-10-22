@@ -3122,7 +3122,9 @@ image") and the CDC consumer of R7 (the canvas previews a color while it is bein
   rule and the mapped data), `filters/FilterSession.kt` (object mode: preview and apply),
   `ui/filters/FilterUi.kt` (the rasterize banner and subtitle, the object-mode note),
   `ui/filters/FilterParamControls.kt` (`ColorControl`'s live preview). Region `EditorController`
-  `v110-A4 startFilter` (keeps the selected object ids and hands them to the session). Tests:
+  `v110-A4 startFilter` (keeps the selected object ids and hands them to the session; it puts
+  them back after the tool lets them go only for a filter with a `colorMapper`, so the other
+  filters start as in v1.9). Tests:
   `v110/a4/`, `qa110/Qa110CdcObjects*`.
 - **Object mode** (`FilterSession.objectMode`, fixed at the start). On when the session filters
   the layer's content (not a mask), the filter has a `colorMapper` (in 1.10 only CDC) and the
@@ -3154,6 +3156,13 @@ image") and the CDC consumer of R7 (the canvas previews a color while it is bein
   layer through `DataRender.apply`. Nothing is rasterized: the layer keeps its kind, data and
   array, and its pixels are a fresh render of the new data (I1). A result equal to the layer
   says "<filter> didn't change anything here" and records nothing, as the pixel path does.
+  The preview stays shown while an async render runs. That render can't be stopped (the panel
+  offers no Stop; `cancelApply` does nothing in object mode), so it never lands after the panel
+  has gone: `undoStep` and `cancel` land it first (`landObjectApply`, `VectorLayers.flushPending`),
+  which closes the session; the controller's Undo then takes the step back (v1.5's rule for an
+  edit still rendering) and Cancel leaves it applied. Dropped at the wait limit (v1.9 A7b), no
+  step lands: that Undo is spent with the panel left open, a Cancel closes it.
+  `CdcObjectApplyAsyncTest`, `CdcSaveReopenTest`.
 - **Rasterize warning** (`rasterizeWarning`). The Filters sheet's banner covers every layer with
   editable data, by kind (text, shape, vector, then a raster layer with a live array), and on a
   layer with objects adds that Change Drawing Color keeps it editable (the filters with a

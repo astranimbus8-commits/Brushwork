@@ -344,10 +344,29 @@ class FilterSession(
         return Refresh.CHANGED
     }
 
-    /** Discards the preview and closes the session; the layer is left untouched. */
+    /**
+     * Discards the preview and closes the session; the layer is left untouched.
+     *
+     * v1.10 (R6): while an object-mode ✓ renders in the background ([landObjectApply]) its step
+     * can't be stopped: it lands first (the session then closes with it), so it never lands
+     * after the panel has gone.
+     */
     fun cancel() {
         if (isClosed) return
+        landObjectApply()
+        if (isClosed) return
         close()
+    }
+
+    /**
+     * v1.10 (R6): an object-mode ✓ still rendering in the background (`VectorLayers.update`,
+     * async) lands now, as v1.5's edits still rendering land before Undo, Redo or another edit:
+     * its step is recorded and the session closes ([applyObjects]' callback). When the wait hits
+     * the limit the render is dropped instead (v1.9 A7b: no step, the session stays open, out of
+     * applying). Does nothing otherwise.
+     */
+    private fun landObjectApply() {
+        if (objectMode && isApplying) controller.vectors.flushPending()
     }
 
     private fun close() {
@@ -483,6 +502,14 @@ class FilterSession(
      * session, as v1.8's Undo did. Landing on the bottom shows [FilterLabels19.SESSION_AT_START].
      */
     override fun undoStep(): Boolean {
+        // v1.10 (R6): an object-mode ✓ still rendering lands first and closes the session, so
+        // the controller's Undo then takes that step back (v1.5: Undo takes back an edit still
+        // rendering, and nothing lands after it). Dropped at the wait limit instead, nothing
+        // landed and the panel stays open: that was this Undo (v1.9 A7b, "an Undo that waited").
+        if (isApplying && objectMode) {
+            landObjectApply()
+            return !isClosed
+        }
         if (isClosed || isApplying) return false
         heldByTap = false
         // A point dragged on the canvas when a two-finger tap lands there goes back first.
@@ -1005,7 +1032,9 @@ class FilterSession(
      * editor's busy overlay (controller.busyCancel).
      */
     fun cancelApply() {
-        if (!isApplying) return
+        // v1.10 (R6): object mode's ✓ is a vector render that can't be stopped (it lands as one
+        // step; see cancel); the panel offers no Stop for it.
+        if (!isApplying || objectMode) return
         applyCancelRequested = true
         applyJob?.cancel()
     }

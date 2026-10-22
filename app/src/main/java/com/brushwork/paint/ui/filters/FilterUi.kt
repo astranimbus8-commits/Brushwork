@@ -477,7 +477,8 @@ private fun ApplyProgress(session: FilterSession) {
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp), color = BrushworkColors.Accent)
             }
         }
-        TextButton(onClick = { session.cancelApply() }) { Text("Stop") }
+        // v1.10 (R6): object mode's ✓ is a vector render, which lands as one step: no Stop.
+        if (!session.objectMode) TextButton(onClick = { session.cancelApply() }) { Text("Stop") }
     }
 }
 
