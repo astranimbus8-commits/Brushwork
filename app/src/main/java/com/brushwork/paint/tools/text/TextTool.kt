@@ -1349,8 +1349,21 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
     override val objectDeletion: ObjectDeletion? get() = if (item != null) textDeletion else null
 
     // region v110-A2 colors
-    /** v1.10 (R2): the pill's Object colors cell. F0: none, so the cell stays hidden (A2 body). */
-    override val objectColors: ObjectColorEditor? = null
+    /**
+     * v1.10 (R2, R7; design 4.4 A2 step 5): the pill's Object colors cell while a text is open: its
+     * text color and outline, previewed live in the open text and kept by its ✓ step
+     * ([TextColorsDelegate]).
+     */
+    override val objectColors: ObjectColorEditor? get() = if (item != null) colors else null
+
+    private val colors: TextColorsDelegate by lazy { TextColorsDelegate(ColorsHost()) }
+
+    /** What [TextColorsDelegate] needs of this tool. */
+    private inner class ColorsHost : TextColorsHost {
+        override val controller: EditorController get() = this@TextTool.controller
+        override val spec: TextSpec? get() = item?.spec
+        override fun updateSpec(transform: (TextSpec) -> TextSpec) = this@TextTool.updateSpec(transform)
+    }
     // endregion
 
     /**

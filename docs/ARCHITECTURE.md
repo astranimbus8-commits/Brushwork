@@ -2938,7 +2938,70 @@ and `qa110/Qa110OneSideUiTest` (392 and 360 dp, font scales 1, 1.3 and 2.0).
 
 <!-- v110-A2 -->
 
-(A2 writes this section.)
+Steps 1 to 5 of 8 (the pill's COLOR cell, the settings sheets' `FillColorRow` previews and the
+QA and timing tests follow after A5's merge).
+
+**The sheet (`ui/vector/ObjectColorsSheet.kt`).** `ObjectColorsSheet(editor, onClose)` hosts the
+frozen `ObjectColorEditor` in a non-modal `BwSheet` titled `ObjectColorLabels110.CELL`: one 48 dp
+row with the editor's two `targets` as icon tabs (each shows its swatch, `ObjectColorFace`;
+long-press names `objectColorName(t)`, tags `V110Tags.COLORS_SHEET_TAB`), then, for a non-null
+`paintMode`, the three `PaintModeSegments` glyphs; under it the embedded
+`ColorDialogBody(model, onPreview, extraAbove = 48.dp)`. A Fill or Outline tab adds the "none"
+button (`setNone`: no fill is paint mode Stroke, no outline is width 0). Every color the body
+delivers goes to `editor.preview(target, argb)`; OK calls `commit`, Cancel and Back call `cancel`,
+a swipe or an outside touch only minimizes the sheet (the preview stays, and the object's own ✓
+or ✕ decides). A2's editors also implement `ObjectColorExtras` (`colorOf`, so a picker starts at
+a color that is not painted, and `toast`, for a refused target's reason from `unavailable`).
+
+**One paint-mode control (R3).** Shape and the curve tools show the paint mode only as the
+`PaintModeGlyph` faces: `PaintModeSegments` in the sheets, a menu of them on the strips
+(regions `v110-A2 paintMode` in `ShapeStrip.kt`, `CurveStrips.kt` and `CurveToolOptions.kt`, and
+A2's own `ShapeToolOptions.kt`); the curve sheet's fill switch became the segments; `StyleGlyph` is gone.
+The curve strip's menu keeps its refusal semantics (`PaintModeChoices`: Fill and Both need 3
+points), and the curve sheet keeps its stroke kind chips.
+
+**The delegates.** Each tool's region `v110-A2 colors` returns its editor while an object is
+open (null otherwise, which hides the pill cell) and gives it a private inner host; the tool's
+state stays private.
+- `tools/vector/ShapeColorsDelegate.kt` (Shape; targets Fill and Stroke, a line Stroke only):
+  previews are the shape's pending options (style, `fillColor`) and the main color it is drawn
+  with; colors pass through `ObjectColorSlots.set` on a `VShape` so the fill-follows pin (C4)
+  holds. Object-only: a reopened shape moves its opened color with each stroke edit, so v1.9's
+  give-back of the user's main color still happens (a color picked meanwhile wins); a new shape
+  takes a restore point at its first edit and, when its session ends, gets back the user's
+  style, fill and color while they still hold what the editor set (a `snapshotFlow` watch on
+  `controller.scope`, so one frame after the session ends).
+- `tools/vector/CurveColorsDelegate.kt` (Curve, Polyline, Path; Fill and Stroke): fill and mode
+  are the open path's `CurveSettings` (`fill`, `fillColor`, `stroke`/`lastStroke`); a new path
+  switches to its own look (`showLook`) at the first edit, so the user's settings come back at
+  `endLook`; a reopened path already does. C4 goes through `ObjectColorSlots.set` on a
+  geometry-less `VPath` built from the tool's colors. Fill needs 3 points (`unavailable`:
+  `CurveLabels17.FILL_NEEDS_3`); a stroke color while Fill turns the mode to Both with the stroke
+  kind kept; a reopened gradient fill is kept until a fill color is picked (one
+  `GRADIENT_REPLACED` note per opening). A new path's main color comes back by the same
+  one-frame watch.
+- `tools/text/TextColorsDelegate.kt` (Text; targets Text and Outline, no paint mode): previews
+  are `updateSpec` changes of the open text (`color`, `strokeColor`); the drawing color is never
+  touched. An outline color at width 0 brings `defaultOutlineWidth(sizePx)` = max(1, 6 % of the
+  font size, the box presets' border ratio) through `TextSpec.withOutlineColor`, which the text
+  editor's Outline color picker uses too. Text has no single-slot setter in `ObjectColorSlots`
+  (`mapText` maps every slot together), so text colors go straight to `updateSpec`. The start
+  values are dropped when the text's session ends.
+
+No preview is an undo step: the object's ✓ step carries the colors; Cancel restores what
+`begin` found; once the object is closed every call does nothing (C13).
+
+**Text editor (`ui/placement/TextEditorDialog.kt`).** The four color pickers (text, outline, box
+background, box border) pass `onPreview` (live on the open text) through `LiveColorPicker`:
+OK keeps the color; Cancel and Back give the start color back and also restore what the first
+preview set beside it (the outline width, a box background turned on); the editor's own Cancel
+still reverts the whole edit from its backup.
+
+Tests (`app/src/test/java/com/brushwork/paint/v110/a2/`): `ObjectColorSheetFitsAt873Test`,
+`ObjectColorSheetMinimizedThenCheckTest`, `ObjectColorSheetMinimizedThenCrossTest`,
+`PaintModeConsistencyTest`, `PaintModeSegmentsFingerTest`, `R3NoTextModeSelectorsTest`,
+`FillFollowsPinTest`, `ShapeFillLivePreviewTest`, `CurveFillLivePreviewTest`,
+`TextColorLivePreviewTest`, `TextOutlineDefaultWidthTest`; kits `A2ToolRig`, `A2FakeColorEditor`.
 
 <!-- /v110-A2 -->
 

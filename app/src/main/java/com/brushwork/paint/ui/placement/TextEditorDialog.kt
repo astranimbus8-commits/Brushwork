@@ -46,6 +46,8 @@ import com.brushwork.paint.tools.text.TextEditorHost
 import com.brushwork.paint.tools.text.TextPathNodeEntry
 import com.brushwork.paint.tools.text.TextTool
 import com.brushwork.paint.tools.text.VerticalStyle
+import com.brushwork.paint.tools.text.withOutlineColor
+import com.brushwork.paint.ui.common.ObjectColorLabels110
 import com.brushwork.paint.ui.color.ColorPickerDialog
 import com.brushwork.paint.ui.fonts.FontField
 import com.brushwork.paint.ui.fonts.FontPickerSheet
@@ -287,37 +289,72 @@ fun TextEditorDialog(host: TextEditorHost) {
     }
     if (markerFontPickerOpen) MarkerFontPicker(tool, fontSample(item.text)) { markerFontPickerOpen = false }
 
-    when (colorTarget) {
-        ColorTarget.FILL -> ColorPickerDialog(
-            initial = spec.color,
-            onPick = { c -> style { it.copy(color = c) } },
-            onDismiss = { colorTarget = null },
-            title = "Text color",
-            showAlpha = true,
-        )
-        ColorTarget.OUTLINE -> ColorPickerDialog(
-            initial = spec.strokeColor,
-            onPick = { c -> style { it.copy(strokeColor = c) } },
-            onDismiss = { colorTarget = null },
-            title = "Outline color",
-            showAlpha = true,
-        )
-        ColorTarget.BOX_FILL -> ColorPickerDialog(
-            initial = spec.box.fillColor,
-            onPick = { c -> tool.updateBox { it.copy(fillColor = c, fill = true) } },
-            onDismiss = { colorTarget = null },
-            title = "Box background",
-            showAlpha = true,
-        )
-        ColorTarget.BORDER -> ColorPickerDialog(
-            initial = spec.box.borderColor,
-            onPick = { c -> tool.updateBox { it.copy(borderColor = c) } },
-            onDismiss = { colorTarget = null },
-            title = "Box border color",
-            showAlpha = true,
-        )
-        null -> {}
+    // v1.10 (R7; design 4.4 A2 step 5): every color picker of the editor shows its color on the
+    // canvas live; Cancel and Back put back what the open text had when the picker opened (the
+    // editor's own Cancel still reverts the whole edit).
+    val target = colorTarget
+    if (target != null) {
+        val start = remember(target) { spec }
+        val close = { colorTarget = null }
+        when (target) {
+            ColorTarget.FILL -> LiveColorPicker(
+                initial = start.color,
+                title = ObjectColorLabels110.TEXT,
+                apply = { c -> style { it.copy(color = c) } },
+                restore = { style { it.copy(color = start.color) } },
+                onClose = close,
+            )
+            // At width 0 a picked outline color brings the default outline width (as the box
+            // background below turns the background on).
+            ColorTarget.OUTLINE -> LiveColorPicker(
+                initial = start.strokeColor,
+                title = ObjectColorLabels110.OUTLINE,
+                apply = { c -> style { it.withOutlineColor(c) } },
+                restore = { style { it.copy(strokeColor = start.strokeColor, strokeWidthPx = start.strokeWidthPx) } },
+                onClose = close,
+            )
+            ColorTarget.BOX_FILL -> LiveColorPicker(
+                initial = start.box.fillColor,
+                title = "Box background",
+                apply = { c -> tool.updateBox { it.copy(fillColor = c, fill = true) } },
+                restore = { tool.updateBox { it.copy(fillColor = start.box.fillColor, fill = start.box.fill) } },
+                onClose = close,
+            )
+            ColorTarget.BORDER -> LiveColorPicker(
+                initial = start.box.borderColor,
+                title = "Box border color",
+                apply = { c -> tool.updateBox { it.copy(borderColor = c) } },
+                restore = { tool.updateBox { it.copy(borderColor = start.box.borderColor) } },
+                onClose = close,
+            )
+        }
     }
+}
+
+/**
+ * v1.10 (R7; design 4.4 A2 step 5): a color picker of the text editor with a live preview: [apply]
+ * gets each color while it is edited (at most once per frame) and the color OK keeps. Cancel and
+ * Back give the start color back to [apply] (the picker's contract) and then call [restore], which
+ * puts back everything the first preview set (an outline width, a box background turned on).
+ */
+@Composable
+private fun LiveColorPicker(initial: Int, title: String, apply: (Int) -> Unit, restore: () -> Unit, onClose: () -> Unit) {
+    // OK calls onPick and then onDismiss; Cancel and Back call onDismiss alone.
+    val picked = remember { BooleanArray(1) }
+    ColorPickerDialog(
+        initial = initial,
+        onPick = { c ->
+            picked[0] = true
+            apply(c)
+        },
+        onDismiss = {
+            if (!picked[0]) restore()
+            onClose()
+        },
+        title = title,
+        showAlpha = true,
+        onPreview = apply,
+    )
 }
 
 /**
