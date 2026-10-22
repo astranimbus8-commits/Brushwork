@@ -252,6 +252,9 @@ private fun ColorControl(host: ParamHost, p: FilterParam.Color, enabled: Boolean
             onDismiss = { picking = false },
             title = p.label,
             showAlpha = true,
+            // v1.10 (R7): the canvas previews the color being picked (no step: OK records one;
+            // Cancel puts the opening color back the same way).
+            onPreview = { host.update(p.key, it) },
         )
     }
 }
