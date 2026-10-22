@@ -115,6 +115,22 @@ internal class GroupSnapFixtures {
         return c to tool
     }
 
+    /**
+     * A 400 x 300 canvas with the [id] tool's pending path through [pts] (smooth points, in that
+     * order) on the empty "Vector 1" layer, nothing selected, snapping off.
+     */
+    fun curve(id: ToolId, pts: List<Vec2>): Pair<EditorController, CurveTool> {
+        val c = controller(400, 300, vectorLayer = true)
+        c.snapping.enabled = false
+        c.selectTool(id)
+        val tool = c.tools.getValue(id) as CurveTool
+        for (p in pts) assertTrue("$id adds $p", tool.addAnchor(p))
+        tool.deselect()
+        tool.selectPoints(PointSelection.none(pts.size))
+        assertEquals("$id", pts, pts.indices.map { tool.pointAt(it) })
+        return c to tool
+    }
+
     companion object {
         val SHAPE_TL = Vec2(60f, 70f)
         val SHAPE_BR = Vec2(140f, 130f)

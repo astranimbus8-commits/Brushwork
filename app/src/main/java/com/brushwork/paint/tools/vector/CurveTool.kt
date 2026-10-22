@@ -1931,8 +1931,11 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
     }
 
     // region v110-A5 corners
-    /** v1.10 (R12): the pill's Sharp / Smooth cell. F0: none, so the cell stays hidden (A5 body). */
-    override val pointCorners: PointCornerEditor? = null
+    /**
+     * v1.10 (A5, R12): the pill's Sharp / Smooth cell, one editor for the tool's life (the editor
+     * screen remembers the cell by it); its state hides the cell without a selected point.
+     */
+    override val pointCorners: PointCornerEditor? by lazy(LazyThreadSafetyMode.NONE) { com.brushwork.paint.tools.points.CurveCornerEditor(this) }
     // endregion
 
     /**

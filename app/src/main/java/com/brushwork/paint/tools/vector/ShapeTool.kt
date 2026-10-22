@@ -1571,8 +1571,12 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
     }
 
     // region v110-A5 corners
-    /** v1.10 (R12): the pill's Sharp / Smooth cell. F0: none, so the cell stays hidden (A5 body). */
-    override val pointCorners: PointCornerEditor? = null
+    /**
+     * v1.10 (A5, R12): the pill's Sharp / Smooth cell, one editor for the tool's life (the editor
+     * screen remembers the cell by it); its state hides the cell outside Points mode or without a
+     * selected point. A tap does nothing during a group edit (C10).
+     */
+    override val pointCorners: PointCornerEditor? by lazy(LazyThreadSafetyMode.NONE) { com.brushwork.paint.tools.points.ShapeCornerEditor(this) { groupBase != null } }
     // endregion
 
     /**
