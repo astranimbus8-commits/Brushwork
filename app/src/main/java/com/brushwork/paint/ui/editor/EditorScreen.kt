@@ -1089,7 +1089,7 @@ private fun FeedbackChips(
  * [MenuLabels18.THIS_ARTWORK]. The entries keep their labels and, within a section, their order;
  * "Canvas…" moves from before "Flip view" to the head of the last section.
  *
- * v1.10 (F1, design 2.11, J14): "Settings" leaves "This artwork" for a last section of its own
+ * v1.10 (F1, design 2.11, J14): "Settings" leaves [MenuLabels18.THIS_ARTWORK] for a last section of its own
  * ([MENU_SECTION_APP], under a divider, no header): its settings are the app's, not the artwork's.
  */
 private fun moreMenuEntries(

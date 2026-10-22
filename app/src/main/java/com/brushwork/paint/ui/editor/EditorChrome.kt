@@ -59,8 +59,9 @@ data class MenuEntry(
 
 /**
  * v1.10 (F1, design 2.11, J14): the [MenuEntry.section] of the More menu's last section, which has
- * no header: the menu draws a divider above it. "Settings" sits there, apart from "This artwork",
- * since its settings are the app's on this phone, not the artwork's.
+ * no header: the menu draws a divider above it. "Settings" sits there, apart from the section
+ * [com.brushwork.paint.ui.common.MenuLabels18.THIS_ARTWORK], since its settings are the app's on
+ * this phone, not the artwork's.
  */
 internal const val MENU_SECTION_APP = ""
 
