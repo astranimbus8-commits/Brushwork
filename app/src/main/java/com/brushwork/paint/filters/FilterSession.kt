@@ -62,9 +62,16 @@ import kotlin.math.hypot
  * v1.9 (R8): while open, the session is the controller's [EditorController.inToolHistory]: Undo
  * and Redo walk its own steps ([history]) first; at the bottom v1.8's Undo cancels it.
  *
+ * v1.10 (R6, A4): [selectedIds] are the layer's selected objects when the filter started (kept
+ * by `EditorController.startFilter`); a filter with a `colorMapper` recolors them in object mode.
+ *
  * All public members must be called on the main thread.
  */
-class FilterSession(val controller: EditorController, val filter: Filter) : InToolHistoryOwner {
+class FilterSession(
+    val controller: EditorController,
+    val filter: Filter,
+    val selectedIds: Set<Long> = emptySet(),
+) : InToolHistoryOwner {
 
     /** The layer being filtered (fixed for the session, even if another layer becomes active). */
     val layer: Layer = controller.activeLayer
