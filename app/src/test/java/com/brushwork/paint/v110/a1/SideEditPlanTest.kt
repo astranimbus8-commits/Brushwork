@@ -7,6 +7,8 @@ import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.v110.a1.A1Kit.identity
 import com.brushwork.paint.v110.a1.A1Kit.mirrorX
 import com.brushwork.paint.v110.a1.A1Kit.withMaps
+import com.brushwork.paint.vector.VectorContent
+import com.brushwork.paint.vector.copies.CopyPick
 import com.brushwork.paint.vector.edit.VectorEditSession
 import com.brushwork.paint.vector.select.ObjectTestKit
 import com.brushwork.paint.vector.select.vec
@@ -16,6 +18,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import kotlin.math.abs
 
 /**
  * v1.10 (R1 (c)): the edit preview of one side (`VectorLayers.beginEdit` with a side) floats that
@@ -63,5 +66,29 @@ class SideEditPlanTest {
         val whole = begin(c, -1)
         assertTrue("both sides: ${whole.floatingRect}", whole.floatingRect.left <= 60 && whole.floatingRect.right >= 452)
         whole.cancel()
+    }
+
+    /**
+     * The picked side's preview is the copy itself (`CopyPick.side`: the source under map k, an
+     * isometry): rendered alone it gives the copy's pixels exactly as the object draws them, for a
+     * path and for shapes, under a mirror and a turn.
+     */
+    @Test
+    fun theSidePreviewIsDrawnAsTheCopy() {
+        val objects = listOf(kit.box(60f, 100f, 120f, 140f), kit.rectangle(90f, 120f, 60f, 40f), kit.ellipse(90f, 120f))
+        for (base in objects) for (m in listOf(mirrorX(), A1Kit.turn(180.0))) {
+            val o = withMaps(base, listOf(identity(), m))
+            val whole = kit.render(VectorContent(objects = listOf(o)))
+            val alone = kit.render(VectorContent(objects = listOf(CopyPick.side(o, 1)!!)))
+            val box = CopyPick.boundsOf(o, 1)
+            var differ = 0
+            for (y in box.top.toInt().coerceAtLeast(0) until box.bottom.toInt().coerceAtMost(kit.h))
+                for (x in box.left.toInt().coerceAtLeast(0) until box.right.toInt().coerceAtMost(kit.w)) {
+                    val a = whole[y * kit.w + x]
+                    val b = alone[y * kit.w + x]
+                    if (abs(Color.alpha(a) - Color.alpha(b)) > 8) differ++
+                }
+            assertTrue("${base::class.simpleName} under ${m.toList()}: $differ pixels differ", differ <= 4)
+        }
     }
 }
