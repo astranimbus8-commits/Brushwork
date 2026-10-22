@@ -4,6 +4,7 @@ import com.brushwork.paint.EditorController
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.tools.transform.TransformState
+import com.brushwork.paint.vector.ObjectCopies
 import com.brushwork.paint.vector.VObject
 import com.brushwork.paint.vector.VectorContent
 import com.brushwork.paint.vector.VectorLayers
@@ -34,9 +35,21 @@ internal class CopyLift(
     override fun committed(m: FloatArray): FloatArray =
         if (CopyEdit.isIsometry(m)) m else CopyEdit.nearestIsometry(m, Vec2(sourceRect.exactCenterX(), sourceRect.exactCenterY()))
 
-    override fun mapped(o: VObject, m: FloatArray): List<VObject>? = CopyEdit.offset(o, side, m)?.let { listOf(it) }
+    /** The commit put this side onto another one (or the source): the maps merged, so it is gone as a side. */
+    private var mergedAway = false
+
+    override fun mapped(o: VObject, m: FloatArray): List<VObject>? {
+        val moved = CopyEdit.offset(o, side, m) ?: return null
+        mergedAway = ObjectCopies.of(moved).maps.size < ObjectCopies.of(o).maps.size
+        return listOf(moved)
+    }
 
     override val shiftsCache: Boolean get() = false
+
+    /** A merged side is no longer picked (the next lift of the object is all of it). */
+    override fun afterCommit() {
+        if (mergedAway) VectorLift.sideDeleted(c)
+    }
 
     override fun deleted(content: VectorContent): VectorContent? {
         val o = content.byId(id) ?: return null
@@ -44,8 +57,8 @@ internal class CopyLift(
         return content.replaced(mapOf(id to listOf(rest)))
     }
 
-    /** The object keeps its other sides, and stays selected. */
-    override fun afterDelete() {}
+    /** The object keeps its other sides and stays selected; the deleted side is no longer picked. */
+    override fun afterDelete() = VectorLift.sideDeleted(c)
 
     /**
      * True when ✓ with [state] would leave the object unusable (`StrokeCopies.isUsable` /

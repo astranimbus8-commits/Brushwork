@@ -32,7 +32,7 @@ import com.brushwork.paint.vector.select.PendingRenders
  * landed content.
  */
 internal open class VectorObjectLift(
-    private val c: EditorController,
+    protected val c: EditorController,
     private val session: VectorEditSession,
     /** The lifted objects (their ids stay the same through ✓). */
     val ids: Set<Long>,
@@ -95,7 +95,7 @@ internal open class VectorObjectLift(
         for (o in content.objects) if (o.id in ids) map[o.id] = mapped(o, m) ?: return finish(false)
         if (map.isEmpty()) return finish(false)
         val hint = if (shiftsCache) shift?.let { VectorLayers.ShiftHint(map.keys.toSet(), it[0], it[1]) } else null
-        return apply(content.replaced(map), label, m, hint) {}
+        return apply(content.replaced(map), label, m, hint) { afterCommit() }
     }
 
     /** v1.10 (R1): the document transform [commit] applies for [m] (a [CopyLift] snaps a drift to an isometry). */
@@ -106,6 +106,9 @@ internal open class VectorObjectLift(
 
     /** v1.10 (R1): a whole-pixel move may shift the layer's cache (not for one side: the rest of its object stays). */
     protected open val shiftsCache: Boolean get() = true
+
+    /** v1.10 (R1): runs once a [commit] is applied. */
+    protected open fun afterCommit() {}
 
     /** Deletes the lifted objects (one undo step [label]); they leave the object selection. */
     override fun delete(label: String): Boolean {

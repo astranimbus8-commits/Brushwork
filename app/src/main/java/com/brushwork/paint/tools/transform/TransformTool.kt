@@ -37,6 +37,8 @@ import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.IncrementKind
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.Selection
+import com.brushwork.paint.tools.DeletingTool
+import com.brushwork.paint.tools.ObjectDeletion
 import com.brushwork.paint.tools.ObjectPosition
 import com.brushwork.paint.tools.ObjectScale
 import com.brushwork.paint.tools.PillPositionTool
@@ -53,6 +55,7 @@ import com.brushwork.paint.ui.common.ArrayLabels
 import com.brushwork.paint.ui.common.MirrorLabels110
 import com.brushwork.paint.ui.common.TransformLabels17
 import com.brushwork.paint.vector.VectorLayerOps
+import com.brushwork.paint.vector.lift.CopyLift
 import com.brushwork.paint.vector.lift.VectorLift
 import com.brushwork.paint.vector.lift.VectorLiftProvider
 import com.brushwork.paint.vector.lift.VectorObjectLift
@@ -99,7 +102,7 @@ import kotlin.math.min
  * over the step. While a gesture is stepped `increments.readout` says where it is ("+30 px, 0
  * px", "120 %", "45°"). Typed values are never stepped.
  */
-class TransformTool(controller: EditorController) : Tool(controller), PointEditor, PillPositionTool, ScaledTool {
+class TransformTool(controller: EditorController) : Tool(controller), PointEditor, PillPositionTool, ScaledTool, DeletingTool {
     override val id = ToolId.TRANSFORM
 
     /** v1.7 (§3.16): [MESH] is "Free deform", a mesh of up to 12 x 12 cells over the lifted pixels. */
@@ -275,6 +278,19 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
         if (pick != null && pick === resizeToastFor) return
         resizeToastFor = pick
         controller.toast(MirrorLabels110.SIDE_RESIZE_BLOCKED)
+    }
+
+    /**
+     * v1.10 (R1): the pill's trash cell, only while one mirror side is picked ([sidePicked]): it is
+     * named `MirrorLabels110.DELETE_SIDE` and deletes that side ([deleteContent], one step). Null
+     * otherwise: as in v1.7, Transform has no pill trash (the strip's Delete stays).
+     */
+    override val objectDeletion: ObjectDeletion? get() = if (sidePicked) sideDeletion else null
+
+    private val sideDeletion = object : ObjectDeletion {
+        override val deleteLabel: String get() = MirrorLabels110.DELETE_SIDE
+
+        override fun delete() { deleteContent() }
     }
 
     /** The side handles are drawn and can be dragged (v1.10: not while one mirror side is picked). */
@@ -622,7 +638,8 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
     override fun onDeactivate() {
         cancelJobs()
         showReadout(null)
-        if (hasPendingWork) commit()
+        // v1.10 (R1): a side move the copy limits refuse is dropped here (✓ keeps it lifted).
+        if (hasPendingWork) session?.let { applyPending(it, moveSelection = true) }
         // v1.7 (§3.1): "Select several" turns itself off when the tool closes.
         selectSeveral = false
         // Nothing to snap until the next transform (what is known stays cached).
@@ -732,7 +749,7 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
     override fun commit() {
         cancelJobs()
         val s = session ?: return
-        applyPending(s, moveSelection = true)
+        applyPending(s, moveSelection = true, keepRefused = true)
     }
 
     override fun discard() {
@@ -1541,7 +1558,8 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
             return false
         }
         s.objectLift?.let { lift ->
-            val deleted = lift.delete(DELETE_LABEL)
+            // v1.10 (R1): one mirror side picked: only that side goes, as one step "Delete one side".
+            val deleted = lift.delete(if (lift is CopyLift) MirrorLabels110.DELETE_SIDE else DELETE_LABEL)
             endSession(s)
             return deleted
         }
@@ -2725,8 +2743,12 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
      * selection the content was lifted with moves along (same step); otherwise the current
      * selection is left alone (it was just replaced by the user). Returns true when a step was
      * recorded.
+     *
+     * v1.10 (R1): a move of one mirror side that the copy limits refuse (`CopyLift.refused`) shows
+     * `MirrorLabels110.SIDE_REFUSED` and changes nothing; with [keepRefused] (✓) the side stays
+     * lifted where it is, otherwise (the tool closes, the selection changed) the lift ends.
      */
-    private fun applyPending(s: Session, moveSelection: Boolean): Boolean {
+    private fun applyPending(s: Session, moveSelection: Boolean, keepRefused: Boolean = false): Boolean {
         val st = transformState ?: run { endSession(s); return false }
         // The layer/bitmap went away underneath us (deleted, canvas resized...): nothing to bake.
         if (!isValid(s)) { cancelSession(s); return false }
@@ -2743,6 +2765,11 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
         // Unchanged: nothing to record.
         if (!s.placement && st.sameGeometry(s.initial)) { endSession(s); return false }
         val objects = s.objectLift
+        if (objects is CopyLift && objects.refused(st)) {
+            controller.toast(MirrorLabels110.SIDE_REFUSED)
+            if (!keepRefused) cancelSession(s)
+            return false
+        }
         if (objects != null && !pixelFallback(objects, st)) {
             // Vector objects: their geometry is mapped exactly (one step, made by the lift); a
             // text, shape or array layer keeps its data, mapped and re-rendered (v1.7, §3.11).

@@ -70,6 +70,11 @@ object VectorLift {
     internal fun toolLeft(c: EditorController) {
         providers[c]?.get()?.toolLeft()
     }
+
+    /** v1.10 (R1): the picked side was deleted in [c]: no side stays picked, and the tap cycle starts again. */
+    internal fun sideDeleted(c: EditorController) {
+        providers[c]?.get()?.toolLeft()
+    }
 }
 
 /** Lifts the objects of one editor's vector layers for its Transform tool (see [VectorLift]). */
