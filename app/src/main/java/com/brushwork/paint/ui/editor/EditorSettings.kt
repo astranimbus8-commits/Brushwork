@@ -17,6 +17,7 @@ import com.brushwork.paint.ui.common.IncrementsSettingsSection
 import com.brushwork.paint.ui.common.SectionHeader
 import com.brushwork.paint.ui.common.ToggleRow
 import com.brushwork.paint.ui.diagnostics.DiagnosticsSection
+import com.brushwork.paint.ui.engine.LayerStorageSection
 import com.brushwork.paint.ui.mask.FastAdjustPreviewToggle
 
 /**
@@ -179,6 +180,8 @@ fun EditorSettingsDialog(prefs: EditorPrefs, onDismiss: () -> Unit, onCanvasChan
             selected = choices.indexOf(prefs.autosaveSeconds),
             onSelect = { prefs.autosaveSeconds = choices[it] },
         )
+        // v1.10 (F1, J14, J32): A10's layer storage section (empty in F1).
+        LayerStorageSection()
         // v1.9 (design 2.4.14, C9): A8's Backup, then A7a's Diagnostics (both empty in F1b).
         BackupSection()
         DiagnosticsSection()

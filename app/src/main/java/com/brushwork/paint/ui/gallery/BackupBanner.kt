@@ -38,7 +38,8 @@ import com.brushwork.paint.ui.theme.BrushworkColors
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun BackupBanner(notice: GalleryNotice, onChoose: () -> Unit, onLater: () -> Unit) {
-    if (notice is GalleryNotice.Crash) return
+    // v1.10 (F1): the crash and engine notices have cards of their own.
+    if (notice is GalleryNotice.Crash || notice is GalleryNotice.Engine) return
     Surface(color = BrushworkColors.ChromeHigh, modifier = Modifier.fillMaxWidth().testTag(V19Tags.BACKUP_BANNER)) {
         Column(Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
             when (notice) {
@@ -71,7 +72,7 @@ fun BackupBanner(notice: GalleryNotice, onChoose: () -> Unit, onLater: () -> Uni
                         }
                     }
                 }
-                is GalleryNotice.Crash -> Unit
+                is GalleryNotice.Crash, is GalleryNotice.Engine -> Unit
             }
         }
     }

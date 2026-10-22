@@ -1,12 +1,16 @@
 package com.brushwork.paint
 
+import android.os.Build
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.brushwork.paint.diagnostics.Breadcrumbs
 import com.brushwork.paint.diagnostics.CrashLog
 import com.brushwork.paint.diagnostics.ErrorReporter
+import com.brushwork.paint.engine.EngineConfig
 import com.brushwork.paint.engine.PerfTrace
+import com.brushwork.paint.engine.budget.Budgets
+import com.brushwork.paint.engine.check.CheckStore
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -15,6 +19,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -44,6 +49,28 @@ class EditorSession(private val app: BrushworkApp, val projectId: String) {
     private var lastSavedEdit = 0
     var closed = false
         private set
+
+    /** v1.10 (F1): this session's place among the sessions opened in this process ([engineSessions]). */
+    private val engineSession = ++engineSessions
+
+    // v1.10 (F1, J32, I31): the engine's level, budgets and residency for this session, fixed before
+    // the controller exists (A10 fills CheckStore and the probes; in F1 there is no check and memory
+    // is unknown, so the session runs at CLASSIC with v1.9's numbers). The engine session ends with
+    // this session's scope, after close() has saved and released the controller; a session opened
+    // meanwhile (another artwork while this one still saves) keeps its own.
+    init {
+        val check = CheckStore.read(app)
+        val budgets = Budgets.compute(EngineConfig.memoryProbe, check?.stepDown ?: 0)
+        val totalMem = runCatching { EngineConfig.memoryProbe.snapshot().totalMem }.getOrDefault(0L)
+        val freeBytes = runCatching { EngineConfig.storageProbe.freeBytes(app.filesDir) }.getOrDefault(0L)
+        val deviceKey = EngineConfig.deviceKey(Build.MODEL.orEmpty(), totalMem)
+        EngineConfig.openSession(
+            EngineConfig.resolve(app.settings.layerStorageMode, check, deviceKey, freeBytes, memoryKnown = budgets.known),
+            budgets,
+            check,
+        )
+        scope.coroutineContext.job.invokeOnCompletion { if (engineSession == engineSessions) EngineConfig.closeSession() }
+    }
 
     // region v110-A11 open
     init {
@@ -191,5 +218,11 @@ class EditorSession(private val app: BrushworkApp, val projectId: String) {
     /** v1.9 (A7a): what closing could not finish is kept as a handled report (a cancellation is none). */
     private fun kept(e: Throwable, where: String) {
         if (e !is kotlinx.coroutines.CancellationException) CrashLog.record(e, where, fatal = false)
+    }
+
+    private companion object {
+        /** v1.10 (F1): the sessions opened in this process; only the newest closes the engine session. */
+        @Volatile
+        var engineSessions = 0
     }
 }

@@ -136,6 +136,7 @@ import com.brushwork.paint.ui.editor.chrome.OptionsStripPanel
 import com.brushwork.paint.ui.editor.chrome.ToolMenuPanel
 import com.brushwork.paint.ui.editor.chrome.TopButton
 import com.brushwork.paint.ui.editor.chrome.TopRow
+import com.brushwork.paint.ui.engine.EngineEditorChrome
 import com.brushwork.paint.ui.exchange.ExchangeHost
 import com.brushwork.paint.ui.exchange.rememberExchangeUi
 import com.brushwork.paint.ui.filters.FilterBrowser
@@ -959,6 +960,9 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
         SnackbarHost(snackbar, modifier = snackbarPlacement) { data ->
             Snackbar(data, containerColor = BrushworkColors.ChromeHigh, contentColor = BrushworkColors.OnChrome, actionColor = BrushworkColors.Accent)
         }
+
+        // v1.10 (F1, J32): the engine's editor chrome (A10: the activation ring, the low-storage message).
+        EngineEditorChrome(controller)
 
         // ------------------------------------------------------------ busy scrim (blocks input)
         if (busy != null) BusyOverlay(busy, progress = { controller.busyProgress }, onCancel = controller.busyCancel)

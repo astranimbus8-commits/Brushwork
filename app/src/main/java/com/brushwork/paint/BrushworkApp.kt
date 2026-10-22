@@ -9,6 +9,7 @@ import androidx.compose.runtime.setValue
 import com.brushwork.paint.diagnostics.Breadcrumbs
 import com.brushwork.paint.diagnostics.CrashLog
 import com.brushwork.paint.diagnostics.ErrorReporter
+import com.brushwork.paint.engine.EngineStartup
 import com.brushwork.paint.engine.GovernorPolicies
 import com.brushwork.paint.engine.MemoryGovernor
 import com.brushwork.paint.engine.PerfTrace
@@ -46,6 +47,8 @@ class BrushworkApp : Application() {
         // v1.9 (V28, design 2.4.3): one memory policy for the whole app (v1.8's until A7b).
         MemoryGovernor.policy = GovernorPolicies.current()
         registerComponentCallbacks(memoryCallbacks)
+        // v1.10 (F1, J32): the engine's start (A10: the swap janitor, the exit watch, the gallery budget; F1: no-op).
+        EngineStartup.onAppCreate(this)
         // v1.9 (design 2.4.13): the automatic backup (A8; F1b: no-op).
         BackupService.start(this)
     }

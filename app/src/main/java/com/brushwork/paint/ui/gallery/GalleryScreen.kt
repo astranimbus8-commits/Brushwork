@@ -113,6 +113,7 @@ import com.brushwork.paint.storage.ProjectRepository
 import com.brushwork.paint.ui.common.BwDialog
 import com.brushwork.paint.ui.common.FitText
 import com.brushwork.paint.ui.common.checkerboard
+import com.brushwork.paint.ui.engine.EngineCheckHost
 import com.brushwork.paint.ui.exchange.rememberGalleryImport
 import com.brushwork.paint.ui.theme.BrushworkColors
 import kotlinx.coroutines.CancellationException
@@ -153,6 +154,8 @@ fun GalleryScreen(repository: ProjectRepository, onOpenProject: (id: String) -> 
         now = System.currentTimeMillis()
     }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { resumeTick++ }
+    // v1.10 (F1, J32): the automatic check runs while the gallery shows (A10; F1: no-op).
+    EngineCheckHost()
     LaunchedEffect(Unit) {
         while (true) {
             delay(60_000)
