@@ -1560,7 +1560,7 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
             return false
         }
         s.objectLift?.let { lift ->
-            // v1.10 (R1): one mirror side picked: only that side goes, as one step "Delete one side".
+            // v1.10 (R1): one mirror side picked: only that side goes, as one step MirrorLabels110.DELETE_SIDE.
             val label = if (lift is CopyLift) MirrorLabels110.DELETE_SIDE else DELETE_LABEL
             val deleted = LegacyShapes.fold(controller, layer, label) { lift.delete(label) }
             endSession(s)
