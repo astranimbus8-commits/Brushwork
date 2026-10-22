@@ -19,9 +19,11 @@ import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.testing.StripTestKit
 import com.brushwork.paint.ui.color.RobolectricUi
+import com.brushwork.paint.ui.common.ObjectBarLabels110
 import com.brushwork.paint.ui.common.StripLabels18
 import com.brushwork.paint.ui.theme.BrushworkTheme
 import com.brushwork.paint.vector.VPath
+import com.brushwork.paint.vector.VShape
 import com.brushwork.paint.vector.VStroke
 import com.brushwork.paint.vector.VectorContent
 import com.brushwork.paint.vector.lift.VectorLift
@@ -41,7 +43,8 @@ import org.robolectric.annotation.Config
  * The Object bar (v1.5 A2) in a real activity at the user's phone width: all nine actions are
  * there with finger-sized buttons (v1.8: seven on row 1, Forward and Backward on the More row its
  * toggle opens), each edit is one undo step, Recolor's long press paints the lines only, and the bar
- * goes away with the selection (also when another layer is selected).
+ * goes away with the selection (also when another layer is selected). v1.10 (A6, R10, R11): one
+ * selected path adds "Edit" after Transform and "Turn into shape" on the More row.
  */
 // Own sandbox (the test recomposer policy and paused Choreographer are global); the user's phone size.
 @RunWith(RobolectricTestRunner::class)
@@ -157,6 +160,38 @@ class VectorObjectBarUiRobolectricTest {
         c.vectors.setSelection(layer, setOf(3L))
         SmokeUi.settle()
         assertTrue(SmokeUi.has("1 object selected", exact = true))
+
+        // v1.10 (A6, R10, R11): one selected path adds "Edit" right after Transform (row 1: eight
+        // buttons at 40.5 dp) and, on the More row, "Turn into shape" as wide as two buttons; both
+        // labels whole. "Turn into shape" is one step, which undo takes back.
+        if (!StripTestKit.objectRowShown()) assertTrue(StripTestKit.openObjectRow())
+        val transform = clickableOf("Transform the selected objects")
+        val edit = clickableOf(ObjectBarLabels110.EDIT_DESC)
+        assertTrue("Edit right after Transform", transform.bounds.right <= edit.bounds.left + 1)
+        assertEquals("eight buttons at 40.5 dp", 40.5f * density, edit.bounds.width.toFloat(), density)
+        val toShape = clickableOf(ObjectBarLabels110.TO_SHAPE)
+        assertEquals("Turn into shape two buttons wide", 2f * clickableOf("Bring forward").bounds.width.toFloat(), toShape.bounds.width.toFloat(), density)
+        for (label in listOf(ObjectBarLabels110.EDIT, ObjectBarLabels110.TO_SHAPE)) {
+            val layouts = ArrayList<TextLayoutResult>()
+            RobolectricUi.byText(label).node.config.getOrNull(SemanticsActions.GetTextLayoutResult)?.action?.invoke(layouts)
+            assertTrue("\"$label\" laid out", layouts.isNotEmpty())
+            assertFalse("\"$label\" fits its button", layouts[0].hasVisualOverflow)
+        }
+        val path = layer.vector!!.objects
+        steps = c.undoManager.undoCount
+        SmokeUi.click(ObjectBarLabels110.TO_SHAPE)
+        Smoke.pumpUntil(10_000) { !c.vectors.isRendering }
+        assertEquals(steps + 1, c.undoManager.undoCount)
+        assertEquals(ObjectBarLabels110.TO_SHAPE, c.undoManager.undoLabel)
+        assertTrue("the same id, now a shape", layer.vector!!.byId(3) is VShape)
+        c.currentTool.discard() // ✕ of the Shape tool keeps the shape
+        c.undo()
+        Smoke.pumpUntil(10_000) { !c.vectors.isRendering }
+        assertEquals(steps, c.undoManager.undoCount)
+        assertEquals("undo brings the path back", path, layer.vector!!.objects)
+        c.vectors.setSelection(layer, setOf(3L))
+        SmokeUi.settle()
+
         c.selectLayer(doc.layers[0])
         SmokeUi.settle()
         assertTrue(c.vectors.selectedIds.isEmpty())
