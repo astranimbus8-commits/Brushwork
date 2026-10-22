@@ -68,11 +68,13 @@ import com.brushwork.paint.AppSettings
 import com.brushwork.paint.BrushworkApp
 import com.brushwork.paint.core.LengthUnit
 import com.brushwork.paint.core.Units
+import com.brushwork.paint.engine.LayerBudget
 import com.brushwork.paint.storage.NewCanvasSpec
 import com.brushwork.paint.ui.color.ColorPickerDialog
 import com.brushwork.paint.ui.common.CanvasLabels19
 import com.brushwork.paint.ui.common.ChoiceChips
 import com.brushwork.paint.ui.common.ColorSwatch
+import com.brushwork.paint.ui.common.LayersLabels110
 import com.brushwork.paint.ui.common.LengthField
 import com.brushwork.paint.ui.common.NumberField
 import com.brushwork.paint.ui.common.PanelCard
@@ -105,7 +107,8 @@ fun NewCanvasDialog(creating: Boolean, onDismiss: () -> Unit, onCreate: (NewCanv
 
 @Composable
 private fun NewCanvasContent(creating: Boolean, onDismiss: () -> Unit, onCreate: (NewCanvasSpec) -> Unit) {
-    val maxHeap = remember { Runtime.getRuntime().maxMemory() }
+    // v1.10 (F1, design 3.3): the gallery's layer budget (EngineConfig.applyIdle; v1.9's numbers until A10).
+    val budget = remember { LayerBudget.current }
     val focusManager = LocalFocusManager.current
     val context = LocalContext.current
     val settings = remember { (context.applicationContext as? BrushworkApp)?.settings ?: AppSettings(context) }
@@ -122,7 +125,7 @@ private fun NewCanvasContent(creating: Boolean, onDismiss: () -> Unit, onCreate:
 
     val w = size.width
     val h = size.height
-    val check = CanvasPresets.check(w, h, maxHeap)
+    val check = budget.canvasCheck(w, h)
 
     // Print sizes and physical units keep their physical size when the resolution changes;
     // a pixel size stays the same.
@@ -135,7 +138,7 @@ private fun NewCanvasContent(creating: Boolean, onDismiss: () -> Unit, onCreate:
         focusManager.clearFocus()
         val cw = size.width
         val ch = size.height
-        if (creating || !CanvasPresets.check(cw, ch, maxHeap).ok) return
+        if (creating || !budget.canvasCheck(cw, ch).ok) return
         // v1.9 (R15): one layer for every choice; the choice is remembered for the next canvas
         // (and, Gate 2, the "Color…" color with it).
         settings.newCanvasBackground = background.setting
@@ -228,7 +231,7 @@ private fun NewCanvasContent(creating: Boolean, onDismiss: () -> Unit, onCreate:
             )
 
             SectionHeader("Result")
-            SummaryCard(w, h, size.dpi, unit, check, maxHeap)
+            SummaryCard(w, h, size.dpi, unit, check, budget)
         }
     }
 
@@ -414,7 +417,7 @@ private fun PaperSwatch(selected: Boolean) {
 }
 
 @Composable
-private fun SummaryCard(w: Int, h: Int, dpi: Double, unit: LengthUnit, check: CanvasCheck, maxHeap: Long) {
+private fun SummaryCard(w: Int, h: Int, dpi: Double, unit: LengthUnit, check: CanvasCheck, budget: LayerBudget) {
     PanelCard {
         Text("$w × $h px", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
         if (w > 0 && h > 0) {
@@ -426,7 +429,8 @@ private fun SummaryCard(w: Int, h: Int, dpi: Double, unit: LengthUnit, check: Ca
         }
         Spacer(Modifier.height(8.dp))
         InfoRow("Memory per layer", CanvasPresets.formatBytes(CanvasPresets.layerBytes(w, h)))
-        InfoRow("Layers on this device", if (check.ok) "up to ${CanvasPresets.maxLayers(w, h, maxHeap)}" else "—")
+        // v1.10 (F1): no fixed count where the budget has none (never in F1).
+        InfoRow("Layers on this device", if (check.ok) budget.capacity(w, h)?.let { "up to $it" } ?: LayersLabels110.NO_FIXED_LIMIT else "—")
         val message = check.message
         if (message != null) {
             Text(message, color = BrushworkColors.Danger, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 8.dp))

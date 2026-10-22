@@ -74,11 +74,11 @@ internal object GalleryImports {
 
     /**
      * Decides the artwork for an SVG [file] (its Brushwork canvas, else its physical size);
-     * throws [ImportException] when the file can't make one.
+     * throws [ImportException] when the file can't make one. v1.10 (F1): sized within the
+     * gallery's layer budget (`LayerBudget.current`), as the PDF imports below.
      */
     suspend fun svgSpec(file: ImportFile): NewArtworkSpec = withContext(Dispatchers.Default) {
         val svg = SvgParser.parse(file.bytes!!)
-        val heap = Runtime.getRuntime().maxMemory()
         // Damaged Brushwork data: the file is still an SVG of its own size (the editor says so).
         val p = if (svg.hasPayload) {
             try {
@@ -90,9 +90,9 @@ internal object GalleryImports {
             null
         }
         if (p != null) {
-            NewArtwork.forPayload(file.name, p, heap) ?: throw ImportException("This artwork is too large for this device")
+            NewArtwork.forPayload(file.name, p) ?: throw ImportException("This artwork is too large for this device")
         } else {
-            NewArtwork.forSvg(file.name, svg, heap)
+            NewArtwork.forSvg(file.name, svg)
         }
     }
 
@@ -103,7 +103,7 @@ internal object GalleryImports {
         } catch (e: Exception) {
             null
         } ?: return@withContext null
-        NewArtwork.forPayload(file.name, p, Runtime.getRuntime().maxMemory()) ?: throw ImportException("This artwork is too large for this device")
+        NewArtwork.forPayload(file.name, p) ?: throw ImportException("This artwork is too large for this device")
     }
 }
 
@@ -152,7 +152,7 @@ fun rememberGalleryImport(repository: ProjectRepository, onOpenProject: (String)
                             if (count == 1) {
                                 val size = withContext(Dispatchers.IO) { r.pageSize(0) }
                                 r.close()
-                                open(NewArtwork.forPdfPage(f.name, size.first, size.second, Runtime.getRuntime().maxMemory()), PendingImport(uri, pages = listOf(0)))
+                                open(NewArtwork.forPdfPage(f.name, size.first, size.second), PendingImport(uri, pages = listOf(0)))
                             } else {
                                 pdf = GalleryPdf(f, r, uri)
                                 keep = true
@@ -185,7 +185,7 @@ fun rememberGalleryImport(repository: ProjectRepository, onOpenProject: (String)
                 val first = pages.minOrNull() ?: 0
                 val size = withContext(Dispatchers.IO) { p.rasterizer.pageSize(first) }
                 open(
-                    NewArtwork.forPdfPage(p.file.name, size.first, size.second, Runtime.getRuntime().maxMemory()),
+                    NewArtwork.forPdfPage(p.file.name, size.first, size.second),
                     PendingImport(p.uri, pages = pages.sorted(), transparentPages = transparent),
                 )
             } catch (e: CancellationException) {

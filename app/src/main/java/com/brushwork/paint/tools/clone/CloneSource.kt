@@ -20,6 +20,7 @@ import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.engine.CompositeTarget
 import com.brushwork.paint.engine.Compositor
 import com.brushwork.paint.engine.EditTarget
+import com.brushwork.paint.engine.EngineConfig
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.vector.StrokeCopies
 import kotlin.math.ceil
@@ -158,8 +159,11 @@ class CloneSource(private val controller: EditorController) : CoverageSource, Co
     var isActive: Boolean = false
         private set
 
-    /** The All-layers snapshot may not be larger than this (falls back to This layer). */
-    internal var snapshotBudgetBytes: Long = max(48L shl 20, Runtime.getRuntime().maxMemory() / 4)
+    /**
+     * The All-layers snapshot may not be larger than this (falls back to This layer). v1.10 (F1,
+     * design 3.3): the session budget's cap (v1.9's max(48 MiB, heap / 4) until A7).
+     */
+    internal var snapshotBudgetBytes: Long = EngineConfig.budget.cloneSnapshotCap()
 
     /** Tiles composited into the snapshot so far (tests, diagnostics). */
     internal var tilesRendered: Int = 0
