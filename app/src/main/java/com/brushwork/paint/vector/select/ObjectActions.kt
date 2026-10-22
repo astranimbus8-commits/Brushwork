@@ -6,6 +6,9 @@ import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.transform.TransformTool
 import com.brushwork.paint.ui.editor.HistoryLabels
 import com.brushwork.paint.vector.ObjectCopies
+import com.brushwork.paint.vector.VObject
+import com.brushwork.paint.vector.VPath
+import com.brushwork.paint.vector.VStroke
 import com.brushwork.paint.vector.VectorContent
 import com.brushwork.paint.vector.lift.VectorLift
 import kotlin.math.max
@@ -182,6 +185,29 @@ object ObjectActions {
     }
 
     // ------------------------------------------------------------------ v1.10 (F0 stubs, A6 bodies)
+
+    /**
+     * v1.10 (A6): the one selected object of the selected layer; null when none or several are
+     * selected (or the layer no longer holds it).
+     */
+    fun selectedObject(c: EditorController): VObject? {
+        val ids = c.vectors.selectedIds
+        if (ids.size != 1) return null
+        val layer = c.vectors.selectedLayer ?: return null
+        return layer.vector?.byId(ids.first())
+    }
+
+    /**
+     * v1.10 (R10): whether the object bar shows Edit: exactly one object is selected and it has an
+     * editor (a brush stroke [VStroke] has none). [editRefusal] says when it shows but can't open.
+     */
+    fun editShown(c: EditorController): Boolean {
+        val o = selectedObject(c) ?: return false
+        return o !is VStroke
+    }
+
+    /** v1.10 (R11): whether the object bar offers "Turn into shape": exactly one path is selected. */
+    fun toShapeShown(c: EditorController): Boolean = selectedObject(c) is VPath
 
     /**
      * v1.10 (R10): why the object bar's Edit is disabled for the selection (a path of several

@@ -11,12 +11,14 @@ import org.junit.Test
  * the user's 392 dp phone, 336 dp at 360 dp. Ten buttons (the nine v1.6 ones and Array), eleven
  * units with the double-width detach button. When row 1 is short of room the least used leave it
  * first, a whole rank at a time: Array, the detach button, Forward and Backward, Front and Back...
+ * v1.10 (A6, J26): the ranks are [ObjectBarSlot]'s (Deselect 9, Delete 10; Edit, 8, is covered by
+ * 110/a6/ObjectBarLayout8At392Test and ObjectBarLayout6At360Test); without Edit the rows are v1.9's.
  */
 class ObjectBarLayoutTest {
     // Delete, Duplicate, Forward, Backward, Front, Back, Recolor, Transform, Deselect, Array (+ Detach),
     // with the bar's ranks (higher stays longer).
     private val ten = List(10) { 1 }
-    private val tenRanks = listOf(9, 5, 3, 3, 4, 4, 6, 7, 8, 1)
+    private val tenRanks = listOf(10, 5, 3, 3, 4, 4, 6, 7, 9, 1)
     private val withDetach = ten + 2
     private val withDetachRanks = tenRanks + 2
 
@@ -39,6 +41,13 @@ class ObjectBarLayoutTest {
         }
         // A pair (Forward and Backward, Front and Back) is never split between the rows.
         for ((a, b) in listOf(2 to 3, 4 to 5)) assertEquals("$name: $a and $b together", a in s.row1, b in s.row1)
+    }
+
+    @Test
+    fun theRanksAreTheBars() {
+        val slots = ObjectBarSlot.shown(edit = false, behind = false, detach = true, toShape = false)
+        assertEquals(withDetach, slots.map { it.units })
+        assertEquals(withDetachRanks, slots.map { it.rank })
     }
 
     @Test

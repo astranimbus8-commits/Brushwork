@@ -15,6 +15,7 @@ import com.brushwork.paint.testing.StripTestKit
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.ui.common.ArrayLabels
 import com.brushwork.paint.ui.common.MirrorLabels18
+import com.brushwork.paint.ui.common.ObjectBarLabels110
 import com.brushwork.paint.ui.common.StripLabels18
 import com.brushwork.paint.ui.common.V18Tags
 import com.brushwork.paint.ui.editor.chrome.ChromeHarness
@@ -47,6 +48,10 @@ import org.robolectric.shadows.ShadowLog
  * two- or three-finger tap undoes or redoes once), and so do a tool change and the More menu; when
  * the bar goes (Deselect) its row goes along, remembered, and nothing open takes the next touch;
  * the next selection shows it again.
+ *
+ * v1.10 (A6, R10, R11): the one selected path also shows [ObjectBarLabels110.EDIT] after Transform
+ * (row 1: eight buttons at 40.5 dp) and, on the More row after Detach, [ObjectBarLabels110.TO_SHAPE]
+ * (as wide as Detach).
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = "w392dp-h873dp-xxhdpi", instrumentedPackages = ["com.brushwork.paint.qa18.objectbarsandbox"])
@@ -54,7 +59,7 @@ class ObjectBarMoreTest {
 
     private val row1 = listOf(
         "Delete the selected objects", "Duplicate the selected objects", "Bring to front", "Send to back",
-        "Recolor with the main color", "Transform the selected objects", "Deselect the objects",
+        "Recolor with the main color", "Transform the selected objects", ObjectBarLabels110.EDIT_DESC, "Deselect the objects",
     )
 
     private fun doc(): Document = Smoke.document(400, 300, layers = 1, whiteBottom = true).also { d ->
@@ -127,9 +132,9 @@ class ObjectBarMoreTest {
         assertNull("row 1 never scrolls", StripTestKit.horizontalScroller(delete))
         assertFalse(expanded(s))
         assertNull(s.tagged(V18Tags.STRIP_MORE_ROW))
-        for (gone in listOf("Bring forward", "Send backward", ArrayLabels.FROM_OBJECTS, MirrorLabels18.DETACH)) assertFalse("\"$gone\" waits on the More row", SmokeUi.has(gone, exact = true))
+        for (gone in listOf("Bring forward", "Send backward", ArrayLabels.FROM_OBJECTS, MirrorLabels18.DETACH, ObjectBarLabels110.TO_SHAPE)) assertFalse("\"$gone\" waits on the More row", SmokeUi.has(gone, exact = true))
 
-        // ---- the More row: Forward, Backward, Array and Detach under the bar, as wide as it
+        // ---- the More row: Forward, Backward, Array, Detach and Turn into shape under the bar, as wide as it
         open(s)
         val more = s.tagged(V18Tags.STRIP_MORE_ROW)!!
         assertEquals("4 dp under row 1 (its 2 dp padding)", cells[0].bottom + 2f + 4f, more.top, 1f)
@@ -138,15 +143,18 @@ class ObjectBarMoreTest {
         val backward = Finger.control(s, "Send backward")!!
         val array = Finger.control(s, ArrayLabels.FROM_OBJECTS)!!
         val detach = Finger.control(s, MirrorLabels18.DETACH)!!
-        for ((name, r) in listOf("Forward" to forward, "Backward" to backward, "Array" to array, "Detach" to detach)) {
+        val toShape = Finger.control(s, ObjectBarLabels110.TO_SHAPE)!!
+        for ((name, r) in listOf("Forward" to forward, "Backward" to backward, "Array" to array, "Detach" to detach, "Turn into shape" to toShape)) {
             assertTrue("$name on the More row: $r in $more", more.contains(r.center) && r.height >= 46f - 0.5f)
             assertEquals("$name as tall as a row-1 button", cells[0].height, r.height, 0.5f)
         }
         assertEquals("the More row's buttons as wide as row 1's", cells[0].width, forward.width, 0.5f)
         assertEquals("Detach twice as wide", 2f * forward.width, detach.width, 0.5f)
+        assertEquals("Turn into shape as wide as Detach", detach.width, toShape.width, 0.5f)
         assertTrue(
             "in order",
-            forward.right <= backward.left + 0.5f && backward.right <= array.left + 0.5f && array.right <= detach.left + 0.5f,
+            forward.right <= backward.left + 0.5f && backward.right <= array.left + 0.5f && array.right <= detach.left + 0.5f &&
+                detach.right <= toShape.left + 0.5f,
         )
         assertTrue("the bar's slot takes the More row in (what sits under the bar moves down)", s.tagged(ChromeTags.SELECTION_BAR)!!.bottom >= more.bottom - 0.5f)
 
@@ -158,6 +166,9 @@ class ObjectBarMoreTest {
         assertEquals("Detach is one step", steps + 1, c.undoManager.undoCount)
         assertTrue("the row stays open", expanded(s))
         assertFalse("nothing left to detach", SmokeUi.has(MirrorLabels18.DETACH, exact = true))
+        // (The pieces are selected: several objects, so neither Edit nor Turn into shape.)
+        assertFalse(SmokeUi.has(ObjectBarLabels110.TO_SHAPE, exact = true))
+        assertFalse(SmokeUi.has(ObjectBarLabels110.EDIT_DESC, exact = true))
         assertNotNull(Finger.control(s, "Bring forward"))
 
         // ---- v1.9 (R3): a canvas touch never closes the row and is never consumed: a pinch

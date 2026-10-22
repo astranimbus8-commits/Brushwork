@@ -32,8 +32,8 @@ import androidx.compose.material.icons.outlined.Deselect
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.FlipToBack
 import androidx.compose.material.icons.outlined.FlipToFront
-import androidx.compose.material.icons.outlined.FormatColorFill
 import androidx.compose.material.icons.outlined.LinkOff
+import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.VerticalAlignBottom
 import androidx.compose.material.icons.outlined.VerticalAlignTop
 import androidx.compose.material3.Icon
@@ -118,18 +118,24 @@ import kotlin.math.max
  * Selecting another layer drops the object selection (the objects of a layer that isn't being
  * worked on are not acted on).
  *
- * v1.10 (F0, design 3.2; A6 owns the bar): [recolorIcon] is Recolor's icon (R3); [onEdit] adds
- * [ObjectBarLabels110.EDIT] right after Transform (R10), [onToShape] adds
- * [ObjectBarLabels110.TO_SHAPE] (2 units, as Detach) after Detach (R11), and [onArrayBehind] adds
- * [ArrayLabels110.BEHIND] right after Array (R4). Each is hidden while its callback is null, so
- * without them the bar is v1.9's; the ranks stay v1.9's until A6.
+ * v1.10 (A6, design R10, R11, R3, R4; J26): Recolor shows [recolorIcon], the palette
+ * ([ObjectBarRecolorIcon]). [ObjectBarLabels110.EDIT] follows Transform while exactly one object
+ * with an editor is selected ([ObjectActions.editShown]: not a brush stroke), dimmed while
+ * [ObjectActions.editRefusal] says why it can't open (a tap shows that reason);
+ * [ObjectBarLabels110.TO_SHAPE] (2 units, as Detach) follows Detach while exactly one path is
+ * selected ([ObjectActions.toShapeShown]); [ArrayLabels110.BEHIND] follows Array while
+ * [onArrayBehind] is set (the editor sets it while A3's array behind can run). [onEdit] and
+ * [onToShape] replace what those two do ([ObjectActions.openInEditor],
+ * [ObjectActions.turnIntoShape]). The order and the ranks are [ObjectBarSlot]'s: at 392 dp row 1
+ * holds Delete, Duplicate, Front, Back, Recolor, Transform, Edit and Deselect at 40.5 dp; at 360 dp
+ * Front and Back join the More row while Edit shows (6 buttons at 46 dp), and stay without it.
  */
 @Composable
 fun VectorObjectBar(
     controller: EditorController,
     modifier: Modifier,
     state: StripState? = null,
-    recolorIcon: ImageVector = Icons.Outlined.FormatColorFill,
+    recolorIcon: ImageVector = ObjectBarRecolorIcon,
     onEdit: (() -> Unit)? = null,
     onToShape: (() -> Unit)? = null,
     onArrayBehind: (() -> Unit)? = null,
@@ -141,6 +147,11 @@ fun VectorObjectBar(
     val activeLayer by remember(controller) { derivedStateOf { controller.layersVersion; controller.activeLayer } }
     // v1.8: whether a selected object has live mirror copies (the detach button shows).
     val hasCopies by remember(controller) { derivedStateOf { controller.layersVersion; ObjectActions.hasCopiesSelected(controller) } }
+    // v1.10 (R10, R11): Edit for one object with an editor (dimmed while it can't open), "Turn
+    // into shape" for one path.
+    val editShown by remember(controller) { derivedStateOf { controller.layersVersion; ObjectActions.editShown(controller) } }
+    val editRefused by remember(controller) { derivedStateOf { controller.layersVersion; editShown && ObjectActions.editRefusal(controller) != null } }
+    val toShapeShown by remember(controller) { derivedStateOf { controller.layersVersion; ObjectActions.toShapeShown(controller) } }
     LaunchedEffect(selectedLayer, activeLayer) {
         if (selectedLayer != null && selectedLayer !== activeLayer) v.setSelection(null, emptySet())
     }
@@ -154,25 +165,24 @@ fun VectorObjectBar(
         action()
     }
     val summary = if (count == 1) "1 object selected" else "$count objects selected"
-    val buttons = buildList {
-        add(BarButton(1, RANK_DELETE) { w -> ObjectBarItem(Icons.Outlined.Delete, "Delete", "Delete the selected objects", w) { run { ObjectActions.delete(controller) } } })
-        add(BarButton(1, RANK_DUPLICATE) { w ->
-            ObjectBarItem(Icons.Outlined.ControlPointDuplicate, "Duplicate", "Duplicate the selected objects", w) { run { ObjectActions.duplicate(controller) } }
-        })
-        add(BarButton(1, RANK_STEP) { w ->
-            ObjectBarItem(Icons.Outlined.FlipToFront, "Forward", "Bring forward", w) { run { ObjectActions.arrange(controller, ObjectEdits.Arrange.FORWARD) } }
-        })
-        add(BarButton(1, RANK_STEP) { w ->
-            ObjectBarItem(Icons.Outlined.FlipToBack, "Backward", "Send backward", w) { run { ObjectActions.arrange(controller, ObjectEdits.Arrange.BACKWARD) } }
-        })
-        add(BarButton(1, RANK_ENDS) { w ->
-            ObjectBarItem(Icons.Outlined.VerticalAlignTop, "Front", "Bring to front", w) { run { ObjectActions.arrange(controller, ObjectEdits.Arrange.FRONT) } }
-        })
-        add(BarButton(1, RANK_ENDS) { w ->
-            ObjectBarItem(Icons.Outlined.VerticalAlignBottom, "Back", "Send to back", w) { run { ObjectActions.arrange(controller, ObjectEdits.Arrange.BACK) } }
-        })
-        add(BarButton(1, RANK_RECOLOR) { w ->
-            ObjectBarItem(
+    // v1.7 (item 3): Array after Deselect, so the nine v1.6 buttons keep their places; v1.8 (I15):
+    // Detach only while a selected object has live mirror copies, twice as wide (its words stay
+    // readable). v1.10: Behind after Array, "Turn into shape" (as wide as Detach) after Detach.
+    val slots = ObjectBarSlot.shown(edit = editShown, behind = onArrayBehind != null, detach = hasCopies, toShape = toShapeShown)
+    val button: @Composable (ObjectBarSlot, Dp) -> Unit = { slot, w ->
+        when (slot) {
+            ObjectBarSlot.DELETE -> ObjectBarItem(Icons.Outlined.Delete, "Delete", "Delete the selected objects", w) { run { ObjectActions.delete(controller) } }
+            ObjectBarSlot.DUPLICATE ->
+                ObjectBarItem(Icons.Outlined.ControlPointDuplicate, "Duplicate", "Duplicate the selected objects", w) { run { ObjectActions.duplicate(controller) } }
+            ObjectBarSlot.FORWARD ->
+                ObjectBarItem(Icons.Outlined.FlipToFront, "Forward", "Bring forward", w) { run { ObjectActions.arrange(controller, ObjectEdits.Arrange.FORWARD) } }
+            ObjectBarSlot.BACKWARD ->
+                ObjectBarItem(Icons.Outlined.FlipToBack, "Backward", "Send backward", w) { run { ObjectActions.arrange(controller, ObjectEdits.Arrange.BACKWARD) } }
+            ObjectBarSlot.FRONT ->
+                ObjectBarItem(Icons.Outlined.VerticalAlignTop, "Front", "Bring to front", w) { run { ObjectActions.arrange(controller, ObjectEdits.Arrange.FRONT) } }
+            ObjectBarSlot.BACK ->
+                ObjectBarItem(Icons.Outlined.VerticalAlignBottom, "Back", "Send to back", w) { run { ObjectActions.arrange(controller, ObjectEdits.Arrange.BACK) } }
+            ObjectBarSlot.RECOLOR -> ObjectBarItem(
                 recolorIcon, "Recolor", "Recolor with the main color", w,
                 swatch = color,
                 longClickLabel = "Recolor the lines only",
@@ -180,44 +190,28 @@ fun VectorObjectBar(
             ) {
                 run { ObjectActions.recolor(controller, linesOnly = false) }
             }
-        })
-        add(BarButton(1, RANK_TRANSFORM) { w ->
-            ObjectBarItem(EditorIcons.tool(ToolId.TRANSFORM), "Transform", "Transform the selected objects", w) { run { ObjectActions.transform(controller) } }
-        })
-        // v1.10 (R10, F0): only while it has a callback (A6 decides when).
-        if (onEdit != null) {
-            add(BarButton(1, RANK_EDIT) { w ->
-                ObjectBarItem(Icons.Outlined.Edit, ObjectBarLabels110.EDIT, ObjectBarLabels110.EDIT_DESC, w, tag = V110Tags.OBJECTS_EDIT) { run(onEdit) }
-            })
-        }
-        add(BarButton(1, RANK_DESELECT) { w -> ObjectBarItem(Icons.Outlined.Deselect, "Deselect", "Deselect the objects", w) { run { ObjectActions.deselect(controller) } } })
-        // v1.7 (item 3): after Deselect, so the nine v1.6 buttons keep their places and sizes.
-        add(BarButton(1, RANK_ARRAY) { w ->
-            ObjectBarItem(EditorIcons.tool(ToolId.ARRAY), ArrayLabels.BUTTON, ArrayLabels.FROM_OBJECTS, w) {
+            ObjectBarSlot.TRANSFORM ->
+                ObjectBarItem(EditorIcons.tool(ToolId.TRANSFORM), "Transform", "Transform the selected objects", w) { run { ObjectActions.transform(controller) } }
+            // (A refused Edit still answers a tap: openInEditor shows the reason.)
+            ObjectBarSlot.EDIT -> ObjectBarItem(
+                Icons.Outlined.Edit, ObjectBarLabels110.EDIT, ObjectBarLabels110.EDIT_DESC, w, tag = V110Tags.OBJECTS_EDIT, dimmed = editRefused,
+            ) {
+                run { if (onEdit != null) onEdit() else ObjectActions.openInEditor(controller) }
+            }
+            ObjectBarSlot.DESELECT -> ObjectBarItem(Icons.Outlined.Deselect, "Deselect", "Deselect the objects", w) { run { ObjectActions.deselect(controller) } }
+            ObjectBarSlot.ARRAY -> ObjectBarItem(EditorIcons.tool(ToolId.ARRAY), ArrayLabels.BUTTON, ArrayLabels.FROM_OBJECTS, w) {
                 run { controller.arrayFromObjects(v.selectedIds.toSet()) }
             }
-        })
-        // v1.10 (R4, F0): right after Array, the same rank; only while it has a callback.
-        if (onArrayBehind != null) {
-            add(BarButton(1, RANK_ARRAY) { w ->
-                ObjectBarItem(EditorIcons.arrayBehind, ArrayLabels110.BEHIND, ArrayLabels110.BEHIND_DESC, w) { run(onArrayBehind) }
-            })
-        }
-        // v1.8 (I15): only while a selected object has live mirror copies; twice as wide (its
-        // words stay readable), after Array.
-        if (hasCopies) {
-            add(BarButton(2, RANK_DETACH) { w -> ObjectBarItem(Icons.Outlined.LinkOff, MirrorLabels18.DETACH, MirrorLabels18.DETACH, w) { run { ObjectActions.detachCopies(controller) } } })
-        }
-        // v1.10 (R11, F0): 2 units as Detach, its rank; only while it has a callback.
-        if (onToShape != null) {
-            add(BarButton(2, RANK_DETACH) { w ->
-                ObjectBarItem(Icons.Outlined.Category, ObjectBarLabels110.TO_SHAPE, ObjectBarLabels110.TO_SHAPE, w, tag = V110Tags.OBJECTS_TO_SHAPE) { run(onToShape) }
-            })
+            ObjectBarSlot.BEHIND -> ObjectBarItem(EditorIcons.arrayBehind, ArrayLabels110.BEHIND, ArrayLabels110.BEHIND_DESC, w) { run { onArrayBehind?.invoke() } }
+            ObjectBarSlot.DETACH -> ObjectBarItem(Icons.Outlined.LinkOff, MirrorLabels18.DETACH, MirrorLabels18.DETACH, w) { run { ObjectActions.detachCopies(controller) } }
+            ObjectBarSlot.TO_SHAPE -> ObjectBarItem(Icons.Outlined.Category, ObjectBarLabels110.TO_SHAPE, ObjectBarLabels110.TO_SHAPE, w, tag = V110Tags.OBJECTS_TO_SHAPE) {
+                run { if (onToShape != null) onToShape() else ObjectActions.turnIntoShape(controller) }
+            }
         }
     }
     BoxWithConstraints(modifier) {
         val inner = if (maxWidth == Dp.Infinity) Float.POSITIVE_INFINITY else (maxWidth - ROW_PADDING * 2).value
-        val split = ObjectBarLayout.split(buttons.map { it.units }, buttons.map { it.rank }, inner)
+        val split = ObjectBarSlot.split(slots, inner)
         // Whole pixels: a button a fraction of a pixel wide rounds up and squeezes the toggle at
         // the row's end, so the button width is floored to a pixel and the row adds up in pixels.
         val density = LocalDensity.current
@@ -225,9 +219,9 @@ fun VectorObjectBar(
         val togglePx = with(density) { ObjectBarLayout.TOGGLE_DP.dp.roundToPx() }
         val padPx = with(density) { ROW_PADDING.roundToPx() } * 2
         val item = with(density) { itemPx.toDp() }
-        val used = split.row1.sumOf { buttons[it].units }
+        val used = split.row1.sumOf { slots[it].units }
         val barWidth = with(density) { (used * itemPx + (if (split.toggle) togglePx else 0) + padPx).toDp() }
-        val widest = split.more.maxOfOrNull { line -> line.sumOf { buttons[it].units } } ?: 0
+        val widest = split.more.maxOfOrNull { line -> line.sumOf { slots[it].units } } ?: 0
         val moreWidth = maxOf(barWidth, with(density) { (widest * itemPx + padPx).toDp() })
         val open = strip.objectRowShows() && split.toggle
         // v1.9 (R3): only while the bar shows its toggle does its row take the strip's row's place.
@@ -245,7 +239,7 @@ fun VectorObjectBar(
                     horizontalArrangement = Arrangement.spacedBy(0.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    for (i in split.row1) buttons[i].content(item * buttons[i].units)
+                    for (i in split.row1) button(slots[i], item * slots[i].units)
                     if (split.toggle) ObjectMoreToggle(open) { strip.toggleObjectRow() }
                 }
             }
@@ -269,7 +263,7 @@ fun VectorObjectBar(
                         val guard = Modifier.passCanvasGesture(strip, LocalHistoryTaps.current)
                         for (line in split.more) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                for (i in line) Box(guard) { buttons[i].content(item * buttons[i].units) }
+                                for (i in line) Box(guard) { button(slots[i], item * slots[i].units) }
                             }
                         }
                     }
@@ -279,27 +273,50 @@ fun VectorObjectBar(
     }
 }
 
+/** v1.10 (R3, A6): Recolor's icon, the palette (it paints the main color; v1.9 showed a fill bucket). */
+internal val ObjectBarRecolorIcon: ImageVector get() = Icons.Outlined.Palette
+
 /**
- * One button of the bar: [units] button widths wide (the detach button is 2), drawn by [content]
- * at a given width. [rank] says how much it is used: when row 1 is short of room, the buttons of
- * the lowest rank leave it first (equal ranks leave together).
+ * The bar's buttons in row order (v1.10, J26), each [units] button widths wide (Detach and "Turn
+ * into shape" are 2, so their words stay readable). [rank] says how much it is used (design §3.9:
+ * the most used stay on row 1): when row 1 is short of room, the buttons of the lowest rank leave
+ * it first, a whole rank at a time, so Forward and Backward, like Front and Back, are never split
+ * between the rows. Delete stays longest, then Deselect and Edit.
  */
-private class BarButton(val units: Int, val rank: Int, val content: @Composable (Dp) -> Unit)
+internal enum class ObjectBarSlot(val units: Int, val rank: Int) {
+    DELETE(1, 10),
+    DUPLICATE(1, 5),
+    FORWARD(1, 3),
+    BACKWARD(1, 3),
+    FRONT(1, 4),
+    BACK(1, 4),
+    RECOLOR(1, 6),
+    TRANSFORM(1, 7),
+    EDIT(1, 8),
+    DESELECT(1, 9),
+    ARRAY(1, 1),
+    BEHIND(1, 1),
+    DETACH(2, 2),
+    TO_SHAPE(2, 2),
+    ;
 
-// The buttons' ranks (design §3.9: the most used stay on row 1). Forward and Backward leave
-// together, as do Front and Back, so a pair is never split between the rows.
-private const val RANK_ARRAY = 1
-private const val RANK_DETACH = 2
-private const val RANK_STEP = 3
-private const val RANK_ENDS = 4
-private const val RANK_DUPLICATE = 5
-private const val RANK_RECOLOR = 6
-private const val RANK_TRANSFORM = 7
-private const val RANK_DESELECT = 8
-private const val RANK_DELETE = 9
+    companion object {
+        /** The buttons that show, in order; [edit], [behind], [detach] and [toShape] say whether those do. */
+        fun shown(edit: Boolean, behind: Boolean, detach: Boolean, toShape: Boolean): List<ObjectBarSlot> = entries.filter {
+            when (it) {
+                EDIT -> edit
+                BEHIND -> behind
+                DETACH -> detach
+                TO_SHAPE -> toShape
+                else -> true
+            }
+        }
 
-/** v1.10 (F0): Edit leaves row 1 with Transform until A6 sets the 1.10 ranks (R10, J26). */
-private const val RANK_EDIT = RANK_TRANSFORM
+        /** How [slots] share a row [innerDp] wide ([ObjectBarLayout.split]; indices into [slots]). */
+        fun split(slots: List<ObjectBarSlot>, innerDp: Float): ObjectBarLayout.Split =
+            ObjectBarLayout.split(slots.map { it.units }, slots.map { it.rank }, innerDp)
+    }
+}
 
 /**
  * v1.8 (design §3.9): how the object bar's buttons share its width (pure; dp).
@@ -393,7 +410,8 @@ private fun ObjectMoreToggle(open: Boolean, onToggle: () -> Unit) {
 /**
  * Icon over a short label (the selection bar's look); [clickLabel] tells a screen reader what it
  * does, and a long press shows it in a bubble (v1.8). [swatch] shows a color dot on the icon;
- * [onLongClick] adds a long-press action instead of the bubble. v1.10: [tag] is its test tag.
+ * [onLongClick] adds a long-press action instead of the bubble. v1.10: [tag] is its test tag;
+ * [dimmed] greys it out (it still answers a tap, which says why it can't act).
  */
 @Composable
 private fun ObjectBarItem(
@@ -405,9 +423,10 @@ private fun ObjectBarItem(
     longClickLabel: String? = null,
     onLongClick: (() -> Unit)? = null,
     tag: String? = null,
+    dimmed: Boolean = false,
     onClick: () -> Unit,
 ) {
-    val tint = BrushworkColors.OnChrome
+    val tint = if (dimmed) BrushworkColors.OnChrome.copy(alpha = DIMMED_ALPHA) else BrushworkColors.OnChrome
     Column(
         Modifier
             .then(if (tag != null) Modifier.testTag(tag) else Modifier)
@@ -465,6 +484,9 @@ private fun ObjectBarItem(
 /** The label size of the selection bar; long words shrink down to [MIN_LABEL_SP] to fit their button. */
 private val LABEL_SP = 10.sp
 private val MIN_LABEL_SP = 7.5.sp
+
+/** A dimmed button's icon and label (v1.10: Edit while it can't open). */
+private const val DIMMED_ALPHA = 0.4f
 
 /** The selection bar's button size, used as the buttons' (and the toggle's) height. */
 private val MAX_ITEM_WIDTH = ObjectBarLayout.MAX_ITEM_DP.dp
