@@ -8,6 +8,6 @@ import com.brushwork.paint.engine.EngineNotice
  * once, an OK button only, which calls [onOk]), drawn by `GalleryNotices` for
  * `GalleryNotice.Engine`. F1: nothing (no notice is ever raised before A10).
  */
-@Composable
 @Suppress("UNUSED_PARAMETER")
+@Composable
 fun EngineNoticeCard(notice: EngineNotice, onOk: () -> Unit) {}

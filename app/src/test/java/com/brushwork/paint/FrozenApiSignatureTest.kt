@@ -18,8 +18,12 @@ import java.io.File
  *
  * The rows are in [PARTS]: [F0] here (the pill cells, `ObjectActions`, `CurveTool.openObject` and
  * `kindOf`, the limit seam, the object colors and corners, `TapCycle`, `ObjectColorSlots`, the
- * paint-mode controls, the color picker's preview and `ColorUtils.recolor`); F1 adds its part to
- * [PARTS]. The matcher is checked on a made-up source first. JVM (reads the main sources).
+ * paint-mode controls, the color picker's preview and `ColorUtils.recolor`) and [F1] (design 3.3:
+ * the engine's pixel stores, tiles, residency, swap, probes, ledger and budgets, `EngineConfig`,
+ * the notices, `EngineStats`, `EngineStartup`, `CheckStore`, `PixelReads`, the four `ui/engine`
+ * composables, the check and state records, and the seams F1 added to `Layer`, `Document`, the
+ * governor, `BlendModes`, `ProjectFormat`, the settings, the gallery notices, `NewArtwork` and
+ * `EditorController`). The matcher is checked on a made-up source first. JVM (reads the main sources).
  */
 class FrozenApiSignatureTest {
 
@@ -74,6 +78,27 @@ class FrozenApiSignatureTest {
                 "tools/ObjectColorEditor.kt", "tools/points/PointCornerEditor.kt", "vector/select/TapCycle.kt",
                 "vector/ObjectColorSlots.kt", "ui/common/PaintModeControls.kt", "ui/color/ColorPickerDialog.kt",
                 "core/ColorUtils.kt",
+            ),
+            files,
+        )
+    }
+
+    @Test
+    fun theF1PartNamesEveryFileF1Froze() {
+        val files = (F1.pins.map { it.file } + F1.members.map { it.file }).toSet()
+        assertEquals(
+            setOf(
+                "engine/tiles/Tile.kt", "engine/tiles/PixelStore.kt", "engine/tiles/PixelPin.kt",
+                "engine/tiles/Residency.kt", "engine/tiles/Projection.kt", "engine/tiles/SwapStore.kt",
+                "engine/tiles/PixelReads.kt", "engine/budget/MemoryProbe.kt", "engine/budget/AndroidMemoryProbe.kt",
+                "engine/budget/AndroidStorageProbe.kt", "engine/budget/AndroidExitInfo.kt", "engine/budget/PixelLedger.kt",
+                "engine/budget/MemoryBudget.kt", "engine/budget/LayerBudgetV110.kt", "engine/EngineConfig.kt",
+                "engine/EngineNotice.kt", "engine/EngineStats.kt", "engine/EngineStartup.kt", "engine/check/CheckStore.kt",
+                "ui/engine/EngineCheckHost.kt", "ui/engine/EngineNoticeCard.kt", "ui/engine/LayerStorageSection.kt",
+                "ui/engine/EngineEditorChrome.kt", "storage/engine/EngineCheckResult.kt", "storage/engine/EngineState.kt",
+                "model/Document.kt", "engine/MemoryGovernor.kt", "engine/BlendModes.kt", "storage/ProjectFile.kt",
+                "AppSettings.kt", "UiPrefs.kt", "ui/gallery/GalleryNotices.kt", "exchange/NewArtwork.kt",
+                "EditorController.kt",
             ),
             files,
         )
@@ -581,7 +606,461 @@ class FrozenApiSignatureTest {
             ),
         )
 
+        /**
+         * F1 (design 2.1 and 3.3): the engine contracts. Pins for the files whose bodies the areas
+         * write (`PixelReads`, `MemoryBudget`, `LayerBudgetV110`'s constructor, the three probe stubs,
+         * `EngineStats`, `EngineStartup`, `CheckStore`, the four `ui/engine` composables) and for the
+         * seams F1 added to files it does not freeze whole; [Members] for the lead's frozen types.
+         */
+        val F1 = Part(
+            "F1",
+            pins = listOf(
+                Pin("engine/tiles/Tile.kt", "const val TILE_SIZE = 256"),
+                Pin("engine/tiles/Tile.kt", "class Tile internal constructor(val w: Int, val h: Int)"),
+                Pin("engine/tiles/Tile.kt", "fun of(bitmap: Bitmap): Tile", listOf("class Tile", "companion object")),
+                Pin("engine/tiles/Tile.kt", "fun solid(color: Int, w: Int, h: Int): Tile", listOf("class Tile", "companion object")),
+                Pin("engine/tiles/PixelStore.kt", "class FlatPixels(val bitmap: Bitmap) : PixelStore()"),
+                Pin("engine/tiles/PixelStore.kt", "class BlankPixels(override val width: Int, override val height: Int) : PixelStore()"),
+                Pin(
+                    "engine/tiles/PixelStore.kt",
+                    """
+                    class TiledPixels internal constructor(
+                        override val width: Int,
+                        override val height: Int,
+                        internal val tiles: Array<Tile?>,
+                        val evictedTo: SavedFileRef? = null,
+                    ) : PixelStore()
+                    """,
+                ),
+                Pin("engine/tiles/PixelStore.kt", "fun fromBitmap(b: Bitmap, detectBlank: Boolean = true): TiledPixels", listOf("class TiledPixels", "companion object")),
+                Pin("engine/tiles/PixelStore.kt", "data class SavedFileRef(val projectDir: File, val file: String, val contentVersion: Long)"),
+                Pin("engine/tiles/PixelPin.kt", "class PixelPin internal constructor(val layer: Layer, val resident: Boolean) : AutoCloseable"),
+                Pin("engine/tiles/Residency.kt", "class ChaosResidency(private val everyTask: Boolean = false) : ResidencyHooks"),
+                Pin("engine/tiles/SwapStore.kt", "data class SwapSlot(val slab: Int, val offset: Long, val length: Int, val crc: Int)"),
+                Pin("engine/tiles/PixelReads.kt", "object PixelReads"),
+                Pin("engine/tiles/PixelReads.kt", "fun sample(layer: Layer, x: Int, y: Int): Int", listOf("object PixelReads")),
+                Pin("engine/tiles/PixelReads.kt", "fun region(layer: Layer, r: Rect, out: Bitmap? = null): Bitmap", listOf("object PixelReads")),
+                Pin("engine/tiles/PixelReads.kt", "fun alphaRegion(layer: Layer, r: Rect, out: ByteArray)", listOf("object PixelReads")),
+                Pin("engine/tiles/PixelReads.kt", "fun flattenedRegion(doc: Document, r: Rect, out: Bitmap? = null): Bitmap", listOf("object PixelReads")),
+                Pin(
+                    "engine/budget/MemoryProbe.kt",
+                    """
+                    data class MemSnapshot(
+                        val totalMem: Long,
+                        val availMem: Long,
+                        val threshold: Long,
+                        val lowMemory: Boolean,
+                        val isLowRamDevice: Boolean,
+                        val is64Bit: Boolean,
+                        val javaMax: Long,
+                        val javaUsed: Long,
+                        val nativeAllocated: Long,
+                    )
+                    """,
+                ),
+                Pin("engine/budget/MemoryProbe.kt", "data class ExitRecord(val atMillis: Long, val lowMemory: Boolean, val signaled9: Boolean, val foreground: Boolean)"),
+                Pin("engine/budget/AndroidMemoryProbe.kt", "object AndroidMemoryProbe : MemoryProbe"),
+                Pin("engine/budget/AndroidMemoryProbe.kt", "override fun snapshot(): MemSnapshot", listOf("object AndroidMemoryProbe")),
+                Pin(
+                    "engine/budget/AndroidMemoryProbe.kt",
+                    "override fun probeNative(stepBytes: Long, stopBelowAvail: Long, capBytes: Long): Long",
+                    listOf("object AndroidMemoryProbe"),
+                ),
+                Pin("engine/budget/AndroidStorageProbe.kt", "object AndroidStorageProbe : StorageProbe"),
+                Pin("engine/budget/AndroidStorageProbe.kt", "override fun freeBytes(dir: File): Long", listOf("object AndroidStorageProbe")),
+                Pin("engine/budget/AndroidStorageProbe.kt", "override fun writeRead(dir: File, bytes: Long): Pair<Float, Float>", listOf("object AndroidStorageProbe")),
+                Pin("engine/budget/AndroidExitInfo.kt", "object AndroidExitInfo : ExitInfoSource"),
+                Pin("engine/budget/AndroidExitInfo.kt", "override fun exits(sinceMillis: Long): List<ExitRecord>", listOf("object AndroidExitInfo")),
+                Pin("engine/budget/AndroidExitInfo.kt", "override fun lmkReportsSupported(): Boolean", listOf("object AndroidExitInfo")),
+                Pin("engine/budget/MemoryBudget.kt", "data class Budgets(val javaMax: Long, val nativeBudget: Long, val known: Boolean, val stepDown: Int)"),
+                Pin("engine/budget/MemoryBudget.kt", "fun v19(javaMax: Long): Budgets", listOf("data class Budgets", "companion object")),
+                Pin("engine/budget/MemoryBudget.kt", "fun compute(probe: MemoryProbe, stepDown: Int): Budgets", listOf("data class Budgets", "companion object")),
+                Pin("engine/budget/MemoryBudget.kt", "class MemoryBudget(val budgets: Budgets, val ledger: PixelLedger) : NativeAdmission"),
+                Pin("engine/budget/MemoryBudget.kt", "val javaMax: Long", listOf("class MemoryBudget")),
+                Pin("engine/budget/MemoryBudget.kt", "val nativeBudget: Long", listOf("class MemoryBudget")),
+                Pin("engine/budget/MemoryBudget.kt", "fun undoCap(level: EngineLevel): Long", listOf("class MemoryBudget")),
+                Pin("engine/budget/MemoryBudget.kt", "fun cloneSnapshotCap(): Long", listOf("class MemoryBudget")),
+                Pin("engine/budget/MemoryBudget.kt", "fun tileRam(): Long", listOf("class MemoryBudget")),
+                Pin("engine/budget/MemoryBudget.kt", "override fun admitNative(bytes: Long, purpose: NativePurpose): Boolean", listOf("class MemoryBudget")),
+                Pin("engine/budget/MemoryBudget.kt", "override fun release(bytes: Long, purpose: NativePurpose)", listOf("class MemoryBudget")),
+                Pin("engine/budget/LayerBudgetV110.kt", "class LayerBudgetV110(private val budget: MemoryBudget, private val level: EngineLevel)"),
+                Pin("engine/EngineStats.kt", "data class StatSummary(val stat: EngineStat, val n: Int, val p50: Float, val p95: Float)"),
+                Pin("engine/EngineStats.kt", "fun record(stat: EngineStat, value: Float)", listOf("object EngineStats")),
+                Pin("engine/EngineStats.kt", "fun summary(): List<StatSummary>", listOf("object EngineStats")),
+                Pin("engine/EngineStartup.kt", "fun onAppCreate(app: Application)", listOf("object EngineStartup")),
+                Pin("engine/check/CheckStore.kt", "fun read(context: Context): EngineCheckResult?", listOf("object CheckStore")),
+                Pin("ui/engine/EngineCheckHost.kt", "@Composable fun EngineCheckHost()"),
+                Pin("ui/engine/EngineNoticeCard.kt", "@Composable fun EngineNoticeCard(notice: EngineNotice, onOk: () -> Unit)"),
+                Pin("ui/engine/LayerStorageSection.kt", "@Composable fun LayerStorageSection()"),
+                Pin("ui/engine/EngineEditorChrome.kt", "@Composable fun EngineEditorChrome(controller: EditorController)"),
+                Pin(
+                    "storage/engine/EngineCheckResult.kt",
+                    """
+                    @Serializable
+                    data class EngineCheckResult(
+                        val schema: Int = 1,
+                        val appVersionCode: Int,
+                        val deviceKey: String,
+                        val ranAtMillis: Long,
+                        val durationMs: Long,
+                        val level: EngineLevel,
+                        val reason: String,
+                        val totalMem: Long,
+                        val availMem: Long,
+                        val threshold: Long,
+                        val lowRam: Boolean,
+                        val is64Bit: Boolean,
+                        val javaMax: Long,
+                        val nativeProbeBytes: Long,
+                        val deflateMBs: Float,
+                        val inflateMBs: Float,
+                        val ratio: Float,
+                        val writeMBs: Float,
+                        val readMBs: Float,
+                        val freeBytes: Long,
+                        val composite64Ms: Float,
+                        val belowCacheMinLayers: Int? = null,
+                        val aboveProjection: Boolean = false,
+                        val stepDown: Int = 0,
+                        val lmkDeathsAt: List<Long> = emptyList(),
+                        val provisional: Boolean = false,
+                        val m2Outcome: String = "",
+                        val inconclusiveRuns: Int = 0,
+                    )
+                    """,
+                ),
+                Pin(
+                    "storage/engine/EngineState.kt",
+                    """
+                    @Serializable
+                    data class EngineState(
+                        @EncodeDefault(EncodeDefault.Mode.NEVER) val engineCheckPending: Boolean = false,
+                        @EncodeDefault(EncodeDefault.Mode.NEVER) val lastExitSeen: Long = 0L,
+                        @EncodeDefault(EncodeDefault.Mode.NEVER) val slowSwapReads: Boolean = false,
+                    )
+                    """,
+                ),
+                Pin("model/Document.kt", "class Layer(val id: Long, var name: String, pixels: PixelStore)"),
+                Pin("model/Document.kt", "constructor(id: Long, name: String, bitmap: Bitmap) : this(id, name, storeOf(bitmap))", listOf("class Layer")),
+                Pin("model/Document.kt", "var pixels: PixelStore", listOf("class Layer")),
+                Pin("model/Document.kt", "var maskPixels: PixelStore?", listOf("class Layer")),
+                Pin("model/Document.kt", "var bitmap: Bitmap", listOf("class Layer")),
+                Pin("model/Document.kt", "var mask: Bitmap?", listOf("class Layer")),
+                Pin("model/Document.kt", "val hasMask: Boolean", listOf("class Layer")),
+                Pin("model/Document.kt", "var pixelGeneration: Long = 0L", listOf("class Layer")),
+                Pin("model/Document.kt", "fun owns(b: Bitmap?): Boolean", listOf("class Layer")),
+                Pin("model/Document.kt", "fun pin(): PixelPin", listOf("class Layer")),
+                Pin("model/Document.kt", "fun pinResident(): PixelPin", listOf("class Layer")),
+                Pin("model/Document.kt", "fun admitWrite(): Boolean", listOf("class Layer")),
+                Pin("model/Document.kt", "internal val residency: ResidencyState", listOf("class Layer")),
+                Pin("model/Document.kt", "val width: Int", listOf("class Layer")),
+                Pin("model/Document.kt", "val height: Int", listOf("class Layer")),
+                Pin("model/Document.kt", "fun recycleBitmaps()", listOf("class Layer")),
+                Pin("model/Document.kt", "var activeLayerIndex: Int", listOf("class Document")),
+                Pin("engine/MemoryGovernor.kt", "fun trimUndo(history: UndoManager): GovernorPolicyV19.UndoTrim", listOf("interface GovernorPolicy")),
+                Pin("engine/BlendModes.kt", "fun clearsOnTransparent(mode: LayerBlendMode): Boolean", listOf("object BlendModes")),
+                Pin("storage/ProjectFile.kt", "const val VERSION = 4", listOf("object ProjectFormat")),
+                Pin("storage/ProjectFile.kt", "const val V19_HEAP = 512L shl 20", listOf("object ProjectFormat")),
+                Pin("storage/ProjectFile.kt", "fun writtenVersion(layers: List<Layer>): Int", listOf("object ProjectFormat")),
+                Pin("storage/ProjectFile.kt", "fun writtenVersion(layers: List<Layer>, w: Int, h: Int): Int", listOf("object ProjectFormat")),
+                Pin("storage/ProjectFile.kt", "fun v19OpenCount(layers: List<Layer>, w: Int, h: Int): Int", listOf("object ProjectFormat")),
+                Pin("storage/ProjectFile.kt", "fun v19Cap(w: Int, h: Int): Int", listOf("object ProjectFormat")),
+                Pin("AppSettings.kt", "var layerStorageMode: LayerStorageMode", listOf("class AppSettings")),
+                Pin("UiPrefs.kt", "var engineNoticeShownAt: Long", listOf("class UiPrefs")),
+                Pin("UiPrefs.kt", "var engineLmkNoticeShownAt: Long", listOf("class UiPrefs")),
+                Pin("ui/gallery/GalleryNotices.kt", "data class Engine(val notice: EngineNotice) : GalleryNotice", listOf("sealed interface GalleryNotice")),
+                Pin(
+                    "ui/gallery/GalleryNotices.kt",
+                    """
+                    fun pickNotice(
+                        crash: CrashReport?,
+                        backup: BackupStatus,
+                        notSetDismissedAtMillis: Long,
+                        nowMillis: Long,
+                        engine: EngineNotice? = null,
+                    ): GalleryNotice?
+                    """,
+                ),
+                Pin("exchange/NewArtwork.kt", "fun forSvg(name: String, svg: SvgDocument): NewArtworkSpec", listOf("object NewArtwork")),
+                Pin("exchange/NewArtwork.kt", "fun forPdfPage(name: String, pw: Float, ph: Float): NewArtworkSpec", listOf("object NewArtwork")),
+                Pin("exchange/NewArtwork.kt", "fun forPayload(name: String, p: BrushworkPayload): NewArtworkSpec?", listOf("object NewArtwork")),
+                Pin("EditorController.kt", "var activating: Layer?", listOf("class EditorController")),
+            ),
+            members = listOf(
+                Members("engine/tiles/Tile.kt", "enum class TileState", listOf("RESIDENT", "PACKED", "SWAPPED"), enum = true),
+                Members(
+                    "engine/tiles/Tile.kt", "class Tile",
+                    listOf(
+                        "internal val lock",
+                        "internal var bitmap: Bitmap?",
+                        "internal var packed: ByteArray?",
+                        "internal var slot: SwapSlot?",
+                        "internal var refs",
+                        "internal var pins",
+                        "internal var lastUse",
+                        "internal var solid: Int?",
+                        "val solidColor: Int?",
+                        "val state: TileState",
+                        "val bytes: Int",
+                        "fun bitmapForRead(): Bitmap",
+                        "companion object",
+                    ),
+                ),
+                Members(
+                    "engine/tiles/PixelStore.kt", "sealed class PixelStore",
+                    listOf(
+                        "abstract val width: Int",
+                        "abstract val height: Int",
+                        "abstract fun residentBytes(): Long",
+                        "abstract fun logicalBytes(): Long",
+                        "abstract fun isBlank(): Boolean",
+                        "abstract fun isEmptyIn(clip: Rect): Boolean",
+                        "abstract fun isEmpty(): Boolean",
+                    ),
+                ),
+                Members(
+                    "engine/tiles/PixelStore.kt", "class FlatPixels",
+                    listOf(
+                        "override val width: Int",
+                        "override val height: Int",
+                        "override fun residentBytes(): Long",
+                        "override fun logicalBytes(): Long",
+                        "override fun isBlank(): Boolean",
+                        "override fun isEmptyIn(clip: Rect): Boolean",
+                        "override fun isEmpty(): Boolean",
+                    ),
+                ),
+                Members(
+                    "engine/tiles/PixelStore.kt", "class BlankPixels",
+                    listOf(
+                        "override fun residentBytes(): Long",
+                        "override fun logicalBytes(): Long",
+                        "override fun isBlank(): Boolean",
+                        "override fun isEmptyIn(clip: Rect): Boolean",
+                        "override fun isEmpty(): Boolean",
+                    ),
+                ),
+                Members(
+                    "engine/tiles/PixelStore.kt", "object FolderPixels",
+                    listOf(
+                        "override val width: Int",
+                        "override val height: Int",
+                        "override fun residentBytes(): Long",
+                        "override fun logicalBytes(): Long",
+                        "override fun isBlank(): Boolean",
+                        "override fun isEmptyIn(clip: Rect): Boolean",
+                        "override fun isEmpty(): Boolean",
+                    ),
+                ),
+                Members(
+                    "engine/tiles/PixelStore.kt", "class TiledPixels",
+                    listOf(
+                        "val cols: Int",
+                        "val rows: Int",
+                        "init",
+                        "fun tileAt(col: Int, row: Int): Tile?",
+                        "fun occupied(): Int",
+                        "fun occupiedBounds(out: Rect): Boolean",
+                        "fun drawTo(canvas: Canvas, paint: Paint?, clip: Rect)",
+                        "fun drawMaskTo(canvas: Canvas, maskPaint: Paint, clip: Rect)",
+                        "fun copyRegion(src: Rect, dst: Bitmap, dx: Int, dy: Int)",
+                        "fun materialize(): Bitmap",
+                        "fun snapshot(): TiledPixels",
+                        "fun withTiles(changes: Map<Int, Tile?>): TiledPixels",
+                        "internal fun replaceTiles(changes: Map<Int, Tile?>): Map<Int, Tile?>",
+                        "override fun residentBytes(): Long",
+                        "override fun logicalBytes(): Long",
+                        "override fun isBlank(): Boolean",
+                        "override fun isEmptyIn(clip: Rect): Boolean",
+                        "override fun isEmpty(): Boolean",
+                        "companion object",
+                    ),
+                ),
+                Members("engine/tiles/PixelPin.kt", "class PixelPin", listOf("override fun close()")),
+                Members("engine/tiles/Residency.kt", "enum class ResidencyState", listOf("FOLDER", "BLANK", "FLAT", "PARKED", "EVICTED"), enum = true),
+                Members(
+                    "engine/tiles/Residency.kt", "interface ResidencyHooks",
+                    listOf(
+                        "fun activate(layer: Layer)",
+                        "fun deactivated(layer: Layer)",
+                        "fun pressure(p: MemoryPressure)",
+                        "fun idleTick()",
+                        "fun swapUndoTiles(targetBytes: Long): Long",
+                    ),
+                ),
+                Members(
+                    "engine/tiles/Residency.kt", "object ClassicResidency",
+                    listOf(
+                        "override fun activate(layer: Layer)",
+                        "override fun deactivated(layer: Layer)",
+                        "override fun pressure(p: MemoryPressure)",
+                        "override fun idleTick()",
+                    ),
+                ),
+                Members(
+                    "engine/tiles/Residency.kt", "class ChaosResidency",
+                    listOf(
+                        "override fun activate(layer: Layer)",
+                        "override fun deactivated(layer: Layer)",
+                        "override fun pressure(p: MemoryPressure)",
+                        "override fun idleTick()",
+                        "fun park(layer: Layer): Boolean",
+                        "fun unpark(layer: Layer)",
+                        "fun parkInactive(doc: Document): Int",
+                        "internal fun settled(doc: Document)",
+                    ),
+                ),
+                Members(
+                    "engine/tiles/Projection.kt", "interface Projection",
+                    listOf(
+                        "fun validFor(doc: Document, active: Layer?): Boolean",
+                        "fun drop()",
+                        "val heldBytes: Long",
+                    ),
+                ),
+                Members(
+                    "engine/tiles/SwapStore.kt", "interface SwapStore",
+                    listOf(
+                        "val capacityBytes: Long",
+                        "val usedBytes: Long",
+                        "fun canWrite(bytes: Long): Boolean",
+                        "fun write(tile: Tile)",
+                        "fun read(tile: Tile): Bitmap",
+                        "fun free(slot: SwapSlot)",
+                        "fun close()",
+                    ),
+                ),
+                Members(
+                    "engine/tiles/SwapStore.kt", "object NoSwap",
+                    listOf(
+                        "override val capacityBytes: Long",
+                        "override val usedBytes: Long",
+                        "override fun canWrite(bytes: Long): Boolean",
+                        "override fun write(tile: Tile): Unit",
+                        "override fun read(tile: Tile): Bitmap",
+                        "override fun free(slot: SwapSlot)",
+                        "override fun close()",
+                    ),
+                ),
+                Members(
+                    "engine/budget/MemoryProbe.kt", "interface MemoryProbe",
+                    listOf(
+                        "fun snapshot(): MemSnapshot",
+                        "fun probeNative(stepBytes: Long, stopBelowAvail: Long, capBytes: Long): Long",
+                    ),
+                ),
+                Members(
+                    "engine/budget/MemoryProbe.kt", "interface StorageProbe",
+                    listOf(
+                        "fun freeBytes(dir: File): Long",
+                        "fun writeRead(dir: File, bytes: Long): Pair<Float, Float>",
+                    ),
+                ),
+                Members(
+                    "engine/budget/MemoryProbe.kt", "interface ExitInfoSource",
+                    listOf(
+                        "fun exits(sinceMillis: Long): List<ExitRecord>",
+                        "fun lmkReportsSupported(): Boolean",
+                    ),
+                ),
+                Members(
+                    "engine/budget/PixelLedger.kt", "enum class LedgerCategory",
+                    listOf("RESIDENT_LAYERS", "TILES", "MASKS", "ARRAYS", "DISPLAY", "PROJECTIONS", "UNDO", "TRANSIENT", "THUMBNAILS"),
+                    enum = true,
+                ),
+                Members(
+                    "engine/budget/PixelLedger.kt", "enum class NativePurpose",
+                    listOf("LAYER", "MASK", "TILE", "TRANSIENT", "PROJECTION", "DISPLAY", "UNDO", "ARRAY", "THUMBNAIL"),
+                    enum = true,
+                ),
+                Members(
+                    "engine/budget/PixelLedger.kt", "class PixelLedger",
+                    listOf(
+                        "fun add(c: LedgerCategory, bytes: Long)",
+                        "fun sub(c: LedgerCategory, bytes: Long)",
+                        "var limit: Long",
+                        "fun tryReserve(c: LedgerCategory, bytes: Long): Boolean",
+                        "fun release(c: LedgerCategory, bytes: Long)",
+                        "val native: Long",
+                        "fun of(c: LedgerCategory): Long",
+                    ),
+                ),
+                Members(
+                    "engine/budget/PixelLedger.kt", "interface NativeAdmission",
+                    listOf(
+                        "fun admitNative(bytes: Long, purpose: NativePurpose): Boolean",
+                        "fun release(bytes: Long, purpose: NativePurpose)",
+                    ),
+                ),
+                Members("engine/EngineConfig.kt", "enum class LayerStorageMode", listOf("AUTOMATIC", "FULL", "CLASSIC"), enum = true),
+                Members("engine/EngineConfig.kt", "enum class EngineLevel", listOf("CLASSIC", "TILES", "FULL"), enum = true),
+                Members(
+                    "engine/EngineConfig.kt", "object EngineConfig",
+                    listOf(
+                        "var level: EngineLevel",
+                        "var budget: MemoryBudget",
+                        "var strokeBelowMinLayers: Int?",
+                        "var aboveProjection: Boolean",
+                        "val swap: Boolean",
+                        "var residency: ResidencyHooks",
+                        "var swapStore: SwapStore",
+                        "var memoryProbe: MemoryProbe",
+                        "var storageProbe: StorageProbe",
+                        "var exitInfo: ExitInfoSource",
+                        "fun resolve(mode: LayerStorageMode, check: EngineCheckResult?, deviceKey: String, freeBytes: Long, memoryKnown: Boolean): EngineLevel",
+                        "fun deviceKey(model: String, totalMem: Long): String",
+                        "fun openSession(level: EngineLevel, budgets: Budgets, check: EngineCheckResult?)",
+                        "fun closeSession()",
+                        "fun applyIdle(mode: LayerStorageMode, check: EngineCheckResult?, budgets: Budgets)",
+                        "internal fun testMode(): EngineLevel?",
+                        "internal fun parkChaos(): Boolean",
+                        "internal fun activeIndexSet(doc: Document)",
+                    ),
+                ),
+                Members(
+                    "engine/EngineNotice.kt", "sealed interface EngineNotice",
+                    listOf(
+                        "data class CheckChose(val level: EngineLevel, val reason: String) : EngineNotice",
+                        "data object LowMemoryClosings : EngineNotice",
+                    ),
+                ),
+                Members("engine/EngineNotice.kt", "object EngineNotices", listOf("var current: EngineNotice?")),
+                Members(
+                    "engine/EngineStats.kt", "enum class EngineStat",
+                    listOf("SWITCH", "OPEN", "SAVE_LAYER", "COMPOSITE", "INPUT_TO_COMPOSITE", "FRAME_STROKE", "FRAME_PANEL", "FRAME_OTHER", "LEDGER_PEAK"),
+                    enum = true,
+                ),
+                Members(
+                    "storage/engine/EngineCheckResult.kt", "object CheckReasons",
+                    listOf(
+                        "const val LOW_MEMORY",
+                        "const val SLOW_COMPOSITING",
+                        "const val SLOW_STORAGE",
+                    ),
+                ),
+                Members(
+                    "storage/engine/EngineState.kt", "object EngineStateStore",
+                    listOf(
+                        "const val FILE_NAME",
+                        "fun file(context: Context): File",
+                        "fun read(context: Context): EngineState",
+                        "fun write(context: Context, state: EngineState)",
+                    ),
+                ),
+                Members(
+                    "model/Document.kt", "object PixelFacade",
+                    listOf(
+                        "var materializations",
+                        "var strict",
+                        "internal val depth: ThreadLocal<IntArray>",
+                        "internal inline fun <T> allowing(block: () -> T): T",
+                        "internal fun check(layer: Layer)",
+                    ),
+                ),
+            ),
+        )
+
         /** Every part checked; F1 appends its own. */
-        val PARTS: List<Part> = listOf(F0)
+        val PARTS: List<Part> = listOf(F0, F1)
     }
 }

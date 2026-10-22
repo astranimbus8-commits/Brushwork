@@ -8,6 +8,6 @@ import com.brushwork.paint.EditorController
  * editor (`EditorScreen`): the ring while a layer is made ready (`EditorController.activating`),
  * the low-storage message, the frame metrics. F1: nothing.
  */
-@Composable
 @Suppress("UNUSED_PARAMETER")
+@Composable
 fun EngineEditorChrome(controller: EditorController) {}
