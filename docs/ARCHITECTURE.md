@@ -2604,8 +2604,14 @@ point gizmo.
   themselves (the grabbed one first). The smallest correction within the snap tolerance wins
   (`SnapSession.snapValue`, the session's object lines); without one, the grid (the grabbed point,
   or the box min), then the length step. Every point moves by the same correction.
-- The moving points are excluded from the targets (`SnapSession.begin(exclude = ...)` plus the
-  tool's own pending object), so a group never snaps to itself.
+- The moving points are never targets: the tool begins its `SnapSession` with only the other
+  points as `extra` point lines (Curve: `beginSnapWithout { it in moving }`; Shape: the
+  non-selected vertices, also in the new `Mode.GIZMO` case of `beginSnap`), so a group never
+  snaps to itself.
+- Cause E: a reopened Curve, Polyline or Path that is its layer's only object begins the session
+  with that layer in `exclude` (`CurveTool.ownLayerExclude`): until ✓ the layer's pixels still hold
+  the path as it was, so its content bounds were the path's own old extent. With other objects
+  on the layer, the layer stays a target.
 - Above `PointGroupSnap.MAX_POINT_CANDIDATES` (256) moving points only the three box lines are
   candidates: a drag stays one linear scan per candidate (`GroupSnapPerfProbeTest`, PC budget
   4 ms, device 24 ms).
@@ -2613,8 +2619,10 @@ point gizmo.
   `PointGroupSnap.scale(m, part, box, pivot, keepProportions)` rebuilds the factor about the
   pivot so that edge lands on the target; a corner keeping proportions lets the closer edge decide
   both axes. Rotate is unchanged.
-- The guides show for the snapped lines (`SnapSession.showGuidesFor`); the moving box is drawn
-  by `SnapSession.draw`. Undo is unchanged: a group drag is still one step.
+- The guides show for the snapped lines (`SnapSession.showGuidesFor`); `SnapSession.draw` gets
+  the moving box (Shape: the shape's box; Curve: the grabbed point, or the group box's centre) to
+  keep its labels off it. Undo is unchanged: a group drag is still the drag's one in-tool step,
+  and ✓ commits the edit as one step (`GroupSnapAndSharpRoundTripTest`).
 - The box is measured once per group edit (`groupSnapMeasure` in Shape, `beginGroupSnap` in
   Curve), not per move.
 
@@ -2651,7 +2659,9 @@ Tests: `v110/a5/` (`GroupGizmoSnapReproTest`, `GroupPointSnapOtherPointTest`,
 `CurveSelfSnapExcludeTest`, `GroupSnapCandidateCapTest`, `GroupScaleEdgeSnapTest`,
 `GroupSnapPerfProbeTest`, `SharpMixedMakesSharpTest`, `SharpIgnoredDuringGroupEditTest`,
 `SharpEndsOnlyTest`, `SharpOneStepPerTapTest`, `SharpNeverUnderTrashTest`,
-`PolylineSharpCellDisabledTest`, `PillSharpPlacementTest`), `tools/points/PointGroupSnapTest`
+`PolylineSharpCellDisabledTest`, `PillSharpPlacementTest`, `GroupSnapAndSharpRoundTripTest`:
+undo and redo of a snapped group move, save and reopen, a v1.9 artwork unchanged),
+`tools/points/PointGroupSnapTest`
 and `qa110/` (`Qa110SharpCellUiTest`, `Qa110GroupSnapUiTest`).
 
 <!-- /v110-A5 -->

@@ -87,10 +87,10 @@ class CurveCornerEditor(private val tool: CurveTool) : PointCornerEditor {
 
 /**
  * v1.10 (A5, R12): [tool]'s points (Points mode) for the pill's Sharp / Smooth cell; "sharp" is a
- * point that is not smooth. [groupEditing] tells whether a group edit is in progress (the tool
- * keeps it private). See [CornerEditors].
+ * point that is not smooth. The lock is the tool's group edit (`ShapeTool.inGroupEdit`). See
+ * [CornerEditors].
  */
-class ShapeCornerEditor(private val tool: ShapeTool, private val groupEditing: () -> Boolean) : PointCornerEditor {
+class ShapeCornerEditor(private val tool: ShapeTool) : PointCornerEditor {
     private val state: State<CornerState?> = derivedStateOf { compute() }
 
     private fun compute(): CornerState? {
@@ -104,7 +104,7 @@ class ShapeCornerEditor(private val tool: ShapeTool, private val groupEditing: (
 
     override val corner: CornerState? get() = state.value
 
-    override val cornerLocked: Boolean get() = groupEditing()
+    override val cornerLocked: Boolean get() = tool.inGroupEdit
 
     override fun setSelectedSharp(sharp: Boolean): Boolean {
         if (cornerLocked || corner == null) return false

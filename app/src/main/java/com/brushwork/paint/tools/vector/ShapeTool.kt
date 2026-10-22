@@ -1576,7 +1576,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
      * screen remembers the cell by it); its state hides the cell outside Points mode or without a
      * selected point. A tap does nothing during a group edit (C10).
      */
-    override val pointCorners: PointCornerEditor? by lazy(LazyThreadSafetyMode.NONE) { com.brushwork.paint.tools.points.ShapeCornerEditor(this) { groupBase != null } }
+    override val pointCorners: PointCornerEditor? by lazy(LazyThreadSafetyMode.NONE) { com.brushwork.paint.tools.points.ShapeCornerEditor(this) }
     // endregion
 
     /**
