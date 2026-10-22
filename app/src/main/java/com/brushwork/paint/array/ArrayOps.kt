@@ -239,19 +239,26 @@ object ArrayOps {
         }
     }
 
-    /** "Remove array" (one step): the copies go and the source stays, editable as before. */
+    /**
+     * "Remove array" (one step): the copies go and the source stays, editable as before.
+     * v1.10 (R4, UQ11): on a copies-only layer (`ArrayBehind.isCopiesOnly`) there is no source to
+     * keep: the whole layer goes, one step `ArrayLabels110.REMOVE_WITH_LAYER` ([ArrayBehind.removeWithLayer]).
+     */
     fun remove(c: EditorController, layer: Layer): Boolean {
         if (c.doc.indexOf(layer) < 0 || layer.array == null) return false
+        if (ArrayBehind.isCopiesOnly(layer)) return ArrayBehind.removeWithLayer(c, layer)
         return paused(c) { layer.array != null && setArray(c, layer, null, ArrayLabels.REMOVE) }
     }
 
     /**
      * "Edit source pixels" (one step): a raster array shows its source alone at its place, and
      * pixel edits change the source without baking (I14) until [finishSource]. True without a
-     * step when already editing it.
+     * step when already editing it. v1.10 (R4): not on a copies-only layer (`ArrayBehind.isCopiesOnly`):
+     * its source is a copy of the main layer's pixels, which stay the ones to paint.
      */
     fun editSource(c: EditorController, layer: Layer): Boolean {
         val a = layer.array ?: return false
+        if (ArrayBehind.isCopiesOnly(layer)) return false
         if (a.pixels == null) { c.toast(NOT_PIXELS); return false }
         if (a.spec.editingSource) return true
         if (c.doc.indexOf(layer) < 0) return false

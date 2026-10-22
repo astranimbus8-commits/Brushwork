@@ -7,6 +7,7 @@ import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Shader
+import com.brushwork.paint.ColorModeOps
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.brush.TipCache
 import com.brushwork.paint.engine.ArrayDraw
@@ -147,6 +148,20 @@ internal object ArraySources {
         val out = try { cropped(crop, o) } finally { crop.recycle() }
         return ArrayPixels(out, b.left + o.left, b.top + o.top)
     }
+
+    /**
+     * v1.10 (R4, `ArrayBehind`): [selectedPixels] of [layer]'s pixels, COPIED (the layer is not
+     * changed). Here so that `ArrayBehind` reads no layer pixels itself (rule P).
+     */
+    fun selectedPixelsOf(layer: Layer, sel: Selection): ArrayPixels? = selectedPixels(layer.bitmap, sel)
+
+    /** v1.10 (R4): [px] limited to the document's color [mode] (nothing in RGB), as v1.9's arrays are. */
+    fun constrain(px: ArrayPixels, mode: ColorMode) {
+        if (mode != ColorMode.RGB) ColorModeOps.constrain(px.bitmap, Rect(0, 0, px.bitmap.width, px.bitmap.height), mode)
+    }
+
+    /** v1.10 (R4): lets go of array source pixels that never reached a layer. */
+    fun release(px: ArrayPixels) = px.bitmap.recycle()
 
     /** The non-transparent pixels of [bmp] (a layer's content) as array source pixels; null when it has none. */
     fun layerPixels(bmp: Bitmap): ArrayPixels? {

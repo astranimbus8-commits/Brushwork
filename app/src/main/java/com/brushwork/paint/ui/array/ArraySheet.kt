@@ -29,6 +29,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.brushwork.paint.array.ArrayBehind
 import com.brushwork.paint.array.ArraySources
 import com.brushwork.paint.model.ArrayMode
 import com.brushwork.paint.model.ArraySpec
@@ -76,7 +77,13 @@ fun ArraySheet(tool: ArrayTool, layer: Layer, spec: ArraySpec, onDismiss: () -> 
         modifier = Modifier.testTag(V17Tags.ARRAY_SHEET),
         footer = {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = { tool.removeArray() }, modifier = Modifier.heightIn(min = 44.dp)) { Text(ArrayLabels.REMOVE) }
+                // v1.10 (R4, UQ11): on a copies-only layer the item removes the layer too, and says so
+                // (the longer words may wrap to two lines rather than push the Apply button out).
+                val whole = ArrayBehind.isCopiesOnly(layer)
+                TextButton(
+                    onClick = { tool.removeArray() },
+                    modifier = (if (whole) Modifier.weight(1f, fill = false) else Modifier).heightIn(min = 44.dp),
+                ) { Text(ArrayBehind.removeLabel(layer)) }
                 Spacer(Modifier.weight(1f))
                 Button(
                     onClick = { tool.applyArray() },
@@ -113,7 +120,8 @@ fun ArraySheet(tool: ArrayTool, layer: Layer, spec: ArraySpec, onDismiss: () -> 
             ArrayMode.CURVE -> CurveFields(tool, spec)
             ArrayMode.TRANSFORM -> TransformFields(tool, spec)
         }
-        if (raster) {
+        // v1.10 (R4): a copies-only layer's source is a copy of the main layer, so it offers no source edit.
+        if (raster && !ArrayBehind.isCopiesOnly(layer)) {
             SectionHeader(SOURCE)
             OutlinedButton(onClick = { tool.editSource() }, modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp)) { Text(ArrayLabels.EDIT_SOURCE) }
             Hint(EDIT_SOURCE_HINT)

@@ -10,6 +10,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.brushwork.paint.EditorController
+import com.brushwork.paint.array.ArrayBehind
 import com.brushwork.paint.array.ArrayOps
 import com.brushwork.paint.array.ArraySources
 import com.brushwork.paint.core.Vec2
@@ -286,11 +287,15 @@ class ArrayTool(controller: EditorController) : Tool(controller) {
         ArrayOps.apply(controller, layer)
     }
 
-    /** "Remove array" on the active layer. */
+    /**
+     * "Remove array" on the active layer. v1.10 (R4, UQ11): on a copies-only layer the whole layer
+     * goes (`ArrayBehind.removeWithLayer`), and the sheet with it.
+     */
     fun removeArray() {
         val layer = target ?: return
         dropPreview()
-        ArrayOps.remove(controller, layer)
+        val whole = ArrayBehind.isCopiesOnly(layer)
+        if (ArrayOps.remove(controller, layer) && whole) sheetOpen = false
     }
 
     /** "Edit source pixels" on the active layer, then the last painting tool to paint the source with. */
