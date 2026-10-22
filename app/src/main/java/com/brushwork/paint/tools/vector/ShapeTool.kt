@@ -1555,8 +1555,32 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
     override val objectDeletion: ObjectDeletion? get() = if (box != null) deletion else null
 
     // region v110-A2 colors
-    /** v1.10 (R2): the pill's Object colors cell. F0: none, so the cell stays hidden (A2 body). */
-    override val objectColors: ObjectColorEditor? = null
+    /**
+     * v1.10 (R2, R7): the colors of the open shape, new or reopened, for the pill's COLOR cell
+     * ([ShapeColorsDelegate]); none while no shape is open or while erasing (the cell hides).
+     */
+    override val objectColors: ObjectColorEditor? get() = if (box != null && !eraseOn) colors else null
+
+    private val colors: ShapeColorsDelegate by lazy { ShapeColorsDelegate(ColorsHost()) }
+
+    /** What [ShapeColorsDelegate] reads and sets of this tool (its pending previews, no saved options). */
+    private inner class ColorsHost : ShapeColorsHost {
+        override val controller: EditorController get() = this@ShapeTool.controller
+        override val settings: ShapeSettings get() = this@ShapeTool.settings
+        override fun current(): ShapeObject? = pendingObject()
+        override val open: Boolean get() = box != null
+        override val session: Int get() = openCount
+        override val reopened: Boolean get() = this@ShapeTool.reopened
+        override var openedColor: Int
+            get() = this@ShapeTool.openedColor
+            set(value) { this@ShapeTool.openedColor = value }
+        override var userColor: Int?
+            get() = this@ShapeTool.userColor
+            set(value) { this@ShapeTool.userColor = value }
+        override fun show(s: ShapeSettings) { this@ShapeTool.settings = s }
+        override fun restoreUser(s: ShapeSettings) = update { s }
+        override fun redraw() { if (box != null) refreshPreview() }
+    }
     // endregion
 
     /**
