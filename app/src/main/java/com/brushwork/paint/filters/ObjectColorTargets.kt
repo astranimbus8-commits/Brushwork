@@ -72,6 +72,24 @@ internal class ObjectColorTargets private constructor(
         return out
     }
 
+    /**
+     * C12: an affine mapper (CDC's: per channel, unpremultiplied, alpha kept) applied to the
+     * layer's pixels gives what [map] re-rendered gives, within 1 per channel. It holds when
+     * every object of [data] is a target ([Rule.ALL]) and every color the layer paints comes from
+     * a slot `ObjectColorSlots` maps; it maps them all (a stroke's color, a path's line and fill
+     * with gradient stops, a shape's two colors, a text's color, outline, box fill and border),
+     * and an affine map commutes with antialiasing and source-over. An array tint breaks it (the
+     * copies keep their tint, and recolor then tint is not tint then recolor); an array opacity
+     * does not (alpha only). The tint test is `ArrayInstances.of`'s. Texts break it too: Skia
+     * antialiases a glyph's edge by its paint's luminance, so a recolored text covers its edge
+     * pixels differently (alpha 12 for 24 measured, `CdcObjectModeNoRasterizeTest`).
+     */
+    fun exactByPixels(data: LayerData): Boolean {
+        if (rule != Rule.ALL || data.text != null) return false
+        val look = data.array?.spec?.sanitized()?.look ?: return true
+        return !(look.tint.size >= 2 && look.tintStrength > 0f)
+    }
+
     companion object {
         /** Side of the squares a text's ink is rasterized in for [Rule.SELECTION]. */
         private const val PROBE_TILE = 256
@@ -81,6 +99,10 @@ internal class ObjectColorTargets private constructor(
 
         /** True when [data] holds objects object mode can recolor: vector objects, texts or a shape. */
         fun hasObjects(data: LayerData): Boolean = data.vector != null || data.text != null || data.shape != null
+
+        /** True when [data] has no object to recolor: an empty vector layer, a text layer without a text. */
+        fun isEmpty(data: LayerData): Boolean =
+            data.vector?.objects.isNullOrEmpty() && data.shape == null && (data.text?.let { TextCodec.decodeAll(it).isEmpty() } ?: true)
 
         /**
          * The targets of [data] by the three rules: [selectedIds] (the layer's selected objects,

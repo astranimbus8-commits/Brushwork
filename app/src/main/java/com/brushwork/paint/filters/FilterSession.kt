@@ -14,9 +14,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import com.brushwork.paint.ColorModeOps
 import com.brushwork.paint.EditorController
+import com.brushwork.paint.brush.TipCache
 import com.brushwork.paint.core.Parallel
 import com.brushwork.paint.core.PixelBuffer
 import com.brushwork.paint.diagnostics.Breadcrumbs
+import com.brushwork.paint.engine.ArrayDraw
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.EditTarget
 import com.brushwork.paint.engine.LayerRenderOverride
@@ -25,13 +27,21 @@ import com.brushwork.paint.engine.PerfTrace
 import com.brushwork.paint.engine.ViewTransform
 import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.Layer
+import com.brushwork.paint.model.LayerData
 import com.brushwork.paint.model.Selection
 import com.brushwork.paint.segmentation.SegmentationService
 import com.brushwork.paint.tools.InToolHistoryOwner
 import com.brushwork.paint.tools.ToolHistory
 import com.brushwork.paint.tools.ToolPoint
+import com.brushwork.paint.tools.text.TextCodec
+import com.brushwork.paint.tools.text.TextRenderer
+import com.brushwork.paint.tools.vector.ShapeCodec
 import com.brushwork.paint.ui.common.FilterLabels19
 import com.brushwork.paint.ui.common.StabilityLabels19
+import com.brushwork.paint.vector.VShape
+import com.brushwork.paint.vector.VectorContent
+import com.brushwork.paint.vector.render.RenderCache
+import com.brushwork.paint.vector.render.VectorLayerRenderer
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
@@ -133,6 +143,24 @@ class FilterSession(
     var previewScale: Float = 1f
         private set
 
+    // ------------------------------------------------------------------ v1.10 object mode (R6)
+
+    /**
+     * v1.10 (R6, A4): the filter recolors the objects of a vector, text or shape layer through its
+     * [Filter.colorMapper] instead of filtering pixels (decided at the start). Preview (C12): for
+     * a whole vector or shape layer without an array tint the v1.9 pixel preview is exact and is
+     * kept ([ObjectColorTargets.exactByPixels]); otherwise the preview re-renders the layer's
+     * data with mapped colors (a live array's copies through `ArrayDraw`) and holds no copy of
+     * the layer's pixels. Apply changes the data as one step, re-rendered: nothing is
+     * rasterized. Which objects: [ObjectColorTargets].
+     */
+    val objectMode: Boolean = target == EditTarget.CONTENT && filter.colorMapper(filter.defaultValues()) != null &&
+        ObjectColorTargets.hasObjects(layer.dataSnapshot())
+
+    /** v1.10: the rule that chose the recolored objects, once read (object mode only). */
+    internal var objectRule by mutableStateOf<ObjectColorTargets.Rule?>(null)
+        private set
+
     // ------------------------------------------------------------------ v1.9 steps (R8)
 
     /**
@@ -163,6 +191,19 @@ class FilterSession(
     /** The selection [previewSel] was built from. */
     private var previewSelSource: Selection? = null
     private var previewBitmap: Bitmap? = null
+
+    /** Object mode: the data and targets the preview renders, read at [version] with [selection]. */
+    private class ObjectSource(val data: LayerData, val targets: ObjectColorTargets, val version: Long, val selection: Selection?)
+
+    private var objectSource: ObjectSource? = null
+    /** Object mode: renders land here in the background, then trade places with [previewBitmap] on the main thread. */
+    private var scratchBitmap: Bitmap? = null
+    /** Guards [scratchBitmap], [scratchOwner] and the render caches: one render at a time, never one into a recycled bitmap. */
+    private val scratchLock = Any()
+    /** The render whose pixels [scratchBitmap] holds (a stopped render may have drawn after it). */
+    private var scratchOwner: Job? = null
+    private val objectTips by lazy { TipCache(OBJECT_TIP_BYTES) }
+    private val objectCache by lazy { RenderCache() }
 
     private var previewJob: Job? = null
     private var analysisJob: Job? = null
@@ -252,7 +293,7 @@ class FilterSession(
         }
         values = sessionDefaults()
         try {
-            buildPreviewSource()
+            if (objectMode) buildObjectSource() else buildPreviewSource()
         } catch (e: OutOfMemoryError) {
             controller.toast("Not enough memory to preview \"${filter.name}\"")
             close()
@@ -269,6 +310,7 @@ class FilterSession(
         controller.inToolHistory = this
         runCatching { FilterRecents.record(controller.appContext, filter.id) }
         analyzeSourceAsync(firstTime = true)
+        objectSource?.let { if (ObjectColorTargets.isEmpty(it.data)) controller.toast(emptyMessage()) }
         if (filter.livePreview) requestPreview(0L)
         // Menus stay usable while the session is open (select all, clear or fill the layer, delete
         // it...): keep the preview in sync, or close the session if its layer is gone.
@@ -279,7 +321,7 @@ class FilterSession(
 
     /** Re-renders the preview if the selection or the layer's pixels changed; cancels if the layer is gone. */
     private fun syncWithDocument() {
-        if (isClosed || isApplying || previewSrc == null) return
+        if (isClosed || isApplying || !hasSource()) return
         if (!checkTarget()) return
         if (refreshSources() != Refresh.CHANGED) return
         previewStale = true
@@ -290,6 +332,7 @@ class FilterSession(
 
     /** Rebuilds the preview source and/or selection when the layer pixels or the selection changed. */
     private fun refreshSources(): Refresh {
+        if (objectMode) return refreshObjectSource()
         val contentChanged = layer.contentVersion != sourceVersion
         val selectionChanged = controller.selection !== previewSelSource
         if (!contentChanged && !selectionChanged) return Refresh.NONE
@@ -329,6 +372,13 @@ class FilterSession(
         previewSrc = null
         previewSel = null
         previewSelSource = null
+        // v1.10: a stopped object render still drawing finishes its object first.
+        synchronized(scratchLock) {
+            scratchBitmap?.recycle()
+            scratchBitmap = null
+            scratchOwner = null
+        }
+        objectSource = null
     }
 
     // ------------------------------------------------------------------ parameters
@@ -552,7 +602,8 @@ class FilterSession(
     private fun analyzeSourceAsync(firstTime: Boolean) {
         val src = previewSrc ?: return
         val sel = previewSel
-        val warnEmpty = firstTime && target == EditTarget.CONTENT && !filter.generatesContent
+        // Object mode tells an empty layer by its data (start).
+        val warnEmpty = firstTime && target == EditTarget.CONTENT && !filter.generatesContent && !objectMode
         analysisJob?.cancel()
         analysisJob = controller.scope.launch {
             val (hist, empty) = withContext(Dispatchers.Default) {
@@ -560,12 +611,20 @@ class FilterSession(
             }
             if (isClosed) return@launch
             histogram = hist
-            if (empty) controller.toast("\"${layer.name}\" is empty, so ${filter.name} has nothing to change")
+            if (empty) controller.toast(emptyMessage())
         }
     }
 
+    private fun emptyMessage() = "\"${layer.name}\" is empty, so ${filter.name} has nothing to change"
+
+    /** The preview has what it renders from: the downscaled pixels, or (object mode) the layer's data. */
+    private fun hasSource() = previewSrc != null || objectSource != null
+
+    /** Test hook: a downscaled copy of the layer's pixels is held (in object mode only while [ObjectColorTargets.exactByPixels]). */
+    internal val holdsPixelCopy: Boolean get() = previewSrc != null
+
     private fun requestPreview(delayMs: Long) {
-        if (isClosed || previewSrc == null) return
+        if (isClosed || !hasSource()) return
         val running = previewJob
         if (running != null && running.isActive) {
             // Still debouncing: the render reads the latest values when it starts.
@@ -601,6 +660,8 @@ class FilterSession(
     private suspend fun renderOnce(self: Job) {
         if (!checkTarget()) return
         if (refreshSources() == Refresh.FAILED) return
+        // v1.10: object mode without the pixel copy (C12) re-renders the objects.
+        if (objectMode && previewSrc == null) return renderObjectsOnce(self)
         val src = previewSrc ?: return
         val sel = previewSel
         val selSource = previewSelSource
@@ -681,6 +742,164 @@ class FilterSession(
         val cached = maskPreviewPaint
         if (cached != null && maskPaintKey === maskPaint) return cached
         return Paint(maskPaint).apply { isFilterBitmap = true }.also { maskPreviewPaint = it; maskPaintKey = maskPaint }
+    }
+
+    // ------------------------------------------------------------------ v1.10 object preview (R6)
+
+    /**
+     * Object mode: reads the layer's data and the targets, then the preview's source: the
+     * downscaled pixels when they preview exactly (C12, [ObjectColorTargets.exactByPixels]), else
+     * the render bitmaps; the other path's buffers are let go, as the rule can change with the
+     * selection. The preview bitmaps are created once.
+     */
+    private fun buildObjectSource() {
+        val sel = controller.selection
+        val data = layer.dataSnapshot()
+        val s = ObjectSource(data, ObjectColorTargets.of(data, selectedIds, sel), layer.contentVersion, sel)
+        objectSource = s
+        objectRule = s.targets.rule
+        if (s.targets.exactByPixels(data)) {
+            synchronized(scratchLock) {
+                scratchBitmap?.recycle()
+                scratchBitmap = null
+                scratchOwner = null
+            }
+            buildPreviewSource()
+            return
+        }
+        previewSrc = null
+        previewSel = null
+        val (pw, ph) = FilterSessionMath.previewSize(controller.doc.width, controller.doc.height)
+        previewScale = pw.toFloat() / controller.doc.width
+        sourceVersion = s.version
+        previewSelSource = sel
+        val bmp = previewBitmap
+        if (bmp == null || bmp.width != pw || bmp.height != ph) {
+            previewBitmap = BitmapUtils.createLayerBitmap(pw, ph)
+            bmp?.recycle()
+        }
+        synchronized(scratchLock) {
+            val old = scratchBitmap
+            if (old == null || old.width != pw || old.height != ph) {
+                scratchBitmap = BitmapUtils.createLayerBitmap(pw, ph)
+                old?.recycle()
+            }
+        }
+    }
+
+    /** Object mode: re-reads the data and the targets when the layer's data or the selection changed. */
+    private fun refreshObjectSource(): Refresh {
+        val s = objectSource
+        if (s != null && s.version == layer.contentVersion && s.selection === controller.selection && s.data == layer.dataSnapshot()) {
+            return Refresh.NONE
+        }
+        try {
+            buildObjectSource()
+        } catch (e: OutOfMemoryError) {
+            controller.toast("Not enough memory to preview \"${filter.name}\"")
+            return Refresh.FAILED
+        }
+        return Refresh.CHANGED
+    }
+
+    /**
+     * Object mode: the layer's data with the targets' colors mapped by the filter's colorMapper,
+     * rendered at [previewScale] into [scratchBitmap] on [Dispatchers.Default], then shown over
+     * the whole layer (objects touching a selection change whole, so there is no region). The
+     * sources are fresh ([renderOnce]).
+     */
+    private suspend fun renderObjectsOnce(self: Job) {
+        val src = objectSource ?: return
+        val vals = values
+        val mapper = filter.colorMapper(vals) ?: return
+        val colorMode = controller.doc.colorMode
+        val scale = previewScale
+        val doc = Rect(0, 0, controller.doc.width, controller.doc.height)
+        computingJob = self
+        computeStartNs = System.nanoTime()
+        val rendered = try {
+            withContext(Dispatchers.Default) {
+                val job = currentCoroutineContext().job
+                val after = src.targets.map(src.data, mapper)
+                synchronized(scratchLock) {
+                    val out = scratchBitmap
+                    if (out == null || !job.isActive) return@withContext false
+                    out.eraseColor(0)
+                    val cv = Canvas(out)
+                    cv.scale(scale, scale)
+                    val done = drawObjects(cv, after, doc) { job.isActive }
+                    // Same constraint commitEdit applies, so the preview shows the final colors.
+                    if (done && colorMode != ColorMode.RGB) ColorModeOps.constrain(out, Rect(0, 0, out.width, out.height), colorMode)
+                    if (done) scratchOwner = self
+                    done
+                }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: OutOfMemoryError) {
+            controller.toast("Not enough memory to preview \"${filter.name}\"")
+            false
+        } catch (e: Exception) {
+            controller.toast("${filter.name} failed: ${e.message ?: e.javaClass.simpleName}")
+            false
+        } finally {
+            if (computingJob === self) computingJob = null
+        }
+        lastRenderMs = (System.nanoTime() - computeStartNs) / 1_000_000
+        PerfTrace.record(PerfTrace.FILTER_PREVIEW, System.nanoTime() - computeStartNs)
+        if (!rendered || isClosed) return
+        publishObjectPreview(self, vals, src)
+    }
+
+    /** Object mode: [scratchBitmap], rendered by [self] from [vals] and [src], becomes the shown preview. */
+    private fun publishObjectPreview(self: Job, vals: FilterValues, src: ObjectSource) {
+        synchronized(scratchLock) {
+            val shown = scratchBitmap
+            if (scratchOwner !== self || shown == null) return
+            scratchBitmap = previewBitmap
+            previewBitmap = shown
+            scratchOwner = null
+        }
+        shownRegion = null
+        hasPreview = true
+        previewStale = vals !== values || src !== objectSource
+        if (!isComparing) {
+            installOverride()
+            controller.invalidateDoc(null)
+        }
+    }
+
+    /**
+     * Draws [d] (document px) as the layer's cache shows it, as `DataRender` and
+     * `updateLayerData` render it: vector objects with a live array's copies
+     * (`ArrayDraw.effectiveVector`), a text or shape source repeated per copy
+     * (`ArrayDraw.drawWithArray`). False when [active] stopped it. Under [scratchLock].
+     */
+    private fun drawObjects(cv: Canvas, d: LayerData, doc: Rect, active: () -> Boolean): Boolean {
+        val array = d.array
+        if (array?.pixels != null) {
+            ArrayDraw.drawPixels(cv, array)
+            return true
+        }
+        d.vector?.let { v ->
+            val content = ArrayDraw.effectiveVector(d) ?: v
+            return VectorLayerRenderer.renderWith(cv, content, doc, emptySet(), objectTips, doc, objectCache) { _, _ -> active() }
+        }
+        val source: (Canvas) -> Unit = when {
+            d.text != null -> {
+                val items = TextCodec.decodeAll(d.text)
+                val preps = items.map { TextRenderer.prepare(it) }
+                ({ c -> for (k in items.indices) TextRenderer.drawItem(c, items[k], preps[k], null) })
+            }
+            d.shape != null -> {
+                val o = ShapeCodec.decode(d.shape) ?: return true
+                val content = VectorContent(objects = listOf(VShape(0L, shape = o)))
+                ({ c -> VectorLayerRenderer.render(c, content, doc, tips = objectTips, document = doc) })
+            }
+            else -> return true
+        }
+        if (array != null) ArrayDraw.drawWithArray(cv, array, ArrayDraw.sourceBounds(d) ?: RectF(), source) else source(cv)
+        return active()
     }
 
     // ------------------------------------------------------------------ apply
@@ -980,6 +1199,8 @@ class FilterSession(
 
         /** A render slower than this is restarted (not queued) when parameters change. */
         private const val SLOW_RENDER_MS = 250L
+        /** Bytes of brush tips the object preview's renders may cache. */
+        private const val OBJECT_TIP_BYTES = 8L shl 20
         private const val HANDLE_GRAB_DP = 36f
         private const val ACCENT = 0xFF4DA3FF.toInt()
     }
