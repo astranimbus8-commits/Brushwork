@@ -31,7 +31,7 @@ import com.brushwork.paint.vector.select.PendingRenders
  * Object bar actions asked for meanwhile wait for it ([PendingRenders]), so they start from the
  * landed content.
  */
-internal class VectorObjectLift(
+internal open class VectorObjectLift(
     private val c: EditorController,
     private val session: VectorEditSession,
     /** The lifted objects (their ids stay the same through ✓). */
@@ -47,6 +47,9 @@ internal class VectorObjectLift(
     override val sourceRect: Rect = Rect(session.floatingRect)
 
     override val floatingScale: Float = session.floatingScale
+
+    /** v1.10 (R1): the copy of the one lifted object this lift holds alone (a [CopyLift]), or -1 for whole objects. */
+    open val side: Int get() = -1
 
     /** The session ended: its hole is freed and nothing can be applied any more. */
     private var ended = false

@@ -4,7 +4,9 @@ import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.vector.ObjectCopies
 import com.brushwork.paint.vector.VectorOps
 import com.brushwork.paint.vector.copies.CopyPick
+import com.brushwork.paint.vector.lift.VectorLift
 import com.brushwork.paint.vector.select.ObjectTestKit
+import com.brushwork.paint.vector.select.vec
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -41,5 +43,21 @@ class StrokeStaysWholeTest {
         assertSame(s, CopyPick.side(s, 0))
         assertNull(CopyPick.side(s, 1))
         assertEquals(VectorOps.bounds(s), CopyPick.boundsOf(s, 0))
+    }
+
+    @Test
+    fun aTapOnAMirroredStrokePicksItWhole() {
+        val c = kit.controller()
+        val mirror = floatArrayOf(-1f, 0f, 512f, 0f, 1f, 0f, 0f, 0f, 1f)
+        val identity = floatArrayOf(1f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 1f)
+        c.vectors.addObjects(c.vec, listOf(kit.stroke(60f, 100f, 160f, 100f).copy(copies = listOf(identity, mirror))), "Add")
+        val provider = VectorLift.providerOf(c)
+        val onCopy = Vec2(512f - 110f, 101f)
+        assertTrue(provider.tapped(onCopy))
+        assertEquals(setOf(1L), c.vectors.selectedIds)
+        assertNull("no side", provider.sidePick)
+        provider.tapped(onCopy)
+        assertEquals(setOf(1L), c.vectors.selectedIds)
+        assertNull(provider.sidePick)
     }
 }

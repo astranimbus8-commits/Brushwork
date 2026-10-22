@@ -52,6 +52,7 @@ import com.brushwork.paint.tools.points.PointSelection
 import com.brushwork.paint.ui.common.ArrayLabels
 import com.brushwork.paint.ui.common.TransformLabels17
 import com.brushwork.paint.vector.VectorLayerOps
+import com.brushwork.paint.vector.lift.VectorLift
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -598,6 +599,8 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
         selectSeveral = false
         // Nothing to snap until the next transform (what is known stays cached).
         controller.snapping.cancel()
+        // v1.10 (R1): the next tap starts a new cycle, and no mirror side stays picked.
+        VectorLift.toolLeft(controller)
     }
 
     override fun onDispose() {
@@ -924,6 +927,8 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
         gesture = null
         clearGuides()
         showReadout(null)
+        // v1.10 (R1): a drag or handle gesture came in between: the next tap starts a new cycle.
+        VectorLift.gestureEnded(controller)
         transformState?.let { st ->
             // A guide the box snapped to keeps it exactly there, and so does a mere tap (a scaled
             // box aligned to a guide earlier must not be nudged off it); a drag settles on whole
@@ -940,6 +945,7 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
         gesture = null
         clearGuides()
         showReadout(null)
+        VectorLift.gestureEnded(controller)
         if (session != null && transformState != g.start) applyState(g.start)
         controller.invalidateOverlay()
     }
@@ -1250,6 +1256,8 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
     override fun onTwoFingerEnd(cancelled: Boolean) {
         meshPinch?.let { meshPinchEnd(it, cancelled); return }
         val p = pinch ?: return
+        // v1.10 (R1): a pinch came in between: the next tap starts a new cycle.
+        VectorLift.gestureEnded(controller)
         if (p.start == null) {
             // Still lifting: a finished pinch is applied when the content lands.
             if (cancelled || (liftJob == null && !objectLiftPending)) pinch = null else p.ended = true
