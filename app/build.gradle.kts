@@ -134,10 +134,24 @@ android {
                 // alone, serially. Every CI run leaves it out, so the CI counts never include it;
                 // locally it runs with the rest and skips itself (bw.testSet is not "bench").
                 val bench = project.hasProperty("bench")
+                // v1.10 F1 (design 3.3, 6.5): -PunitFull runs the suite as the unit-full job does, at
+                // -PengineMode=full unless another level above classic is given (ChaosResidency), without
+                // the Timing, @Category(ClassicOnly) and @Category(EngineGolden) tests and without the
+                // classes listed in src/test/unit-full-backlog.txt (below). Locally too.
+                val unitFull = project.hasProperty("unitFull")
+                if (unitFull && (timingOnly || soakOnly || bench)) {
+                    throw GradleException("-PunitFull runs the main suite; it does not go with -PtimingOnly, -PsoakOnly or -Pbench")
+                }
                 it.maxParallelForks = if (ci && !timingOnly && !soakOnly && !bench) 2 else 1
                 it.useJUnit {
                     if (timingOnly) includeCategories("com.brushwork.paint.testing.Timing")
-                    else if (ci && !soakOnly && !bench) excludeCategories("com.brushwork.paint.testing.Timing")
+                    else if (unitFull) {
+                        excludeCategories(
+                            "com.brushwork.paint.testing.Timing",
+                            "com.brushwork.paint.testing.ClassicOnly",
+                            "com.brushwork.paint.testing.EngineGolden",
+                        )
+                    } else if (ci && !soakOnly && !bench) excludeCategories("com.brushwork.paint.testing.Timing")
                 }
                 if (soakOnly) {
                     it.filter.includeTestsMatching("*.SoakHarnessTest")
@@ -173,15 +187,41 @@ android {
                 // unit-test JVMs only, as brushwork.engineMode and brushwork.parkChaos=true; only
                 // EngineConfig.testMode() (F1) reads them. Without -PengineMode nothing is set, so
                 // EngineConfig keeps its own default. Both are task inputs, like the shard above.
-                val engineMode = project.findProperty("engineMode")?.toString()?.trim()?.lowercase()
+                val engineMode = project.findProperty("engineMode")?.toString()?.trim()?.lowercase() ?: if (unitFull) "full" else null
                 if (engineMode != null && engineMode !in setOf("classic", "tiles", "full")) {
                     throw GradleException("-PengineMode is classic, tiles or full (got \"$engineMode\")")
                 }
+                if (unitFull && engineMode == "classic") throw GradleException("-PunitFull runs at -PengineMode=full or tiles, not classic")
                 val parkChaos = project.findProperty("parkChaos")?.toString()?.trim()?.lowercase().let { p -> p != null && p != "false" }
                 if (engineMode != null) it.systemProperty("brushwork.engineMode", engineMode)
                 if (parkChaos) it.systemProperty("brushwork.parkChaos", "true")
                 it.inputs.property("engineMode", engineMode ?: "unset")
                 it.inputs.property("parkChaos", parkChaos.toString())
+                // v1.10 F1 (design 3.3): src/test/unit-full-backlog.txt lists the classes -PunitFull leaves
+                // out until their owner area fixes them, one per line: "<fully.qualified.Class> <A1..A11>
+                // <reason>"; '#' starts a comment line. A nested class goes with its outer class, as in
+                // the shard filter. The file and the switch are task inputs.
+                val unitFullBacklog = project.file("src/test/unit-full-backlog.txt")
+                it.inputs.property("unitFull", unitFull.toString())
+                it.inputs.file(unitFullBacklog).withPropertyName("unitFullBacklog")
+                if (unitFull) {
+                    val entry = Regex("""([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+)\s+(A[1-9]|A1[01])\s+\S.*""")
+                    val backlog = unitFullBacklog.readLines().mapIndexedNotNull { i, raw ->
+                        val line = raw.trim()
+                        if (line.isEmpty() || line.startsWith("#")) {
+                            null
+                        } else {
+                            entry.matchEntire(line)?.groupValues?.get(1)
+                                ?: throw GradleException("src/test/unit-full-backlog.txt:${i + 1}: not \"<fully.qualified.Class> <A1..A11> <reason>\": $line")
+                        }
+                    }.toSet()
+                    if (backlog.isNotEmpty()) {
+                        it.exclude { e ->
+                            !e.isDirectory && e.name.endsWith(".class") &&
+                                e.relativePath.pathString.removeSuffix(".class").replace('/', '.').substringBefore('$') in backlog
+                        }
+                    }
+                }
                 // A failure prints its whole message (a timing guard's every measurement), so a CI
                 // log says why without the reports.
                 it.testLogging.exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL

@@ -1,0 +1,6 @@
+# v1.10 unit-full backlog (design 3.3 "CI in F1", 4.4; lead adds lines at F1, each area removes its own).
+# The test classes -PunitFull (the unit-full CI job) leaves out until their owner area fixes them at
+# FULL, one per line:
+#   <fully.qualified.TestClass> <owner area A1..A11> <reason>
+# A nested class goes with its outer class. An area removes only the lines that name it, before it
+# merges, and its classes then pass under -PengineMode=full (its acceptance). Empty after Gate 2.
