@@ -702,7 +702,7 @@ internal fun CurveSettingsSheet(tool: CurveTool, onDismiss: () -> Unit) {
         )
         if (s.fill) {
             // A reopened path with a gradient fill (an imported SVG) keeps it until a color is picked.
-            FillColorRow(s.fillColor, controller.color, keptLabel = if (tool.reopenedGradientFill) "Gradient (kept)" else null) { col -> set { it.copy(fillColor = col) } }
+            FillColorRow(s.fillColor, controller.color, keptLabel = if (tool.reopenedGradientFill) GRADIENT_KEPT else null) { col -> set { it.copy(fillColor = col) } }
         }
         // endregion
 

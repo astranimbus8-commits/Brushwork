@@ -275,6 +275,12 @@ internal fun StyleGlyph(style: ShapeStyle, fillColor: Int, modifier: Modifier = 
 }
 
 /**
+ * What [FillColorRow] (the Curve settings sheet) says of a reopened path's gradient fill it keeps
+ * until a color is picked; v1.10: also the Object colors sheet's Fill tab state (R2).
+ */
+internal const val GRADIENT_KEPT = "Gradient (kept)"
+
+/**
  * Fill color row: swatch (opens the color picker with alpha) and a way back to following the
  * main drawing color. [custom] is null when the fill follows the main color.
  */
