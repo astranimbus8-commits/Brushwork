@@ -556,7 +556,7 @@ internal class ArrayRenders(private val c: EditorController) {
         val one = src.width().toDouble() * src.height()
         if (a == null || a.spec.editingSource || (cache is Cache.Draw && cache.pixels)) return cleared + one
         var covered = 0.0
-        for (inst in ArrayInstances.of(a.spec, src)) {
+        for (inst in ArrayInstances.of(a.spec, src)) { // hideSource: a cost estimate only (copy 0 counted)
             val look = inst.look
             if (look != null && look.opacity <= 0f) continue
             val m = inst.matrix

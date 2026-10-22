@@ -722,11 +722,13 @@ class ArrayTool(controller: EditorController) : Tool(controller) {
          * [s]'s frame: its instances (copy N − 1 first, the source last, as `ArrayDraw` draws
          * them) and their paints: the shared [paint] for a copy without a look, else the look's
          * ([ArrayDraw.paintOf]); a draft (more than [DRAFT_ABOVE] instances while [dragging])
-         * keeps the opacity only.
+         * keeps the opacity only. v1.10 (R4): a spec that hides its source
+         * ([ArrayDraw.hidesSource]) leaves copy 0 out of the frame, as the cache does.
          */
         private fun frameOf(s: ArraySpec, dragging: Boolean): Frame {
-            val instances: List<ArrayInstance> = ArrayInstances.of(s, source)
-            val draft = dragging && instances.size > DRAFT_ABOVE && s.look?.let { it.tintStrength > 0f && it.tint.isNotEmpty() } == true
+            val all: List<ArrayInstance> = ArrayInstances.of(s, source) // hideSource: copy 0 filtered out below
+            val draft = dragging && all.size > DRAFT_ABOVE && s.look?.let { it.tintStrength > 0f && it.tint.isNotEmpty() } == true
+            val instances = if (ArrayDraw.hidesSource(s)) all.filter { it.k != 0 } else all
             val paints = instances.map { inst ->
                 val look = inst.look
                 when {

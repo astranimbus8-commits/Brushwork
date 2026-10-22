@@ -527,14 +527,16 @@ object ArrayOps {
     /**
      * A vector array's copies as real objects: the expanded content with new ids for the copies
      * (v1.8: already restyled by their look, `ArrayDraw.restyled`, so they look as drawn).
+     * v1.10 (R4): an array that hides its source bakes the copies alone (`effectiveVector` leaves
+     * the source objects out).
      */
     private fun applyVector(c: EditorController, layer: Layer, before: LayerData, a: LayerArray): Boolean {
         val v = before.vector ?: return false
         if (!c.checkUsable(layer)) return false
-        val n = if (v.objects.isEmpty()) 1 else ArrayInstances.of(a.spec, ObjectIndex.of(v).unionBounds()).size
-        if (n.toLong() * v.objects.size > ArraySpec.MAX_INSTANCES) { c.toast(ArrayLabels.TOO_MANY); return false }
+        val n = if (v.objects.isEmpty()) 1 else ArrayInstances.of(a.spec, ObjectIndex.of(v).unionBounds()).size // hideSource: a count for the limit only
+        if (n.toLong() * v.objects.size > ArraySpec.MAX_INSTANCES) { c.toast(ArrayLabels.TOO_MANY); return false } // hideSource: the limit, as v1.9
         val eff = ArrayDraw.effectiveVector(before) ?: v
-        val sourceIds = v.objects.mapTo(HashSet()) { it.id }
+        val sourceIds = v.objects.mapTo(HashSet()) { it.id } // hideSource: ids only; eff holds no source when hidden
         var next = v.nextId
         val objects = eff.objects.map { o -> if (o.id in sourceIds) o else o.withId(next++) }
         c.vectors.updateArray(layer, null, ArrayLabels.APPLY, after = v.copy(objects = objects, nextId = next))
@@ -544,12 +546,13 @@ object ArrayOps {
     /**
      * A shape array becomes a vector layer: one shape per copy (copy N − 1 first, the source on
      * top). v1.8: each copy restyled by its look (`ArrayDraw.restyled`: colors tinted, opacity
-     * multiplied); a copy with opacity 0 draws nothing and is left out.
+     * multiplied); a copy with opacity 0 draws nothing and is left out. v1.10 (R4): an array
+     * that hides its source (`ArrayDraw.hidesSource`) bakes the copies without the source.
      */
     private fun applyShape(c: EditorController, layer: Layer, before: LayerData, a: LayerArray): Boolean {
         val o = before.shape?.let { ShapeCodec.decode(it) } ?: return false
         val source = VShape(0L, shape = o)
-        val instances = ArrayInstances.of(a.spec, VectorOps.bounds(source))
+        val instances = ArrayInstances.of(a.spec, VectorOps.bounds(source)) // hideSource: copy 0 skipped; the source added only when shown
         val objects = ArrayList<VObject>(instances.size)
         for (inst in instances) {
             if (inst.k == 0) continue
@@ -558,7 +561,7 @@ object ArrayOps {
             if (look != null && look.opacity <= 0f) continue
             objects += ArrayDraw.restyled(VectorOps.transformed(source, inst.matrix), look)
         }
-        objects += source
+        if (!ArrayDraw.hidesSource(a.spec)) objects += source
         val content = VectorContent.EMPTY.plus(objects).first
         val after = before.copy(shape = null, vector = content, array = null)
         val area = ArraySources.rectOf(ArrayDraw.cacheBounds(before)).also { it.union(ArraySources.sourceRect(before)); it.inset(-2, -2) }
