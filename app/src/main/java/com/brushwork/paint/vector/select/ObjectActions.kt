@@ -236,7 +236,9 @@ object ObjectActions {
      * Pending tool work is committed first and the renders in flight are waited for (then true: it
      * opens once they landed); the object selection is cleared, the object's tool becomes current
      * and opens it ([ShapeTool.editShapeObject], [CurveTool.openObject]). A refused object
-     * ([editRefusal]) shows the reason and opens nothing. A second tap while the first still waits
+     * ([editRefusal]) shows the reason and opens nothing; so does a locked or hidden layer (the
+     * layer's message, [EditorController.checkEditable]), before the selection or the tool
+     * changes. A second tap while the first still waits
      * is ignored (false, no toast); the tools ignore one while their editor is opening. The button
      * records no undo step (the editor's ✓ does); the user stays in that tool after ✓ or ✕.
      */
@@ -269,6 +271,8 @@ object ObjectActions {
             c.toast(reason)
             return false
         }
+        // A locked or hidden layer says so (the tools' own check) before anything changes.
+        if (!c.checkEditable(layer)) return false
         c.vectors.setSelection(null, emptySet())
         c.invalidateOverlay()
         return when (o) {

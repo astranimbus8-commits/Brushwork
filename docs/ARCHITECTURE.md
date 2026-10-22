@@ -2716,6 +2716,8 @@ row's lines (`ObjectBarLayout.split`).
   ignored). It then clears the object selection and opens the object in its own tool: a `VShape`
   through `ShapeTool.editShapeObject`, a `VPath` through `CurveTool.openObject(layerId, id, kind)`
   with `kind = CurveTool.kindOf(path)` (Curve, Polyline or Path).
+- A locked or hidden layer refuses Edit with the layer's message (`EditorController.checkEditable`)
+  before the selection or the tool changes.
 - Both tools ignore a second open of the object they are opening or already have open. The Shape
   tool keeps `openingObject` with its `reopenToken`; the Curve tool keeps `openingObject` and
   `isOpening`, and an open it refuses (another path still opening) leaves that guard as it was.

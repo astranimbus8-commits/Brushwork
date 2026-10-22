@@ -144,7 +144,7 @@ class ObjectBarMoreTest {
         val array = Finger.control(s, ArrayLabels.FROM_OBJECTS)!!
         val detach = Finger.control(s, MirrorLabels18.DETACH)!!
         val toShape = Finger.control(s, ObjectBarLabels110.TO_SHAPE)!!
-        for ((name, r) in listOf("Forward" to forward, "Backward" to backward, "Array" to array, "Detach" to detach, "Turn into shape" to toShape)) {
+        for ((name, r) in listOf("Forward" to forward, "Backward" to backward, "Array" to array, "Detach" to detach, ObjectBarLabels110.TO_SHAPE to toShape)) {
             assertTrue("$name on the More row: $r in $more", more.contains(r.center) && r.height >= 46f - 0.5f)
             assertEquals("$name as tall as a row-1 button", cells[0].height, r.height, 0.5f)
         }

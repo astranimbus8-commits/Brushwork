@@ -77,6 +77,29 @@ class TurnIntoShapeOneStepTest {
         assertEquals("redo: the shape again", converted.objects, c.vec.vector!!.objects)
     }
 
+    /** The toolbar's Undo while the converted shape is still open: ONE tap brings the path back (FC6). */
+    @Test
+    fun oneUndoWhileTheShapeIsOpenBringsThePathBack() {
+        val c = kit.controller()
+        val id = A6Paths.add(kit, c, A6Paths.curve(closed = true).copy(fill = VPaint.Solid(RED))).single()
+        val stored = c.vec.vector!!.byId(id)
+        val px = pixels(c)
+        A6Paths.select(c, id)
+        val steps = c.undoManager.undoCount
+        assertTrue(ObjectActions.turnIntoShape(c))
+        settle(c)
+        val tool = c.tools.getValue(ToolId.SHAPE) as ShapeTool
+        assertTrue(kit.idleUntil { tool.editingObject })
+
+        c.undo()
+        settle(c)
+        assertEquals("one Undo takes the step back", steps, c.undoManager.undoCount)
+        assertEquals("the path is back", stored, c.vec.vector!!.byId(id))
+        assertArrayEquals("and its pixels", px, pixels(c))
+        assertFalse("the open shape is dropped", tool.hasPendingWork)
+        assertEquals("the user stays in the Shape tool", ToolId.SHAPE, c.activeToolId)
+    }
+
     @Test
     fun refusedPathsChangeNothing() {
         val ring = VPath(

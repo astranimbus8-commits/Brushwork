@@ -96,7 +96,7 @@ class Qa110EditUiTest {
             assertNotNull("tagged ${V110Tags.OBJECTS_EDIT}", s.tagged(V110Tags.OBJECTS_EDIT))
             assertEquals("Edit on row 1 $where", transform.top, edit.top, 0.5f)
             assertTrue("Edit right after Transform $where: $transform, $edit", transform.right <= edit.left + 0.5f && edit.right <= deselect.left + 0.5f)
-            assertInside("Edit", edit, bar, where)
+            assertInside(ObjectBarLabels110.EDIT, edit, bar, where)
             if (width == 392) {
                 assertEquals("eight buttons at 40.5 dp $where", 40.5f, edit.width, 0.5f)
                 assertOnRow1(s, FRONT, transform, where)
