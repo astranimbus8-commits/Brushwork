@@ -1,6 +1,7 @@
 package com.brushwork.paint.tools.points
 
 import com.brushwork.paint.EditorController
+import com.brushwork.paint.core.Affine2
 import com.brushwork.paint.core.IncrementMath
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.model.GridSettings
@@ -13,6 +14,7 @@ import com.brushwork.paint.tools.transform.GridSnap
 import com.brushwork.paint.tools.transform.PeriodicLines
 import com.brushwork.paint.tools.transform.SnapAxis
 import com.brushwork.paint.tools.transform.SnapHit
+import kotlin.math.abs
 
 /**
  * v1.10 (A5, R8): snapping for a group of points that moves together: a drag on a point of the
@@ -26,7 +28,11 @@ import com.brushwork.paint.tools.transform.SnapHit
  * placed follows the square grid when grid snapping is on (the grabbed point, or the box's min
  * corner for the gizmo, lands on a grid line, as the vector tools' single points do); else, while
  * increments are on, it moves by multiples of the Length step. So the order is the one of every
- * vector drag (design 3.4 of v1.6): a guide, then the grid, then the step.
+ * vector drag (design 3.4 of v1.6): a guide, then the grid, then the step. Above
+ * [MAX_POINT_CANDIDATES] moving points only the box's lines are candidates.
+ *
+ * A gizmo scale handle snaps only the edges it drags ([scale], [edge]); the rotate knob keeps its
+ * angle steps and never snaps to points.
  *
  * The moving points must not be targets themselves: the tool begins its [SnapSession] without
  * them (`beginSnapWithout { it in sel }`). Always snap the move the finger alone gives (never the
@@ -85,6 +91,92 @@ class PointGroupSnap internal constructor(
     }
 
     /**
+     * Scale handles: [movingEdgeValue] (where a dragged edge of the moving box is now, document
+     * px) snapped on [axis] to the closest target within reach, else itself. Leaves the guides.
+     */
+    fun edge(movingEdgeValue: Float, axis: SnapAxis): Float =
+        if (movingEdgeValue.isFinite()) objects(movingEdgeValue, axis)?.pos ?: movingEdgeValue else movingEdgeValue
+
+    /**
+     * A drag on a gizmo scale handle [part]: [m], the map `PointGizmo.dragMap` gives (a scale
+     * about [pivot], the box centre), corrected so the edges that handle drags land on a target
+     * ([edge]): the moving points' bounds were [box] where the gesture began. An edge handle moves
+     * one edge, a corner one edge on each axis; with [keepProportions] a corner keeps one factor
+     * and the closer edge decides it (as the Transform tool's corners). The other edges never
+     * snap: they follow the factor. Shows the guides of the snapped edges, or hides them. Returns
+     * [m] unchanged when no dragged edge is within reach, and for the other parts (the move, the
+     * rotate knob: they keep their own rules).
+     */
+    fun scale(m: Affine2, part: PointGizmo.Part, box: DocBox, pivot: Vec2, keepProportions: Boolean): Affine2 {
+        val sideX = when (part) {
+            PointGizmo.Part.SCALE_E, PointGizmo.Part.SCALE_NE, PointGizmo.Part.SCALE_SE -> 1
+            PointGizmo.Part.SCALE_W, PointGizmo.Part.SCALE_NW, PointGizmo.Part.SCALE_SW -> -1
+            else -> 0
+        }
+        val sideY = when (part) {
+            PointGizmo.Part.SCALE_S, PointGizmo.Part.SCALE_SE, PointGizmo.Part.SCALE_SW -> 1
+            PointGizmo.Part.SCALE_N, PointGizmo.Part.SCALE_NE, PointGizmo.Part.SCALE_NW -> -1
+            else -> 0
+        }
+        if (sideX == 0 && sideY == 0) return m
+        // dragMap's scale has no shear: a = the x factor, d = the y factor.
+        if (m.b != 0f || m.c != 0f || !finite(box) || !pivot.x.isFinite() || !pivot.y.isFinite()) return m
+        val hx = edgeHit(SnapAxis.X, sideX, m.a, box.left, box.right, pivot.x)
+        val hy = edgeHit(SnapAxis.Y, sideY, m.d, box.top, box.bottom, pivot.y)
+        if (hx == null && hy == null) {
+            showGuides(null)
+            return m
+        }
+        val uniform = keepProportions && sideX != 0 && sideY != 0
+        var kx = m.a
+        var ky = m.d
+        var gx = hx
+        var gy = hy
+        if (uniform) {
+            // One factor: the closer edge decides (x on a tie); the other follows it.
+            val byX = hx != null && (hy == null || hx.distance <= hy.distance + TIE_EPS)
+            val k = if (byX) hx!!.factor else hy!!.factor
+            kx = k
+            ky = k
+            if (byX) gy = null else gx = null
+        } else {
+            if (hx != null) kx = hx.factor
+            if (hy != null) ky = hy.factor
+        }
+        // The guides: a snapped edge's own line; on an axis that did not snap, the scaled box's.
+        fun lo(min: Float, max: Float, p: Float, k: Float) = minOf(p + (min - p) * k, p + (max - p) * k)
+        fun hi(min: Float, max: Float, p: Float, k: Float) = maxOf(p + (min - p) * k, p + (max - p) * k)
+        showGuides(
+            DocBox(
+                gx?.at ?: lo(box.left, box.right, pivot.x, kx),
+                gy?.at ?: lo(box.top, box.bottom, pivot.y, ky),
+                gx?.at ?: hi(box.left, box.right, pivot.x, kx),
+                gy?.at ?: hi(box.top, box.bottom, pivot.y, ky),
+            ),
+        )
+        return Affine2.scaleAbout(pivot, kx, ky)
+    }
+
+    /**
+     * The dragged edge on [axis] ([side] -1 the min edge, +1 the max, 0 none) scaled by [k] about
+     * [p], snapped: the factor that puts it on the target, or null (none within reach, or an edge
+     * on the pivot, which no factor moves).
+     */
+    private fun edgeHit(axis: SnapAxis, side: Int, k: Float, min: Float, max: Float, p: Float): EdgeHit? {
+        if (side == 0 || !k.isFinite()) return null
+        val arm = (if (side < 0) min else max) - p
+        if (abs(arm) < MIN_ARM) return null
+        val now = p + arm * k
+        val hit = objects(now, axis) ?: return null
+        val factor = (hit.pos - p) / arm
+        if (!factor.isFinite() || abs(factor) < MIN_FACTOR) return null
+        return EdgeHit(factor, hit.distance, hit.pos)
+    }
+
+    /** A dragged edge that snapped: the [factor] that puts it on the target line at [at], [distance] away. */
+    private class EdgeHit(val factor: Float, val distance: Float, val at: Float)
+
+    /**
      * One axis of [snap]: the delta [d] corrected by the closest candidate within reach, else by
      * the grid, else by the step.
      */
@@ -108,8 +200,12 @@ class PointGroupSnap internal constructor(
         consider((min + max) / 2f + d, isPoint = false)
         consider(max + d, isPoint = false)
         val n = moving.size / 2
-        if (grabbed >= 0) consider(moving[grabbed * 2 + o] + d, isPoint = true)
-        for (i in 0 until n) if (i != grabbed) consider(moving[i * 2 + o] + d, isPoint = true)
+        // Above the cap only the box's lines (its nine handles) are candidates: a move stays
+        // within its budget however many points move.
+        if (n <= MAX_POINT_CANDIDATES) {
+            if (grabbed >= 0) consider(moving[grabbed * 2 + o] + d, isPoint = true)
+            for (i in 0 until n) if (i != grabbed) consider(moving[i * 2 + o] + d, isPoint = true)
+        }
         if (best.isFinite()) return AxisMove(d + correction, byObjects = true, point = point)
         // The grid: where the grabbed point (or the box's min corner) lands decides.
         val lines = if (axis == SnapAxis.X) grid?.x else grid?.y
@@ -128,8 +224,20 @@ class PointGroupSnap internal constructor(
     private class AxisMove(val d: Float, val byObjects: Boolean = false, val point: Float = Float.NaN)
 
     companion object {
+        /**
+         * Above this many moving points only the moving box's lines (its nine handles: min, centre
+         * and max on each axis) are snap candidates, not every point (design R8, J25).
+         */
+        const val MAX_POINT_CANDIDATES = 256
+
         /** Distances this close (document px) are a tie: the earlier candidate keeps it. */
         private const val TIE_EPS = 1e-3f
+
+        /** A dragged edge closer than this to the pivot (document px) is not scaled onto a guide. */
+        private const val MIN_ARM = 1e-3f
+
+        /** A snapped factor smaller than this would flatten the points: it is not used. */
+        private const val MIN_FACTOR = 1e-3f
 
         private fun finite(b: DocBox) = b.left.isFinite() && b.top.isFinite() && b.right.isFinite() && b.bottom.isFinite()
 

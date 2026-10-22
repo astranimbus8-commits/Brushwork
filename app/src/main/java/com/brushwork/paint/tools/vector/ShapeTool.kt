@@ -2404,7 +2404,8 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
     /**
      * A drag on the gizmo: its map from where the finger went down (increments as `PointGizmo.dragMap`
      * applies them). v1.10 (A5, R8 cause A): a drag inside the box moves the group as [dragGroup]
-     * does, snapped; scale and rotate keep their map.
+     * does, snapped; a scale handle snaps the edges it drags (`PointGroupSnap.scale`); the rotate
+     * knob keeps its map.
      */
     private fun dragGizmo(pt: Vec2) {
         val layout = gizmoLayout ?: return
@@ -2414,7 +2415,11 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
             return
         }
         val inc = controller.increments.state
-        val m = gizmo.dragMap(layout, gizmoPart, downPoint, pt, keepScaleProportions(), inc)
+        var m = gizmo.dragMap(layout, gizmoPart, downPoint, pt, keepScaleProportions(), inc)
+        if (gizmoPart != PointGizmo.Part.ROTATE) {
+            val box = groupSnapMeasure(-1)
+            if (box != null) m = com.brushwork.paint.tools.points.PointGroupSnap.of(snap, controller).scale(m, gizmoPart, box, layout.pivotDoc, keepScaleProportions())
+        }
         if (inc.enabled) stepReadout = gizmoReadout(m)
         setGroupTransform(m)
     }
@@ -2429,12 +2434,12 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
     private var groupSnapGrabbed = -1
 
     /**
-     * v1.10 (A5, R8): the snapped delta of the group edit in progress for the finger's raw delta
-     * [d], the point [grabbed] (a shape point index, or -1) under the finger. The moving points are
-     * the group edit's, measured once per gesture; while increments are on the readout shows the move.
+     * v1.10 (A5, R8): the moving points of the group edit in progress, measured once per gesture
+     * ([groupSnapPoints], [groupSnapGrabbed] for the point [grabbed], a shape point index or -1):
+     * their bounds where the gesture began, or null (no group edit, or no finite point).
      */
-    private fun groupSnapMove(d: Vec2, grabbed: Int): Vec2 {
-        val base = groupBase ?: return d
+    private fun groupSnapMeasure(grabbed: Int): DocBox? {
+        val base = groupBase ?: return null
         if (groupSnapBase !== base) {
             val moving = groupSelection.indices.filter { it in base.indices }
             groupSnapPoints = com.brushwork.paint.tools.points.PointGroupSnap.pairs(moving.map { base[it].pos })
@@ -2442,7 +2447,16 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
             groupSnapGrabbed = moving.indexOf(grabbed)
             groupSnapBase = base
         }
-        val box = groupSnapBox ?: return d
+        return groupSnapBox
+    }
+
+    /**
+     * v1.10 (A5, R8): the snapped delta of the group edit in progress for the finger's raw delta
+     * [d], the point [grabbed] (a shape point index, or -1) under the finger ([groupSnapMeasure]);
+     * while increments are on the readout shows the move.
+     */
+    private fun groupSnapMove(d: Vec2, grabbed: Int): Vec2 {
+        val box = groupSnapMeasure(grabbed) ?: return d
         val move = com.brushwork.paint.tools.points.PointGroupSnap.of(snap, controller).snap(groupSnapPoints, box, groupSnapGrabbed, d)
         if (controller.increments.state.enabled) stepReadout = IncrementReadout.move(move.x, move.y)
         return move

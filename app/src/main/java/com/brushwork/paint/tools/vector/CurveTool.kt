@@ -2464,8 +2464,9 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
                 drag = Drag.GIZMO
                 gizmoPart = part
                 gizmoLayout = layout
-                // v1.10 (A5, R8 cause A): a drag inside the box moves the group, snapped.
-                if (part == PointGizmo.Part.MOVE) beginGroupSnap(sel, -1)
+                // v1.10 (A5, R8 cause A): a drag inside the box moves the group, snapped; a scale
+                // handle snaps the edges it drags. The rotate knob keeps its angle steps only.
+                if (part != PointGizmo.Part.ROTATE) beginGroupSnap(sel, -1)
                 return true
             }
         }
@@ -2515,7 +2516,10 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
                     val d = groupSnapMove(pt - downPoint)
                     setGroupTransform(Affine2.translate(d.x, d.y))
                 } else {
-                    setGroupTransform(gizmo.dragMap(layout, gizmoPart, downPoint, pt, keepProportions(), controller.increments.state))
+                    var m = gizmo.dragMap(layout, gizmoPart, downPoint, pt, keepProportions(), controller.increments.state)
+                    val box = groupSnapBox
+                    if (box != null) m = com.brushwork.paint.tools.points.PointGroupSnap.of(snap, controller).scale(m, gizmoPart, box, layout.pivotDoc, keepProportions())
+                    setGroupTransform(m)
                 }
             }
             else -> {}
