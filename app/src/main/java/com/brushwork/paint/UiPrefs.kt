@@ -40,6 +40,24 @@ class UiPrefs(context: Context) {
         get() = prefs.getInt(HINT_SIDE_PICKS, 0)
         set(v) = prefs.edit { putInt(HINT_SIDE_PICKS, v) }
 
+    /**
+     * v1.10 (F1, design 2.11): the `ranAtMillis` of the automatic check whose result the gallery
+     * last announced (`EngineNoticeCard`, shown once per result); 0 by default (none yet). A10
+     * reads and sets it.
+     */
+    var engineNoticeShownAt: Long
+        get() = prefs.getLong(ENGINE_NOTICE_SHOWN_AT, 0L)
+        set(v) = prefs.edit { putLong(ENGINE_NOTICE_SHOWN_AT, v) }
+
+    /**
+     * v1.10 (F1, design 2.12): when the gallery last announced that Android closed Brushwork for
+     * lack of memory (`EngineNotice.LowMemoryClosings`, shown once); 0 by default (never). A10
+     * reads and sets it.
+     */
+    var engineLmkNoticeShownAt: Long
+        get() = prefs.getLong(ENGINE_LMK_NOTICE_SHOWN_AT, 0L)
+        set(v) = prefs.edit { putLong(ENGINE_LMK_NOTICE_SHOWN_AT, v) }
+
     companion object {
         /** The preferences file (never `brushwork_settings`, which is journaled). */
         const val FILE = "brushwork_ui"
@@ -47,5 +65,7 @@ class UiPrefs(context: Context) {
         const val OBJECT_BAR_MORE_OPEN = "objectBar.moreOpen"
         const val HINT_ARRAY_BEHIND = "hint.arrayBehind"
         const val HINT_SIDE_PICKS = "hint.sidePicks"
+        const val ENGINE_NOTICE_SHOWN_AT = "engine.noticeShownAt"
+        const val ENGINE_LMK_NOTICE_SHOWN_AT = "engine.lmkNoticeShownAt"
     }
 }

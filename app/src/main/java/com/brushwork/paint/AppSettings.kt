@@ -3,6 +3,7 @@ package com.brushwork.paint
 import android.content.Context
 import android.content.SharedPreferences
 import androidx.core.content.edit
+import com.brushwork.paint.engine.LayerStorageMode
 import com.brushwork.paint.model.IncrementSettings
 import com.brushwork.paint.model.StabilizerSettings
 import com.brushwork.paint.model.TransparencyDisplay
@@ -200,6 +201,20 @@ class AppSettings(context: Context) {
 
     private fun bevelAmount(v: Float): Float = if (v.isFinite()) v.coerceIn(MIN_BEVEL_AMOUNT, MAX_BEVEL_AMOUNT) else DEFAULT_BEVEL_AMOUNT
 
+    // ------------------------------------------------------------------ v1.10 (keys owned by the lead, F1; areas read and write them)
+
+    /**
+     * v1.10 (F1, design 2.11, J14, UQ12): how layers are stored on this phone, for all artworks:
+     * [LayerStorageMode.AUTOMATIC] by default (the automatic check chooses), or the user's FULL or
+     * CLASSIC. Read when an artwork opens (`EngineConfig.resolve` in `EditorSession`); a change
+     * applies the next time an artwork opens. A stored name this version does not know reads as
+     * the default. Nothing writes it until A10's settings row.
+     */
+    var layerStorageMode: LayerStorageMode
+        get() = prefs.getString(LAYER_STORAGE_MODE, null)?.let { n -> LayerStorageMode.entries.firstOrNull { it.name == n } }
+            ?: LayerStorageMode.AUTOMATIC
+        set(v) = prefs.edit { putString(LAYER_STORAGE_MODE, v.name) }
+
     // ------------------------------------------------------------------ v1.7 (item 10): the settings journal
 
     /**
@@ -244,6 +259,9 @@ class AppSettings(context: Context) {
         private const val MIN_BEVEL_AMOUNT = 0.01f
         private const val MAX_BEVEL_AMOUNT = 0.5f
         private const val MAX_BEVEL_SEGMENTS = 8
+
+        /** v1.10 (F1): the key of [layerStorageMode]. */
+        const val LAYER_STORAGE_MODE = "engine.mode"
     }
 }
 
