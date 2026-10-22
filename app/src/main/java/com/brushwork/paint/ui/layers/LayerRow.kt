@@ -226,9 +226,9 @@ internal data class LayerRowModel(
                     clipping = l.clipping,
                     locked = l.locked,
                     alphaLocked = l.alphaLocked,
-                    hasMask = l.mask != null,
+                    hasMask = l.hasMask,
                     maskEnabled = l.maskEnabled,
-                    editingMask = l.editingMask && l.mask != null,
+                    editingMask = l.editingMask && l.hasMask,
                     contentVersion = l.contentVersion,
                     active = l === active,
                     clip = clip,
@@ -240,7 +240,7 @@ internal data class LayerRowModel(
                         l.isShapeLayer -> LayerKindBadge.SHAPE
                         else -> LayerKindBadge.NONE
                     },
-                    maskIsSpec = l.mask != null && l.maskSpec != null,
+                    maskIsSpec = l.hasMask && l.maskSpec != null,
                     number = topFirst.size - i,
                     frame = badges[i],
                     effectName = adjustment?.let { AdjustmentEffects.displayName(it) },

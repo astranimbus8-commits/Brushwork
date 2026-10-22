@@ -461,7 +461,7 @@ object LayerOps {
     fun addMask(c: EditorController, layer: Layer, fromSelection: Boolean) {
         // v1.7: a folder has no mask (yet); this path would otherwise give it one.
         if (layer.isFolder) { c.toast(FolderLabels.NO_MASK); return }
-        if (layer.mask != null || !ensureUnlocked(c, layer)) return
+        if (layer.hasMask || !ensureUnlocked(c, layer)) return
         commitPendingWork(c)
         val useSelection = fromSelection && c.selection != null
         guardMemory(c, "Add mask") {
@@ -494,7 +494,7 @@ object LayerOps {
     }
 
     fun deleteMask(c: EditorController, layer: Layer) {
-        if (layer.mask == null || !ensureUnlocked(c, layer)) return
+        if (!layer.hasMask || !ensureUnlocked(c, layer)) return
         commitPendingWork(c)
         c.deleteMask(layer)
     }
@@ -503,13 +503,13 @@ object LayerOps {
         // An adjustment layer has no pixels to bake its mask into: "applying" it would only drop
         // the mask, and the effect would suddenly cover everything (v1.5).
         if (layer.isAdjustmentLayer) { c.toast(ADJUSTMENT_APPLY_MASK_MESSAGE); return }
-        if (layer.mask == null || !c.checkEditable(layer)) return
+        if (!layer.hasMask || !c.checkEditable(layer)) return
         commitPendingWork(c)
         guardMemory(c, "Apply mask") { c.applyMask(layer) }
     }
 
     fun invertMask(c: EditorController, layer: Layer) {
-        if (layer.mask == null || !c.checkEditable(layer)) return
+        if (!layer.hasMask || !c.checkEditable(layer)) return
         commitPendingWork(c)
         // An editable mask stays editable: its spec is inverted (v1.5), not its pixels.
         val spec = layer.maskSpec
@@ -521,7 +521,7 @@ object LayerOps {
     }
 
     fun setMaskEnabled(c: EditorController, layer: Layer, enabled: Boolean) {
-        if (layer.mask == null) return
+        if (!layer.hasMask) return
         c.setMaskEnabled(layer, enabled)
     }
 
@@ -564,7 +564,7 @@ object LayerOps {
     /** Makes [layer] active and chooses whether painting edits its mask or its pixels. */
     fun editTarget(c: EditorController, layer: Layer, mask: Boolean) {
         c.selectLayer(layer)
-        if (mask && layer.mask == null) return
+        if (mask && !layer.hasMask) return
         if (layer.editingMask != mask) c.setEditingMask(layer, mask)
     }
 

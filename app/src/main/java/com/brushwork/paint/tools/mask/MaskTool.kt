@@ -176,7 +176,7 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool,
     private fun refineRelease(layer: Layer, base: MaskSpec, s: MaskSpec, label: String): Boolean {
         if (controller.liveAdjust.policy != LiveAdjust.Policy.LIVE || refine != null) return false
         if (!preview.isActive || preview.layer !== layer || s == base) return false
-        if (layer.mask == null || layer.maskSpec == null || layer.maskSpec != base) return false
+        if (!layer.hasMask || layer.maskSpec == null || layer.maskSpec != base) return false
         val d = controller.doc
         if (d.indexOf(layer) < 0 || d.effectiveLocked(layer) || !d.effectiveVisible(layer)) return false
         val region = MaskSpecs.changedRegion(base, s, d.width, d.height) ?: return false
@@ -325,7 +325,7 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool,
         l == null -> null
         // v1.9 A6 (R13): a released edit still refining is the layer's spec already.
         refine?.takeIf { it.isPending && it.layer === l } != null -> refine!!.after
-        l.mask == null -> MaskSpec()
+        !l.hasMask -> MaskSpec()
         l.maskSpec != null -> l.maskSpec
         replaceConfirmedFor === l -> MaskSpec()
         else -> null
@@ -341,7 +341,7 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool,
     val needsReplace: Boolean
         get() {
             val l = editLayer ?: return false
-            return l.mask != null && l.maskSpec == null && replaceConfirmedFor !== l
+            return l.hasMask && l.maskSpec == null && replaceConfirmedFor !== l
         }
 
     /** Effect of a new adjustment layer (the target's, else Tone). */
@@ -372,7 +372,7 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool,
         selectedId = null
         if (t == Target.ThisLayer) {
             val l = controller.activeLayer
-            if (l.mask != null && l.maskSpec == null && replaceConfirmedFor !== l && !l.isAdjustmentLayer) replacePrompt = l
+            if (l.hasMask && l.maskSpec == null && replaceConfirmedFor !== l && !l.isAdjustmentLayer) replacePrompt = l
         }
         revision++
         controller.invalidateOverlay()
@@ -491,7 +491,7 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool,
      * canvas: say so once.
      */
     private fun hintIfMaskOff(layer: Layer) {
-        if (layer.mask == null || layer.maskEnabled || maskOffHinted === layer) return
+        if (!layer.hasMask || layer.maskEnabled || maskOffHinted === layer) return
         maskOffHinted = layer
         controller.toast("The mask of \"${layer.name}\" is turned off: turn it on in the layers window to see it")
     }
@@ -914,7 +914,7 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool,
         val newComp = baseComp ?: (created(Kind.BRUSH, pos, pos, compId) as BrushMask)
         // A new component that changes the mask before it has strokes (INTERSECT or inverted)
         // isn't a local change: it goes through the preview like a handle drag.
-        val local = layer != null && layer.mask != null && layer.maskSpec != null &&
+        val local = layer != null && layer.hasMask && layer.maskSpec != null &&
             (baseComp != null || MaskSpecRenderer.influence(newComp, controller.doc.width, controller.doc.height) == null)
         val rec = if (local) controller.beginEdit(layer, EditTarget.MASK) else null
         val size = preset.size.coerceIn(1f, 5000f)
@@ -928,7 +928,7 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool,
         } else {
             // An adjustment layer without a mask previews its future mask too (the effect shows
             // only where the stroke paints, as it will after the stroke).
-            preview.begin(layer?.takeIf { it.mask != null || it.isAdjustmentLayer }, base, cache, dragScale)
+            preview.begin(layer?.takeIf { it.hasMask || it.isAdjustmentLayer }, base, cache, dragScale)
         }
         gesture = g
         paintTo(g, pos, pressure)
@@ -1260,7 +1260,7 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool,
         val l = controller.activeLayer
         // A layer with an editable mask opens it; otherwise creating gestures make adjustments.
         if (!l.isAdjustmentLayer) {
-            target = if (l.maskSpec != null && l.mask != null) Target.ThisLayer else Target.NewAdjustment(newEffectId)
+            target = if (l.maskSpec != null && l.hasMask) Target.ThisLayer else Target.NewAdjustment(newEffectId)
         }
         if (selected == null) selectedId = null
         if (replaceConfirmedFor != null && replaceConfirmedFor !== l) replaceConfirmedFor = null

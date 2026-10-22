@@ -492,7 +492,7 @@ internal class PreviewHost(private val controller: EditorController) {
         val index = doc.indexOf(layer)
         if (index < 0 || !doc.effectiveVisible(layer) || layer.opacity < 1f) return false
         if (layer.blendMode != LayerBlendMode.NORMAL || layer.clipping || (layer.alphaLocked && !asNewLayer)) return false
-        if (layer.mask != null && layer.maskEnabled) return false
+        if (layer.hasMask && layer.maskEnabled) return false
         if ((!asNewLayer && controller.editTargetOf(layer) != EditTarget.CONTENT) || doc.colorMode == ColorMode.MONOCHROME) return false
         val layers = doc.layers
         for (i in index + 1 until layers.size) {

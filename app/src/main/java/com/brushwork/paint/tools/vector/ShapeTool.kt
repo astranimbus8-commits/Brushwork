@@ -3254,7 +3254,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
      * v1.7: never a folder (it shows its children's composite, not content of its own).
      */
     internal fun isPlain(layer: Layer): Boolean =
-        !layer.isFolder && layer.opacity >= 1f && layer.blendMode == LayerBlendMode.NORMAL && !layer.clipping && !(layer.mask != null && layer.maskEnabled)
+        !layer.isFolder && layer.opacity >= 1f && layer.blendMode == LayerBlendMode.NORMAL && !layer.clipping && !(layer.hasMask && layer.maskEnabled)
 
     /**
      * The brush outline of a new shape that goes into a layer of its own can be shown live on the
@@ -3348,7 +3348,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         val index = doc.indexOf(layer)
         if (index < 0 || !doc.effectiveVisible(layer) || layer.opacity < 1f) return false
         if (layer.blendMode != LayerBlendMode.NORMAL || layer.clipping) return false
-        if (layer.mask != null && layer.maskEnabled) return false
+        if (layer.hasMask && layer.maskEnabled) return false
         if (doc.colorMode == ColorMode.MONOCHROME || controller.selection != null) return false
         val layers = doc.layers
         for (i in index + 1 until layers.size) {

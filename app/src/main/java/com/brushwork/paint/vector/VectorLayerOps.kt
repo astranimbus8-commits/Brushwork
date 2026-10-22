@@ -56,9 +56,9 @@ object VectorLayerOps {
     internal fun mergesAsObjects(c: EditorController, upper: Layer, lower: Layer): Boolean {
         if (upper.vector == null || lower.vector == null) return false
         if (upper.array != null || lower.array != null) return false
-        if (upper.blendMode != LayerBlendMode.NORMAL || upper.opacity < 1f || upper.mask != null || upper.maskSpec != null ||
+        if (upper.blendMode != LayerBlendMode.NORMAL || upper.opacity < 1f || upper.hasMask || upper.maskSpec != null ||
             upper.clipping || upper.adjustment != null) return false
-        if (lower.opacity < 1f || lower.mask != null || lower.maskSpec != null || lower.adjustment != null) return false
+        if (lower.opacity < 1f || lower.hasMask || lower.maskSpec != null || lower.adjustment != null) return false
         val idx = c.doc.indexOf(upper)
         return idx > 0 && c.doc.layers[idx - 1] === lower
     }

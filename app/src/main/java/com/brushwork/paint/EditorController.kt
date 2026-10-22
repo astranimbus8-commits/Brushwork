@@ -33,6 +33,7 @@ import com.brushwork.paint.engine.CompositeAction
 import com.brushwork.paint.engine.DisplayTiles
 import com.brushwork.paint.engine.EditInvalidation
 import com.brushwork.paint.engine.EditTarget
+import com.brushwork.paint.engine.EngineConfig
 import com.brushwork.paint.engine.FolderComposite
 import com.brushwork.paint.engine.LambdaAction
 import com.brushwork.paint.engine.LayerBudget
@@ -53,6 +54,7 @@ import com.brushwork.paint.engine.SelectionAction
 import com.brushwork.paint.engine.UndoAction
 import com.brushwork.paint.engine.UndoManager
 import com.brushwork.paint.engine.ViewTransform
+import com.brushwork.paint.engine.tiles.FolderPixels
 import com.brushwork.paint.engine.live.LiveAdjust
 import com.brushwork.paint.filters.Filter
 import com.brushwork.paint.filters.FilterRegistry
@@ -89,6 +91,7 @@ import com.brushwork.paint.tools.text.frames.TextThreads
 import com.brushwork.paint.tools.transform.TransformTool
 import com.brushwork.paint.tools.vector.ShapeCodec
 import com.brushwork.paint.ui.common.ArrayLabels
+import com.brushwork.paint.ui.common.EngineLabels110
 import com.brushwork.paint.ui.common.FolderLabels
 import com.brushwork.paint.ui.common.SavedSelectionLabels
 import com.brushwork.paint.ui.common.StabilityLabels19
@@ -280,6 +283,14 @@ class EditorController(
     /** Where the Symmetry and the Ruler tools' "Done" go: [assistReturnTool], else [lastPaintTool]. */
     val doneTool: ToolId get() = assistReturnTool ?: lastPaintTool
 
+    /**
+     * v1.10 (F1, design 2.7): the layer being made ready to paint (its tiles read back), or null.
+     * While it is set [pointerDown] ignores the gesture until the finger lifts, without a toast
+     * (A8's activation and an undo that waits for tiles set it; A10 shows the ring after 250 ms).
+     * Nothing sets it in F1.
+     */
+    var activating: Layer? by mutableStateOf(null)
+
     /** Primary drawing color (opaque ARGB). */
     var color by mutableIntStateOf(0xFF000000.toInt())
     var secondaryColor by mutableIntStateOf(0xFFFFFFFF.toInt())
@@ -382,9 +393,8 @@ class EditorController(
     // ------------------------------------------------------------------ memory / history
 
     // region v19-A7b layerCap
-    private val maxHeap = Runtime.getRuntime().maxMemory()
-
-    val undoManager = UndoManager(maxBytes = max(48L shl 20, maxHeap / 4)).also { um ->
+    /** v1.10 (F1, design 2.6): the session's undo cap (F1: v1.9's `max(48 MiB, maxMemory / 4)` at every level). */
+    val undoManager = UndoManager(maxBytes = EngineConfig.budget.undoCap(EngineConfig.level)).also { um ->
         um.onChanged = { canUndo = um.canUndo; canRedo = um.canRedo }
     }
 
@@ -422,7 +432,7 @@ class EditorController(
             scope.launch(Dispatchers.Main) { trimUndoForMemory(pressure) }
             return 0L
         }
-        val trimmed = com.brushwork.paint.engine.GovernorPolicyV19.trimUndo(undoManager)
+        val trimmed = com.brushwork.paint.engine.GovernorPolicies.current().trimUndo(undoManager)
         if (trimmed.steps > 0) toast(StabilityLabels19.UNDO_TRIMMED)
         return trimmed.bytes
     }
@@ -1014,12 +1024,13 @@ class EditorController(
      * parent), [LayerTree.check] must hold and every folder must keep [Layer.FOLDER_BITMAP]. A
      * debug build (and the unit tests) throws, so a missed site shows at once; a release build
      * repairs with [LayerTree.sanitize] and logs, so a project can never become unloadable.
+     * v1.10 (F1): a folder keeps [FolderPixels] (asked without materializing any layer).
      */
     private fun verifyTree() {
         val layers = doc.layers
         if (layers.none { it.isFolder || it.parentId != Layer.ROOT_ID }) return
         val problem = LayerTree.check(layers)
-        val ownBitmap = layers.firstOrNull { it.isFolder && it.bitmap !== Layer.FOLDER_BITMAP }
+        val ownBitmap = layers.firstOrNull { it.isFolder && it.pixels !is FolderPixels }
         if (problem == null && ownBitmap == null) return
         val what = problem ?: "$ownBitmap has a bitmap of its own"
         check(!isDebugBuild) { "Layer structure broken: $what" }
@@ -1117,6 +1128,12 @@ class EditorController(
     private var lastAssisted: ToolPoint? = null
 
     fun pointerDown(p: ToolPoint) {
+        // v1.10 (F1, design 2.7): the input hold while a layer is made ready ([activating]).
+        if (activating != null) {
+            gestureToFilter = false
+            gestureTool = null
+            return
+        }
         val session = filterSession
         if (session != null) {
             gestureToFilter = session.onPointerDown(p)
@@ -1279,6 +1296,8 @@ class EditorController(
     fun checkEditable(layer: Layer = doc.activeLayer): Boolean {
         if (!checkUsable(layer)) return false
         if (layer.isAdjustmentLayer && editTargetOf(layer) == EditTarget.CONTENT) { toast(LayerToolRules.ADJUSTMENT_MESSAGE); return false }
+        // v1.10 (F1, design 2.13): the first write to a blank, parked or evicted layer may be refused (never in F1).
+        if (!layer.admitWrite()) { toast(EngineLabels110.PAINT_REFUSED); return false }
         return true
     }
 
@@ -1307,7 +1326,7 @@ class EditorController(
      * mask of an adjustment layer that has one (its pixels are not used).
      */
     fun editTargetOf(layer: Layer): EditTarget = when {
-        layer.mask != null && (layer.editingMask || layer.isAdjustmentLayer) -> EditTarget.MASK
+        layer.hasMask && (layer.editingMask || layer.isAdjustmentLayer) -> EditTarget.MASK
         else -> EditTarget.CONTENT
     }
 
@@ -1454,7 +1473,7 @@ class EditorController(
     fun editWholeLayer(layer: Layer, label: String, target: EditTarget = editTargetOf(layer), block: (Bitmap) -> Unit): Boolean {
         val rec = beginEdit(layer, target)
         rec.touchAll()
-        val bmp = if (target == EditTarget.MASK) layer.mask!! else layer.bitmap
+        val bmp = if (target == EditTarget.MASK) layer.mask!! else layer.bitmap // I28: one layer
         block(bmp)
         return commitEdit(rec, label)
     }
@@ -1630,7 +1649,9 @@ class EditorController(
             storeData(layer, before, after, label, target)
             return@editScope true
         }
-        val bmp = (if (target == EditTarget.MASK) layer.mask else layer.bitmap) ?: return@editScope false
+        // v1.10 (F1, design 2.13): as checkEditable, before any pixel changes (never refused in F1).
+        if (!layer.admitWrite()) { toast(EngineLabels110.PAINT_REFUSED); return@editScope false }
+        val bmp = (if (target == EditTarget.MASK) layer.mask else layer.bitmap) ?: return@editScope false // I28: one layer
         val area = Rect(dirty ?: doc.bounds)
         // v1.7 (I14): [dirty] covers the source only; the copies of a live array are cleared
         // and redrawn too, where they were and where they go (both measured from the data).
@@ -2121,7 +2142,7 @@ class EditorController(
         // v1.7 (I14): a live array's spec is mirrored with its objects, in the same step.
         val array = layer.array
         val newArray = array?.let { a -> VectorLayers.ArrayChange(LayerDataTransforms.mappedArray(a, content, flipValues(horizontal))) }
-        val mask = if (layer.mask != null) flipMaskAction(layer, horizontal, label) else null
+        val mask = if (layer.hasMask) flipMaskAction(layer, horizontal, label) else null
         if (mirrored == content && (newArray == null || newArray.array == array)) {
             // The drawing mirrors into itself: its pixels already are its rendering.
             if (mask != null) editScope {
@@ -2356,7 +2377,7 @@ class EditorController(
             val sel = selection
             val rec = beginEdit(layer, target)
             rec.touch(sel?.bounds ?: doc.bounds)
-            val bmp = if (target == EditTarget.MASK) layer.mask!! else layer.bitmap
+            val bmp = if (target == EditTarget.MASK) layer.mask!! else layer.bitmap // I28: one layer
             val c = Canvas(bmp)
             val paintColor = if (target == EditTarget.MASK) com.brushwork.paint.core.ColorUtils.gray(com.brushwork.paint.core.ColorUtils.luminance(fill)) else fill
             val atop = target == EditTarget.CONTENT && layer.alphaLocked
@@ -2382,7 +2403,7 @@ class EditorController(
      */
     fun addMask(layer: Layer = activeLayer, fromSelection: Boolean = selection != null) {
         if (layer.isFolder) { toast(FolderLabels.NO_MASK); return }
-        if (layer.mask != null) return
+        if (layer.hasMask) return
         if (!canAddLayer) { toast(layerLimitMessage()); return }
         val mask = BitmapUtils.createMaskBitmap(doc.width, doc.height, if (fromSelection) 0xFF000000.toInt() else -1)
         val sel = selection
@@ -2465,12 +2486,12 @@ class EditorController(
         if (layer.maskEnabled == enabled) return@editScope
         val label = if (enabled) "Enable mask" else "Disable mask"
         setLayerProps(layer, layer.props().copy(maskEnabled = enabled), label)
-        if (layer.mask != null) queueEdit(EditEvent(layer, EditTarget.MASK, null, label))
+        if (layer.hasMask) queueEdit(EditEvent(layer, EditTarget.MASK, null, label))
     }
 
     /** Switches painting between the layer's pixels and its mask (not an undoable change). */
     fun setEditingMask(layer: Layer, editing: Boolean) {
-        if (editing && layer.mask == null) return
+        if (editing && !layer.hasMask) return
         if (layer.editingMask == editing) return
         withToolPaused {
             layer.editingMask = editing
@@ -3034,10 +3055,11 @@ class EditorController(
 
     /**
      * True for an empty plain raster layer: no painted pixel, no mask, no editable data of any
-     * kind, not locked (it can become a vector layer in place).
+     * kind, not locked (it can become a vector layer in place). v1.10 (F1): asked of the store
+     * ([com.brushwork.paint.engine.tiles.PixelStore.isEmpty]), so it never materializes the layer.
      */
     fun isEmptyPlainLayer(layer: Layer): Boolean =
-        !layer.isFolder && !doc.effectiveLocked(layer) && layer.mask == null && layer.dataSnapshot().isEmpty && contentBounds(layer.bitmap) == null
+        !layer.isFolder && !doc.effectiveLocked(layer) && !layer.hasMask && layer.dataSnapshot().isEmpty && layer.pixels.isEmpty()
 
     /**
      * Adds an empty vector layer above the active one ("Vector N" unless [name]) as one undo step

@@ -144,7 +144,7 @@ internal object LayerEntries {
         }
         entry.maskSpec?.let { s ->
             val spec = MaskCodec.decode(s)
-            if (spec != null && layer.mask != null) layer.maskSpec = spec
+            if (spec != null && layer.hasMask) layer.maskSpec = spec
             else warnings += "The editable mask of \"$name\" could not be read: it opened as a painted mask."
         }
         entry.adjustment?.let { s ->

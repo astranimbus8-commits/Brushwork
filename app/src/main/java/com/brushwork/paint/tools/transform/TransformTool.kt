@@ -398,7 +398,7 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
         get() {
             controller.layersVersion // re-read when the active layer, its locks or mask editing change
             val layer = controller.activeLayer
-            val mask = layer.editingMask && layer.mask != null
+            val mask = layer.editingMask && layer.hasMask
             return when {
                 isPreparing -> "Preparing…"
                 controller.doc.effectiveLocked(layer) -> "The layer is locked"

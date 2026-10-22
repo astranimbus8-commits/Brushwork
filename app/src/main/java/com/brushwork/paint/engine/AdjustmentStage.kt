@@ -409,7 +409,7 @@ object AdjustmentStage {
         val mask = if (layer.maskEnabled) layer.mask else null
         // The mask the effect goes through: the layer's (enabled) mask, or the preview of the
         // mask a layer without one is getting (see MaskCoverageHint).
-        val masked = mask != null || (layer.mask == null && ov is MaskCoverageHint)
+        val masked = mask != null || (!layer.hasMask && ov is MaskCoverageHint)
         val region = RectF(bounds)
         if (masked) {
             // Where the mask lets the effect through: the layer's own mask, or what an override

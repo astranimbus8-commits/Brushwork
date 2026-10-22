@@ -89,7 +89,7 @@ internal fun MaskComponentsSheet(tool: MaskTool) {
         }
         val shown = tool.displaySpec ?: return@BwSheet
         val committed = tool.spec ?: shown
-        if (l.mask == null) {
+        if (!l.hasMask) {
             Note(if (l.isAdjustmentLayer) "No mask yet: the effect shows everywhere. Add a part to limit it." else "No mask yet: add a part to make one.")
         }
         if (shown.components.isEmpty()) {
@@ -240,7 +240,7 @@ private fun ComponentRow(tool: MaskTool, shown: MaskSpec, committed: MaskSpec, c
 private fun MaskActions(tool: MaskTool) {
     val c = tool.controller
     val layer = tool.editLayer ?: return
-    if (layer.mask == null) return
+    if (!layer.hasMask) return
     SectionHeader("Use the mask")
     ActionRow(Icons.Filled.HighlightAlt, "Use mask as selection") { MaskLayerOps.useAsSelection(c, layer) }
     ActionRow(Icons.Filled.PhotoFilter, "Apply a filter through this mask…") {

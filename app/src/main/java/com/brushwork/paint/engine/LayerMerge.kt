@@ -182,7 +182,7 @@ internal class LayerMerge(private val c: EditorController) {
      * would show their overlap differently). Texts meet when their paint bounds share a pixel.
      */
     private fun textWhy(upper: Layer, lower: Layer, above: List<TextItem>, below: List<TextItem>): String? {
-        if (upper.mask != null || upper.maskSpec != null || lower.mask != null || lower.maskSpec != null) return LayerLabels19.WHY_MASK
+        if (upper.hasMask || upper.maskSpec != null || lower.hasMask || lower.maskSpec != null) return LayerLabels19.WHY_MASK
         if (upper.blendMode != LayerBlendMode.NORMAL || lower.blendMode != LayerBlendMode.NORMAL) return LayerLabels19.WHY_BLEND
         if (upper.clipping || lower.clipping) return LayerLabels19.WHY_CLIP
         if (upper.array != null || lower.array != null) return LayerLabels19.WHY_COPIES
@@ -239,7 +239,7 @@ internal class LayerMerge(private val c: EditorController) {
     private fun objectWhy(upper: Layer, lower: Layer): String? {
         val above = objectsOf(upper) ?: return UNREADABLE
         val below = objectsOf(lower) ?: return UNREADABLE
-        if (upper.mask != null || upper.maskSpec != null || lower.mask != null || lower.maskSpec != null) return LayerLabels19.WHY_MASK
+        if (upper.hasMask || upper.maskSpec != null || lower.hasMask || lower.maskSpec != null) return LayerLabels19.WHY_MASK
         if (upper.blendMode != LayerBlendMode.NORMAL) return LayerLabels19.WHY_BLEND
         if (upper.clipping) return LayerLabels19.WHY_CLIP
         if (upper.array != null || lower.array != null) return LayerLabels19.WHY_COPIES
@@ -493,7 +493,7 @@ internal class LayerMerge(private val c: EditorController) {
 
     /** The conditions a shown child of a folder meets in [folderData] whatever its kind: Normal, no mask, clipping, copies or adjustment. */
     private fun keepsInFolder(layer: Layer): Boolean =
-        layer.mask == null && layer.maskSpec == null && layer.blendMode == LayerBlendMode.NORMAL && !layer.clipping &&
+        !layer.hasMask && layer.maskSpec == null && layer.blendMode == LayerBlendMode.NORMAL && !layer.clipping &&
             layer.array == null && layer.adjustment == null
 
     /** A layer whose type R19 keeps: text, a legacy shape or vector objects (never a folder or an adjustment layer). */

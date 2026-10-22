@@ -238,7 +238,7 @@ object MaskEdits {
      * locked or hidden.
      */
     fun deleteMask(c: EditorController, layer: Layer): Boolean {
-        if (layer.mask == null || !usable(c, layer)) return false
+        if (!layer.hasMask || !usable(c, layer)) return false
         c.deleteMask(layer)
         return true
     }

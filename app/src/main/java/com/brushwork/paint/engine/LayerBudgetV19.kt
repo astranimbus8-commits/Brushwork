@@ -21,13 +21,13 @@ object LayerBudgetV19 : LayerBudget {
     private fun arrayBytes(doc: Document): Long = doc.layers.sumOf { it.array?.pixels?.bytes ?: 0L }
 
     override fun used(doc: Document): Int =
-        doc.pixelLayerCount + doc.layers.count { it.mask != null } + ((arrayBytes(doc) + per(doc) - 1) / per(doc)).toInt()
+        doc.pixelLayerCount + doc.layers.count { it.hasMask } + ((arrayBytes(doc) + per(doc) - 1) / per(doc)).toInt()
 
     override fun maxLayers(doc: Document): Int = ((heap * 0.55).toLong() / per(doc) - 3).toInt().coerceIn(2, 100)
 
     override fun canAdd(doc: Document, layers: Int, extraBytes: Long): Boolean {
         val bytes = max(0L, arrayBytes(doc) + extraBytes)
-        val count = doc.pixelLayerCount.toLong() + doc.layers.count { it.mask != null } + layers + (bytes + per(doc) - 1) / per(doc)
+        val count = doc.pixelLayerCount.toLong() + doc.layers.count { it.hasMask } + layers + (bytes + per(doc) - 1) / per(doc)
         return count <= maxLayers(doc)
     }
 

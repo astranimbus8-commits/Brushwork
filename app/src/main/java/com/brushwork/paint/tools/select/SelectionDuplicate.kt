@@ -43,7 +43,7 @@ object SelectionDuplicate {
     fun kindOf(c: EditorController, layer: Layer = c.activeLayer): Kind? {
         if (c.selection == null || layer.isFolder || layer.isAdjustmentLayer || layer.array != null) return null
         return when {
-            layer.editingMask && layer.mask != null -> null
+            layer.editingMask && layer.hasMask -> null
             layer.isVectorLayer -> Kind.OBJECTS
             layer.isTextLayer -> if (TextItemOps.available) Kind.TEXTS else null
             layer.isShapeLayer -> null

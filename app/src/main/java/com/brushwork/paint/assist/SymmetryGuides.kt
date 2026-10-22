@@ -118,7 +118,7 @@ object SymmetryGuides {
                 val layer = doc.activeLayer
                 // `EditorController.editTargetOf`: the mask is edited when there is one and it is
                 // chosen (or the layer is an adjustment layer).
-                val onMask = layer.mask != null && (layer.editingMask || layer.isAdjustmentLayer)
+                val onMask = layer.hasMask && (layer.editingMask || layer.isAdjustmentLayer)
                 if (!layer.isVectorLayer || onMask) drawGuides(canvas, t, doc)
             }
             else -> Unit

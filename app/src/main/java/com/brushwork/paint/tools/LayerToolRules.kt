@@ -47,7 +47,7 @@ object LayerToolRules {
         if (layer.isFolder && id in FOLDER_REFUSED) return FolderLabels.PAINT_REFUSAL
         if (layer.isVectorLayer && id in PIXEL_ONLY) return pixelOnlyMessage(id)
         if (layer.isAdjustmentLayer) {
-            val hasMask = layer.mask != null
+            val hasMask = layer.hasMask
             if (id in PIXEL_ONLY) return ADJUSTMENT_MESSAGE
             if ((id in PAINTING || id == ToolId.FILL) && !hasMask) return ADJUSTMENT_MESSAGE
         }

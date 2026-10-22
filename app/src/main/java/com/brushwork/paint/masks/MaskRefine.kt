@@ -98,7 +98,7 @@ class MaskRefine(
         if (!isPending) return
         handler?.removeCallbacks(slice)
         c.removeDeferredStep(this)
-        val same = c.doc.indexOf(layer) >= 0 && layer.mask != null && layer.maskSpec == before
+        val same = c.doc.indexOf(layer) >= 0 && layer.hasMask && layer.maskSpec == before
         if (!same) {
             result = false
             release()

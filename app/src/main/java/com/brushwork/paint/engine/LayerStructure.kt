@@ -186,7 +186,7 @@ internal class LayerStructure(private val c: EditorController) {
         }
         // v1.9 (A7b step 6, the lead at A7b's merge): a mask counts in the layer cap, so a copy
         // with its mask needs two rooms (the caller checked one).
-        val rooms = if (layer.mask != null) 2 else 1
+        val rooms = if (layer.hasMask) 2 else 1
         if (c.effectiveLayerCount + rooms > c.maxLayers) { c.toast(c.layerLimitMessage()); return null }
         val copy = try {
             val pixels = BitmapUtils.copy(layer.bitmap)
@@ -217,7 +217,7 @@ internal class LayerStructure(private val c: EditorController) {
         val members = doc.layers.subList(LayerTree.block(doc.layers, idx).first, idx + 1).toList()
         val pixelCopies = members.count { !it.isFolder }
         // v1.9 (A7b step 6, the lead at A7b's merge): the copies' masks count in the layer cap too.
-        val maskCopies = members.count { !it.isFolder && it.mask != null }
+        val maskCopies = members.count { !it.isFolder && it.hasMask }
         if (c.effectiveLayerCount + pixelCopies + maskCopies > c.maxLayers) { c.toast(c.layerLimitMessage()); return null }
         if (folderCount() + members.size - pixelCopies > LayerTree.MAX_FOLDERS) { c.toast(FolderLabels.COUNT_LIMIT); return null }
         val ids = HashMap<Long, Long>()

@@ -189,14 +189,14 @@ internal class MaskPreview(private val c: EditorController) {
         // The upscaled preview reaches a little beyond the samples that changed.
         val shownRegion = changed?.let { padded(it) }
         val l = layer
-        if (l != null && (l.mask != null || l.isAdjustmentLayer) && override == null) {
+        if (l != null && (l.hasMask || l.isAdjustmentLayer) && override == null) {
             val ov = Override(l)
             override = ov
             c.renderOverride = ov
             // The preview replaces the full-resolution mask everywhere it is not black. An
             // adjustment layer without a mask showed its effect everywhere: the preview of the
             // mask it is about to get limits it at once (AdjustmentStage asks the override).
-            val before = if (l.mask == null) Rect(0, 0, w, h) else MaskSpecs.coverageBounds(prev, w, h)?.let { padded(it) }
+            val before = if (!l.hasMask) Rect(0, 0, w, h) else MaskSpecs.coverageBounds(prev, w, h)?.let { padded(it) }
             val dirty = union(before, shownRegion)
             touched = union(touched, dirty ?: Rect())
             redraw(l, dirty ?: Rect())

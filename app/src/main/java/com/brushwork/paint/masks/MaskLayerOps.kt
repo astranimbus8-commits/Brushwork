@@ -27,7 +27,7 @@ object MaskLayerOps {
 
     /** "Convert to pixel mask": forgets the spec, keeps the mask pixels (one step). */
     fun toPixelMask(c: EditorController, layer: Layer) {
-        if (layer.maskSpec == null || layer.mask == null) return
+        if (layer.maskSpec == null || !layer.hasMask) return
         c.setLayerData(layer, layer.dataSnapshot().copy(maskSpec = null), "Convert to pixel mask")
     }
 
@@ -42,7 +42,7 @@ object MaskLayerOps {
      * visible pixel layer below it). Returns false when there is nothing to filter.
      */
     fun prepareFilterThroughMask(c: EditorController, layer: Layer): Boolean {
-        if (layer.mask == null) { c.toast("\"${layer.name}\" has no mask"); return false }
+        if (!layer.hasMask) { c.toast("\"${layer.name}\" has no mask"); return false }
         val target = if (layer.isAdjustmentLayer) {
             // v1.7 (§3.8): no lower than what the effect works on (inside an isolated folder,
             // the folder's own layers).
