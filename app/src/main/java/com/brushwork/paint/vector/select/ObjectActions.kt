@@ -15,6 +15,7 @@ import com.brushwork.paint.vector.VPath
 import com.brushwork.paint.vector.VShape
 import com.brushwork.paint.vector.VStroke
 import com.brushwork.paint.vector.VectorContent
+import com.brushwork.paint.vector.convert.PathToShape
 import com.brushwork.paint.vector.lift.VectorLift
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -301,8 +302,36 @@ object ObjectActions {
      * v1.10 (R11): turns the one selected path into a shape in place (one step
      * `ObjectBarLabels110.TO_SHAPE`), then opens the Shape tool on it. True when it was done. The
      * signature is frozen; F0 stub (changes nothing), A6 body.
+     *
+     * Pending tool work is committed first and the renders in flight are waited for (then true: it
+     * is on its way), as for the other actions. A path [PathToShape.refusal] refuses (several
+     * pieces, too small, too many points) shows the reason and changes nothing. Otherwise the
+     * shape ([PathToShape.convert]) replaces the path with its id, at its place in the stacking
+     * order and with its copies ([VectorContent.replaced]); once that step landed the object
+     * selection is cleared, the Shape tool opens the shape ([ShapeTool.editShapeObject]) and what
+     * changed on the way ([PathToShape.Result.notes]) shows as one long note, the notes joined by
+     * "; ", whose "Undo" takes the step back ([EditorController.showNote]).
      */
-    fun turnIntoShape(c: EditorController): Boolean = false
+    fun turnIntoShape(c: EditorController): Boolean = edit(c, relift = false) { layer, content, ids ->
+        val path = (if (ids.size == 1) content.byId(ids.first()) else null) as? VPath ?: return@edit false
+        PathToShape.refusal(path)?.let { reason ->
+            c.toast(reason)
+            return@edit false
+        }
+        val result = PathToShape.convert(path)
+        val after = content.replaced(mapOf(path.id to listOf<VObject>(result.shape)))
+        apply(c, layer, after, ObjectBarLabels110.TO_SHAPE) {
+            c.vectors.setSelection(null, emptySet())
+            c.selectTool(ToolId.SHAPE)
+            val shape = c.tools[ToolId.SHAPE] as? ShapeTool
+            if (shape != null && c.currentTool === shape) shape.editShapeObject(layer, path.id)
+            // (After the tool opened: its own opening message never hides the note.)
+            if (result.notes.isNotEmpty()) c.showNote(result.notes.joinToString(NOTE_SEPARATOR), undoable = true)
+        }
+    }
+
+    /** Between the notes of one [turnIntoShape] (design R11 (a)). */
+    private const val NOTE_SEPARATOR = "; "
 
     // ------------------------------------------------------------------ helpers
 
