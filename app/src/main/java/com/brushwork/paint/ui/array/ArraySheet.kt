@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -77,15 +78,21 @@ fun ArraySheet(tool: ArrayTool, layer: Layer, spec: ArraySpec, onDismiss: () -> 
         onDismiss = onDismiss,
         modifier = Modifier.testTag(V17Tags.ARRAY_SHEET),
         footer = {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                // v1.10 (R4, UQ11): on a copies-only layer the item removes the layer too, and says so
-                // (the longer words may wrap to two lines rather than push the Apply button out).
-                val whole = ArrayBehind.isCopiesOnly(layer)
+            // v1.10 (R4, UQ11): on a copies-only layer the item removes the layer too, and says so. Its
+            // longer words take all the room the Apply button leaves (the only weight of the row:
+            // one line at 392 and 360 dp), and wrap rather than push the Apply button out at large
+            // font sizes; the arrangement keeps Apply at the right end.
+            val whole = ArrayBehind.isCopiesOnly(layer)
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = if (whole) Arrangement.SpaceBetween else Arrangement.Start,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 TextButton(
                     onClick = { tool.removeArray() },
                     modifier = (if (whole) Modifier.weight(1f, fill = false) else Modifier).heightIn(min = 44.dp),
                 ) { Text(ArrayBehind.removeLabel(layer)) }
-                Spacer(Modifier.weight(1f))
+                Spacer(if (whole) Modifier.width(8.dp) else Modifier.weight(1f))
                 Button(
                     onClick = { tool.applyArray() },
                     modifier = Modifier.heightIn(min = 44.dp),

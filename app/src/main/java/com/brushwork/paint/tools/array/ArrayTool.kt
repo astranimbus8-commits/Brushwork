@@ -439,6 +439,10 @@ class ArrayTool(controller: EditorController) : Tool(controller) {
     override fun onDispose() {
         dropPreview()
         proxyCache = null
+        // v1.10 (R4): the editor closed: nothing is selected for it any more ([leaveBehind] posted
+        // by its last `onDeactivate`).
+        behind = null
+        handler.removeCallbacksAndMessages(null)
     }
 
     /**

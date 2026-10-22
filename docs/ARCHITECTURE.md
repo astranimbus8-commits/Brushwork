@@ -3142,8 +3142,10 @@ second way for the Look tab's colors to apply.
   it uses the bar.
 - On a copies-only layer (`ArrayBehind.isCopiesOnly`) "Remove array" reads
   `ArrayLabels110.REMOVE_WITH_LAYER`, in the sheet and in the ⋮. It deletes the layer in one step
-  through `LayerStructure.delete` and selects the source. "Edit source" is not offered there:
-  the source is the layer above.
+  through `LayerStructure.delete`. From the sheet of a layer just made behind its source, the
+  source is selected next (the rule below); otherwise, as from the ⋮, the row below becomes
+  active, as "Delete layer" does. "Edit source" is not offered there: the source is the layer
+  above.
 
 **The Array tool on a copies-only layer (`tools/array/ArrayTool.kt`).**
 - While a slider, field or handle adjusts the array (`preview`), the copies draw in the tool's
@@ -3181,6 +3183,15 @@ second way for the Look tab's colors to apply.
   look without a tint sanitizes to null.
 - The strength field reads `ArrayLabels110.RECOLOR_STRENGTH` in Recolored mode. "Reset look"
   and opening another layer's array set the mode back to Tinted.
+
+**Compatibility (I4).** Both fields are written only when set, so an array without them reads
+and writes as in v1.9 (F0, `ArraySpecFieldsTest`), and a copies-only or Recolored layer saves and
+reopens as it was (`ArrayBehindPersistenceTest`).
+- v1.9 opens a copies-only layer with its saved cache (copies only), which is right. Its first
+  re-render (Edit array, Transform, a source edit) draws copy 0 too, so translucent pixels look
+  denser under the original, and a v1.9 save drops `hideSource`. Accepted (design R4 (b)).
+- v1.9 opens a Recolored array with its saved cache, re-renders it as Tinted (the same stops and
+  strength), and drops the mode when it saves (design R5 (b)).
 
 **Tests:** `app/src/test/java/com/brushwork/paint/v110/a3/` (`BehindKit` holds the shared
 fixtures). The v1.9 decode checks (`ArrayBehindCompat19Test`, `ArrayColorModeCompat19Test`)

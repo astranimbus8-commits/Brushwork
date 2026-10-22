@@ -213,4 +213,17 @@ class ArrayBehindPreviewTest {
         tool.closeSheet()
         assertSame(fifth, c.activeLayer)
     }
+
+    @Test
+    fun closingTheEditorOnALayerMadeBehindSelectsNothing() {
+        val c = ArrayLookKit.controller(app)
+        val (_, made) = behindA(c)
+        val version = c.layersVersion
+        // The editor closes with the Array tool on the new layer: its last onDeactivate posts the
+        // leave, which must not select the source on a released controller.
+        c.dispose()
+        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        assertSame(made, c.activeLayer)
+        assertEquals("no layer change after the close", version, c.layersVersion)
+    }
 }
