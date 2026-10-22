@@ -3195,7 +3195,8 @@ reopens as it was (`ArrayBehindPersistenceTest`).
 
 **Tests:** `app/src/test/java/com/brushwork/paint/v110/a3/` (`BehindKit` holds the shared
 fixtures). The v1.9 decode checks (`ArrayBehindCompat19Test`, `ArrayColorModeCompat19Test`)
-come in step 6, after F1.
+need the frozen `compat19` kit (v1.9's `ArraySpec` and `ArrayLook` DTOs), which neither F0 nor F1
+lands; they wait for the lead's kit (lead request) and come with step 6.
 
 <!-- /v110-A3 -->
 

@@ -114,6 +114,55 @@ class ArrayBehindPreviewTest {
         assertEquals(GRAY, at(s, 200))
     }
 
+    /**
+     * The selection bar's path (A3 review): a raster selection's pixels made behind their layer,
+     * under a red box on a layer above where copy 1 lands. The pixel commit path (the cache
+     * rendered by `ArrayRenders`, the preview re-shown until it lands) puts the copies behind too.
+     */
+    @Test
+    fun pixelCopiesComeToTheFrontWhileAdjustedAndGoBehindAtTheRelease() {
+        val c = ArrayLookKit.controller(app)
+        val src = c.doc.layers[1]
+        c.selectLayer(src)
+        val above = c.addLayer()!!
+        assertTrue("a layer above the source", c.doc.indexOf(above) > c.doc.indexOf(src))
+        Canvas(above.bitmap).drawRect(60f, 30f, 100f, 70f, android.graphics.Paint().apply { color = RED })
+        assertSame(src, c.doc.layers[1])
+        BehindKit.selectedSquare(c)
+        BehindKit.oneStep(c, ArrayLabels110.ARRAY_BEHIND_STEP) { assertTrue(ArrayBehind.fromSelectionBelow(c)) }
+        val made = c.activeLayer
+        assertTrue(ArrayBehind.isCopiesOnly(made))
+        assertEquals("directly below the source", c.doc.indexOf(src) - 1, c.doc.indexOf(made))
+        assertEquals("made behind: copy 1 is under the red box", RED, at(screen(c), 80))
+        assertEquals("the source itself", GRAY, at(screen(c), 40))
+        assertEquals(GRAY, at(screen(c), 120))
+
+        // A slider dragging: in front of every layer (the red box included), the hint once.
+        val tool = arrayTool(c)
+        val spec = made.array!!.spec
+        c.message = null
+        tool.preview(spec.copy(count = 4))
+        assertEquals(ArrayLabels110.BEHIND_HINT, c.message)
+        assertSame("the tiles leave the layer to the overlay", made, c.renderOverride?.layer)
+        var s = screen(c)
+        assertEquals("dragging: copy 1 in front of the red box", GRAY, at(s, 80))
+        assertEquals("the new copy 3", GRAY, at(s, 160))
+        assertEquals("the source keeps its place", GRAY, at(s, 40))
+
+        // Released: behind the red box again, at once and once the cache landed.
+        tool.commitPreview()
+        s = screen(c)
+        assertEquals("released: copy 1 behind the red box", RED, at(s, 80))
+        assertEquals(GRAY, at(s, 160))
+        ArrayLookKit.settle(c)
+        assertNull("landed", c.renderOverride)
+        assertEquals(4, made.array!!.spec.count)
+        s = screen(c)
+        assertEquals("the cache: behind the red box", RED, at(s, 80))
+        assertEquals(GRAY, at(s, 160))
+        assertEquals("one step for the edit", com.brushwork.paint.ui.common.ArrayLabels.EDIT, c.undoManager.undoLabel)
+    }
+
     @Test
     fun theHintShowsOncePerInstall() {
         val c = ArrayLookKit.controller(app)
