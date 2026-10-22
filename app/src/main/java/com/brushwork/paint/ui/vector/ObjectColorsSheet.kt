@@ -145,7 +145,10 @@ internal fun ObjectColorsSheet(editor: ObjectColorEditor, onClose: () -> Unit) {
             ColorDialogBody(
                 model,
                 onPreview = { c ->
-                    if (session.open) {
+                    // A tab shown again delivers its picker's color once more (the body's watch
+                    // starts over): the object already had it, and since then "No fill", "No
+                    // outline" or a paint-mode glyph may have changed it; only a new color goes.
+                    if (session.open && session.delivered[target] != c) {
                         session.delivered[target] = c
                         editor.preview(target, c)
                     }

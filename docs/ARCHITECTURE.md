@@ -2948,7 +2948,10 @@ long-press names `objectColorName(t)`, tags `V110Tags.COLORS_SHEET_TAB`), then, 
 `paintMode`, the three `PaintModeSegments` glyphs; under it the embedded
 `ColorDialogBody(model, onPreview, extraAbove = 48.dp)`. A Fill or Outline tab adds the "none"
 button (`setNone`: no fill is paint mode Stroke, no outline is width 0). Every color the body
-delivers goes to `editor.preview(target, argb)`; OK calls `commit`, Cancel and Back call `cancel`,
+delivers goes to `editor.preview(target, argb)`, but only a color that differs from the one the
+sheet last sent for that tab (`SheetSession.delivered`): a tab shown again restarts the body's
+watch, which would otherwise send its last color once more and undo a "none" or a paint-mode
+glyph chosen since. OK calls `commit`, Cancel and Back call `cancel`,
 a swipe or an outside touch only minimizes the sheet (the preview stays, and the object's own ✓
 or ✕ decides). A2's editors also implement `ObjectColorExtras` (`colorOf`, so a picker starts at
 a color that is not painted, and `toast`, for a refused target's reason from `unavailable`). The
@@ -2988,7 +2991,10 @@ state stays private.
   `CurveLabels17.FILL_NEEDS_3`); a stroke color while Fill turns the mode to Both with the stroke
   kind kept; a reopened gradient fill is kept until a fill color is picked (one
   `GRADIENT_REPLACED` note per opening). A new path's main color comes back by the same
-  one-frame watch.
+  one-frame watch, on `pointCount > 0` going false; known gap: a caller that commits the new
+  path and opens another in the same call (`openPath`, later A6's `openObject`) skips that
+  frame, so `open()` takes the new path's color as the user's (lead request: an end-of-path
+  hook in `CurveTool`).
 - `tools/text/TextColorsDelegate.kt` (Text; targets Text and Outline, no paint mode): previews
   are `updateSpec` changes of the open text (`color`, `strokeColor`); the drawing color is never
   touched. An outline color at width 0 brings `defaultOutlineWidth(sizePx)` = max(1, 6 % of the
@@ -3013,7 +3019,9 @@ Tests (`app/src/test/java/com/brushwork/paint/v110/a2/`): `ObjectColorSheetFitsA
 `ObjectColorSheetMinimizedThenCheckTest`, `ObjectColorSheetMinimizedThenCrossTest`,
 `ObjectColorSheetRefusedFillTest` (also the sheet's Cancel and Back), `PaintModeConsistencyTest`, `PaintModeSegmentsFingerTest`, `R3NoTextModeSelectorsTest`,
 `FillFollowsPinTest`, `ShapeFillLivePreviewTest`, `CurveFillLivePreviewTest`,
-`TextColorLivePreviewTest`, `TextOutlineDefaultWidthTest`; kits `A2ToolRig`, `A2FakeColorEditor`.
+`TextColorLivePreviewTest`, `TextOutlineDefaultWidthTest`, `ObjectColorSheetTabSwitchTest` (360 dp
+at font scale 1.3 and 2.0; a tab shown again sends nothing), `ObjectColorsRedoAndReloadTest`
+(✓, Undo, Redo, save and load of a shape, a path and a text); kits `A2ToolRig`, `A2FakeColorEditor`.
 
 <!-- /v110-A2 -->
 
