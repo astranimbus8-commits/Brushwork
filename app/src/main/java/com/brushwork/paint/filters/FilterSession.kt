@@ -36,11 +36,8 @@ import com.brushwork.paint.tools.ToolPoint
 import com.brushwork.paint.tools.text.TextCodec
 import com.brushwork.paint.tools.text.TextRenderer
 import com.brushwork.paint.tools.transform.DataRender
-import com.brushwork.paint.tools.vector.ShapeCodec
 import com.brushwork.paint.ui.common.FilterLabels19
 import com.brushwork.paint.ui.common.StabilityLabels19
-import com.brushwork.paint.vector.VShape
-import com.brushwork.paint.vector.VectorContent
 import com.brushwork.paint.vector.render.RenderCache
 import com.brushwork.paint.vector.render.VectorLayerRenderer
 import kotlinx.coroutines.CancellationException
@@ -893,8 +890,7 @@ class FilterSession(
                 ({ c -> for (k in items.indices) TextRenderer.drawItem(c, items[k], preps[k], null) })
             }
             d.shape != null -> {
-                val o = ShapeCodec.decode(d.shape) ?: return true
-                val content = VectorContent(objects = listOf(VShape(0L, shape = o)))
+                val content = ObjectColorTargets.shapeContent(d.shape) ?: return true
                 ({ c -> VectorLayerRenderer.render(c, content, doc, tips = objectTips, document = doc) })
             }
             else -> return true

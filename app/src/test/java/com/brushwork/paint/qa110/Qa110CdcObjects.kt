@@ -111,11 +111,18 @@ internal object Qa110CdcObjects {
         return s
     }
 
-    private fun await(s: FilterSession, where: String) {
-        val t0 = System.nanoTime()
-        while (!(s.hasPreview && !s.isRendering && !s.previewStale)) {
+    private fun await(s: FilterSession, where: String) = waitFor("$where: the preview") { s.hasPreview && !s.isRendering && !s.previewStale }
+
+    /**
+     * Runs the UI until [done], at most 2,000 rounds of a 20 ms frame and a 5 ms pause for the
+     * background render (about 10 s; bounded by rounds, so this helper reads no clock).
+     */
+    private fun waitFor(what: String, done: () -> Boolean) {
+        var rounds = 0
+        while (!done()) {
+            if (++rounds > 2000) throw AssertionError("not reached: $what")
             Qa19Ui.settle(steps = 1, stepMs = 20)
-            if (System.nanoTime() - t0 > 10_000_000_000L) throw AssertionError("$where: no preview")
+            Thread.sleep(5)
         }
         Qa19Ui.settle()
     }
@@ -157,11 +164,7 @@ internal object Qa110CdcObjects {
         RobolectricUi.textFields().first { it.text == hexDigits(opening, true) }.type("FF00A040")
         Qa19Ui.settle()
         val green = 0xFF00A040.toInt()
-        val t0 = System.nanoTime()
-        while (session.values.color("color") != green) {
-            Qa19Ui.settle(steps = 1, stepMs = 20)
-            if (System.nanoTime() - t0 > 5_000_000_000L) throw AssertionError("$where: the pick was not previewed")
-        }
+        waitFor("$where: the pick previewed") { session.values.color("color") == green }
         await(session, where)
         assertTrue("$where: still picking", Qa19Ui.has("OK", exact = true))
         assertNear("$where: the box on the canvas, before OK", cdc.colorMapper(session.values)!!(fill), shown(c)[inside])
@@ -174,12 +177,7 @@ internal object Qa110CdcObjects {
         assertEquals("$where: OK is one panel step", 1, session.history.depth)
         val f = cdc.colorMapper(session.values)!!
         Qa19Ui.click("Apply filter")
-        val t1 = System.nanoTime()
-        while (!session.isClosed) {
-            Qa19Ui.settle(steps = 1, stepMs = 20)
-            if (System.nanoTime() - t1 > 10_000_000_000L) throw AssertionError("$where: not applied")
-        }
-        Qa19Ui.settle()
+        waitFor("$where: applied") { session.isClosed }
         assertEquals("$where: one step", steps + 1, c.undoManager.undoCount)
         assertEquals(cdc.name, c.undoManager.undoLabel)
         assertTrue("$where: still a vector layer", layer.isVectorLayer)
@@ -205,12 +203,7 @@ internal object Qa110CdcObjects {
 
         val f = cdc.colorMapper(session.values)!!
         Qa19Ui.click("Apply filter")
-        val t0 = System.nanoTime()
-        while (!session.isClosed) {
-            Qa19Ui.settle(steps = 1, stepMs = 20)
-            if (System.nanoTime() - t0 > 10_000_000_000L) throw AssertionError("$where: not applied")
-        }
-        Qa19Ui.settle()
+        waitFor("$where: applied") { session.isClosed }
         assertEquals("$where: one step", steps + 1, c.undoManager.undoCount)
         assertTrue("$where: still a text layer", layer.isTextLayer)
         val after = TextCodec.decodeAll(layer.textData!!)

@@ -13,6 +13,7 @@ import com.brushwork.paint.tools.text.TextLayerData
 import com.brushwork.paint.tools.text.TextRenderer
 import com.brushwork.paint.tools.vector.ShapeCodec
 import com.brushwork.paint.vector.ObjectColorSlots
+import com.brushwork.paint.vector.ObjectCopies
 import com.brushwork.paint.vector.VShape
 import com.brushwork.paint.vector.VectorContent
 import com.brushwork.paint.vector.VectorOps
@@ -100,6 +101,13 @@ internal class ObjectColorTargets private constructor(
         /** True when [data] holds objects object mode can recolor: vector objects, texts or a shape. */
         fun hasObjects(data: LayerData): Boolean = data.vector != null || data.text != null || data.shape != null
 
+        /**
+         * The legacy shape of [shapeData] as vector content, drawn as a shape layer's cache draws it
+         * (`DataRender`: its [VShape] keeps the live copies, which the renderer draws); null when
+         * it can't be read.
+         */
+        fun shapeContent(shapeData: String): VectorContent? = ShapeCodec.decode(shapeData)?.let { VectorContent(objects = listOf(VShape(0L, shape = it))) }
+
         /** True when [data] has no object to recolor: an empty vector layer, a text layer without a text. */
         fun isEmpty(data: LayerData): Boolean =
             data.vector?.objects.isNullOrEmpty() && data.shape == null && (data.text?.let { TextCodec.decodeAll(it).isEmpty() } ?: true)
@@ -137,7 +145,8 @@ internal class ObjectColorTargets private constructor(
         /** Whether the legacy shape [shapeData] (and its array copies) paints inside [sel]. */
         private fun touchingShape(data: LayerData, shapeData: String, sel: Selection): Boolean {
             val o = ShapeCodec.decode(shapeData) ?: return false
-            val content = VectorContent(objects = listOf(VShape(0L, shape = o)))
+            // Each live copy is tested as an object of its own (I17).
+            val content = VectorContent(objects = ObjectCopies.expanded(o))
             val view = ArrayDraw.effectiveVector(LayerData(vector = content, array = data.array)) ?: content
             return VectorOps.touching(view, sel).isNotEmpty()
         }
