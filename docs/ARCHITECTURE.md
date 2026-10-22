@@ -2563,7 +2563,106 @@ One block per area, in area order. Each area writes its section only inside its 
 
 <!-- v110-A1 -->
 
-(A1 writes this section.)
+R1. Files: `vector/copies/CopyPick.kt` and `vector/copies/CopyEdit.kt` (new),
+`vector/lift/CopyLift.kt` (new), `vector/convert/LegacyShapes.kt` (new), `vector/ObjectCopies.kt`,
+`vector/VectorOps.kt`, `vector/lift/VectorLift.kt`, `vector/lift/VectorObjectLift.kt`,
+`tools/transform/TransformTool.kt`, `tools/transform/DataLift.kt` (outside `v110-A8 pins`);
+regions `v110-A1 copies` (`vector/VectorLayers.kt`: `hitTest`, `beginEdit`, `planEdit`,
+`renderEdit`) and `v110-A1 overlay` (`vector/select/VectorObjectSelection.kt`: `drawOverlay`).
+Labels: `MirrorLabels110` (`SIDE_HINT`, `SIDE_RESIZE_BLOCKED`, `SIDE_REFUSED`, `DELETE_SIDE`;
+`PERSPECTIVE_SEPARATE` is for the Array sheet, a foreign file: a lead request). Undo labels:
+`TransformTool.TRANSFORM_OBJECTS_LABEL` and `MirrorLabels110.DELETE_SIDE`. No field, no codec
+change, no new preference beyond F0's `UiPrefs.hintSidePicks`.
+
+**Every mirror type is a map list.** Mirror, Kaleidoscope, Rotation and Array (all but
+Perspective) store their copies as `CopyMaps` on the one object (`VPath.copies`,
+`ShapeObject.copies`: 3 x 3 row-major affine maps, identity first, 2..256 of them). Copy k is
+the source mapped by `C_k`. `CopyPick.hitCopy(copies, p, tol, skip, test)` maps the tap back
+through each `C_k⁻¹`, top-most k first, with the tolerance divided by the map's smallest stretch,
+and runs the object's existing hit test there; `ObjectCopies.hits` and `VectorOps.hitCopy`
+delegate to it. A stroke (`VStroke`) is always picked whole (k = 0). `CopyPick.side(o, k)` is
+copy k as a plain object; `boundsOf(o, k)` its painted bounds. A Perspective array bakes its
+copies into separate plain objects, so each one is an object of its own.
+
+**The tap cycle** (`VectorLift.tap`, through F0's frozen `TapCycle`): spatial only, no timer.
+- Depth 1, the first tap on a mirrored object in Transform: the side under the finger alone (the
+  transient `sidePick`: layer, object id, k). The first `SIDE_HINT_PICKS` (3) picks on a phone
+  show `SIDE_HINT` (`UiPrefs.hintSidePicks`).
+- Depth 2, a tap on the same spot: all sides (the object as in v1.9). Depth 3 and on: v1.9's
+  deeper cycle (the object below). A tap 16 dp or more away, a tap that no longer hits the
+  picked object, a drag, pinch or handle gesture in between (`VectorLift.gestureEnded`) or
+  choosing a tool again (`VectorLift.toolLeft`) starts a new cycle; ✕ alone does not.
+- A tap on a picked side that has moved commits the move as one step and lifts all sides (it
+  replaces v1.9's `inside && moved` guard for a picked side).
+- Select shapes never picks a side. On a Perspective copy the first tap picks that (baked) copy
+  and the same spot again goes on to the object below.
+
+**One side lifted.** `VectorLift.begin(layer, ids, side)` with `side ≥ 0` asks
+`VectorLayers.beginEdit(layer, ids, side)`: the floating bitmap is copy k alone (one side's
+bounds, smaller than v1.9's union) and the hole is "the object without map k"
+(`CopyEdit.dropCopy`) rendered in the side's tiles, so the other sides stay in place while it
+moves. The lift is a `CopyLift` (a `VectorObjectLift` with `side`); `TransformTool.sidePicked`
+is true while it is the session's lift. The overlay draws the picked side's box.
+
+**Linked isometries** (`CopyEdit`, `CopyLift.mapped`). The Transform state gives a document map
+M; a non-isometry is first snapped to the nearest isometry (`CopyEdit.nearestIsometry` about
+the lifted box's centre: a residual drift never resizes). Then:
+- k ≥ 1: `C_k' = M · C_k`;
+- k = 0 (the source): `src' = M · src` and `C_j' = C_j · M⁻¹` for every j ≥ 1, so the other
+  sides stay exactly where they were.
+
+The moved side stays a map of the same object: later edits of the object show in every side.
+Maps within `MERGE_EPS` (1e-4) of the identity or of an earlier map merge (`CopyEdit.merged`);
+when one map is left the object is plain. A result `StrokeCopies.isUsable` rejects (a
+coefficient past 1e7, a determinant under 1e-12) or a list outside 2..256 maps is refused:
+`CopyLift.refused` toasts `SIDE_REFUSED`, nothing is recorded, ✓ keeps the side lifted and
+every other end (✕, another tool, a tap) drops the move.
+
+**Resizing one side is blocked (LA4, the user's answer).** While `sidePicked`: no scale handles
+are drawn or hit (`sideHandlesShown`; a corner touch is a move), `objectScale` is null so the
+pill hides its Scale row, `modeRefusal` names Distort and Free deform `SIDE_RESIZE_BLOCKED`
+(dimmed in the mode menu, the reason under the row), skew and the scale setters are refused, the
+two-finger gesture moves and turns only (`applyPinch` locks its scale to 1.0), and the first
+refusal of a pick toasts `SIDE_RESIZE_BLOCKED`. A same-spot second tap lifts all sides, where
+every handle and mode works as in v1.9. **Detach is not built:** a picked side always stays
+linked (`CopyEdit.detachOne` does not exist).
+
+**Delete one side.** `TransformTool` is a `DeletingTool`; `objectDeletion` is non-null only while
+a side is picked, so the pill's trash cell shows then, named `DELETE_SIDE` (a whole lift still
+has no trash). k ≥ 1 drops the map; k = 0 rebases (`src' = C_1 · src`, `C_j' = C_j · C_1⁻¹`);
+a Mirror of two maps becomes a plain object where the other side was. One step `DELETE_SIDE`;
+the object stays selected and the pick is forgotten (`VectorLift.sideDeleted`). The strip's More
+row Delete still deletes the whole lift (`TransformStripItems` is foreign: a lead request).
+
+**Undo (I2).** ✓ is one step `TRANSFORM_OBJECTS_LABEL` however many moves, turns and flips came
+before it (`TransformTool.applyPending` → `VectorObjectLift.commit` → one `VectorLayers.update`);
+✕ records nothing; undo restores every map bit for bit.
+
+**Legacy shape layers** (`LegacyShapes`, C9). A Transform tap on a legacy one-shape layer whose
+shape has live copies (`DataLift.tap`) converts the layer in place with `LayerConvert` without a
+step, holds the conversion (one per editor) and hands the tap to the vector lift. ✓ after a
+move, or Delete one side, runs inside `LegacyShapes.fold`: one `groupUndo` holding the
+conversion and the edit, rendered at once (`Policy.SYNC`); undo gives the shape layer back. ✕, an
+unchanged ✓, a same-spot tap on an unchanged side, another layer or leaving the tool
+(`release`) put the shape data back with no step. A shape layer without copies keeps v1.9's
+`DataLift`. (The design's in-memory conversion became this convert-in-place-and-hold: the
+transform lift needs a real vector layer; a save while the side is lifted stores the vector
+layer.)
+
+**Compatibility.** A moved side is another matrix in the stored list, a deleted side fewer maps;
+every map written is an isometry. v1.9 and older read and render the file as v1.10 draws it
+(`OneSideCompat19Test`, with the frozen v1.8 codec until `compat19` is on main).
+
+**Performance.** `hitCopy` costs at most 255 3 x 3 inverses per tap. `SidePickTimingTest`: tap
+to box at 256 copies, PC 16 ms (2048 x 2048 locally, 512 x 512 on CI); `OneSideDragFrameTimingTest`:
+a drag frame of one side of 8 copies (the move and the preview drawn), PC 5.5 ms. Both x 4 on CI.
+
+Tests: `v110/a1/**` (`CopyPickTest`, `StrokeStaysWholeTest`, `SideTapCycleTest`,
+`OneSideMovedThenAllSidesTest`, `PerspectiveCopyTapCycleTest`, `SideHintFirstThreePicksTest`,
+`CopyOffsetMathTest`, `OneSidePinchNeverScalesTest`, `OneSideResizeBlockedTest`,
+`SideEditPlanTest`, `SideRefusedTest`, `DeleteOneSideTest`, `CoincidingMapsMergeTest`,
+`OneCheckOneStepTest`, `LegacyConvertOneStepTest`, `OneSideCompat19Test`, the two timing tests)
+and `qa110/Qa110OneSideUiTest` (392 and 360 dp, font scales 1, 1.3 and 2.0).
 
 <!-- /v110-A1 -->
 
