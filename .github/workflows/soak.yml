@@ -5,6 +5,7 @@ name: Soak tests
 # per-push Timing job (a test filter in app/build.gradle.kts).
 # A workflow of its own, so its schedule neither changes the triggers of "Build APK" nor shares
 # its concurrency group (a nightly run never cancels a push build of main, nor the reverse).
+# v1.10 F1: the nightly chaos job (below) runs beside it.
 on:
   schedule:
     - cron: '30 2 * * *'
@@ -58,5 +59,44 @@ jobs:
         if: always() && steps.find.outputs.present == 'true'
         with:
           name: test-results-soak
+          path: app/build/test-results/testDebugUnitTest/*.xml
+          if-no-files-found: ignore
+
+  # v1.10 F1 (design 3.3 and 6.5): the engine, tools and storage tests at FULL with ChaosResidency
+  # parking every inactive layer again at each idle of the main looper (-PparkChaos), nightly, in
+  # three shards; the unit-full exclusions apply (-PunitFull: no Timing, ClassicOnly or EngineGolden
+  # test, no class of app/src/test/unit-full-backlog.txt).
+  chaos:
+    name: Park chaos (shard ${{ matrix.testShard }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        testShard: [ 0, 1, 2 ]
+    env:
+      CI: 'true'
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v4
+
+      - uses: gradle/actions/setup-gradle@v6
+
+      - name: Park chaos tests
+        run: >-
+          ./gradlew --no-daemon --console=plain testDebugUnitTest -PengineMode=full -PparkChaos -PunitFull
+          -PtestShard=${{ matrix.testShard }} -PtestShards=3
+          --tests 'com.brushwork.paint.engine.*' --tests 'com.brushwork.paint.tools.*' --tests 'com.brushwork.paint.storage.*'
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: test-results-chaos-${{ matrix.testShard }}
           path: app/build/test-results/testDebugUnitTest/*.xml
           if-no-files-found: ignore

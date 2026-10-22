@@ -21,6 +21,10 @@ concurrency:
 # 26-minute fallback of design 5.5), the @Category(Timing) tests in their own job alone in one
 # JVM (-PtimingOnly), test-count checks that the shards together ran at least the floor of
 # app/src/test/test-count.txt, and the release APK is built once all of them are green.
+# v1.10 F1 (design 3.3 and 6.5): unit-full runs the suite again in three shards at the FULL engine
+# level (-PunitFull: -PengineMode=full with ChaosResidency, without the Timing, ClassicOnly and
+# EngineGolden tests and the classes of app/src/test/unit-full-backlog.txt), and test-count checks
+# its floor too (app/src/test/test-count-full.txt).
 jobs:
   unit:
     name: Unit tests (shard ${{ matrix.testShard }})
@@ -65,6 +69,50 @@ jobs:
           path: ${{ runner.temp }}/test-results/
           if-no-files-found: ignore
 
+  # v1.10 F1: the suite at FULL (app/build.gradle.kts, -PunitFull), three shards like unit.
+  unit-full:
+    name: Unit tests at FULL (shard ${{ matrix.testShard }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        testShard: [ 0, 1, 2 ]
+    env:
+      CI: 'true'
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v4
+
+      - uses: gradle/actions/setup-gradle@v6
+
+      # The log goes with the XML: test-count reads its "> Task :app:testDebugUnitTest" line.
+      - name: Unit tests at FULL
+        run: |
+          set -o pipefail
+          ./gradlew --no-daemon --console=plain testDebugUnitTest -PengineMode=full -PunitFull -PtestShard=${{ matrix.testShard }} -PtestShards=3 2>&1 | tee "$RUNNER_TEMP/gradle.log"
+
+      - name: Collect the test results
+        if: always()
+        run: |
+          mkdir -p "$RUNNER_TEMP/test-results"
+          cp app/build/test-results/testDebugUnitTest/*.xml "$RUNNER_TEMP/test-results/" 2>/dev/null || true
+          cp "$RUNNER_TEMP/gradle.log" "$RUNNER_TEMP/test-results/" 2>/dev/null || true
+
+      # Always: test-count sums them, and on a red run they hold the messages.
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: test-results-full-${{ matrix.testShard }}
+          path: ${{ runner.temp }}/test-results/
+          if-no-files-found: ignore
+
   # The @Category(Timing) tests, alone in one JVM (app/build.gradle.kts, -PtimingOnly).
   timing:
     name: Timing tests
@@ -96,10 +144,11 @@ jobs:
           if-no-files-found: ignore
 
   # The JUnit XML of every shard, cached or not, must count at least the floor of
-  # app/src/test/test-count.txt (raised at each merge, lowered only with a deliberate deletion).
+  # app/src/test/test-count.txt (raised at each merge, lowered only with a deliberate deletion);
+  # v1.10 F1: the unit-full shards likewise against app/src/test/test-count-full.txt.
   test-count:
     name: Test count
-    needs: unit
+    needs: [ unit, unit-full ]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -119,35 +168,46 @@ jobs:
           pattern: test-results-[0-9]
           path: shards
 
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: test-results-full-[0-9]
+          path: shards-full
+
       - name: Count the tests of every shard
         run: |
           python3 - <<'EOF'
           import glob, os, sys
           import xml.etree.ElementTree as ET
 
-          floor = int(open('app/src/test/test-count.txt', encoding='utf-8').read().split()[0])
           errors = []
-          total = 0
-          for shard in ('0', '1', '2'):
-              folder = os.path.join('shards', 'test-results-' + shard)
-              xmls = sorted(glob.glob(os.path.join(folder, 'TEST-*.xml')))
-              if not xmls:
-                  errors.append('shard %s uploaded no JUnit XML' % shard)
-              log = os.path.join(folder, 'gradle.log')
-              if not os.path.isfile(log):
-                  errors.append('shard %s uploaded no Gradle log' % shard)
-              else:
-                  text = open(log, encoding='utf-8', errors='replace').read()
-                  if '> Task :app:testDebugUnitTest NO-SOURCE' in text:
-                      errors.append('shard %s: testDebugUnitTest found no tests (NO-SOURCE)' % shard)
-                  if '> Task :app:testDebugUnitTest FROM-CACHE' in text:
-                      print('::warning::shard %s: testDebugUnitTest came from the build cache (its XML still counts)' % shard)
-              count = sum(int(ET.parse(f).getroot().get('tests', '0')) for f in xmls)
-              print('shard %s: %d tests in %d classes' % (shard, count, len(xmls)))
-              total += count
-          print('all shards: %d tests; floor %d' % (total, floor))
-          if total < floor:
-              errors.append('%d tests, below the floor %d of app/src/test/test-count.txt' % (total, floor))
+
+          def check(job, root, prefix, floor_file):
+              floor = int(open(floor_file, encoding='utf-8').read().split()[0])
+              total = 0
+              for shard in ('0', '1', '2'):
+                  name = '%s shard %s' % (job, shard)
+                  folder = os.path.join(root, prefix + shard)
+                  xmls = sorted(glob.glob(os.path.join(folder, 'TEST-*.xml')))
+                  if not xmls:
+                      errors.append('%s uploaded no JUnit XML' % name)
+                  log = os.path.join(folder, 'gradle.log')
+                  if not os.path.isfile(log):
+                      errors.append('%s uploaded no Gradle log' % name)
+                  else:
+                      text = open(log, encoding='utf-8', errors='replace').read()
+                      if '> Task :app:testDebugUnitTest NO-SOURCE' in text:
+                          errors.append('%s: testDebugUnitTest found no tests (NO-SOURCE)' % name)
+                      if '> Task :app:testDebugUnitTest FROM-CACHE' in text:
+                          print('::warning::%s: testDebugUnitTest came from the build cache (its XML still counts)' % name)
+                  count = sum(int(ET.parse(f).getroot().get('tests', '0')) for f in xmls)
+                  print('%s: %d tests in %d classes' % (name, count, len(xmls)))
+                  total += count
+              print('%s, all shards: %d tests; floor %d' % (job, total, floor))
+              if total < floor:
+                  errors.append('%s: %d tests, below the floor %d of %s' % (job, total, floor, floor_file))
+
+          check('unit', 'shards', 'test-results-', 'app/src/test/test-count.txt')
+          check('unit-full', 'shards-full', 'test-results-full-', 'app/src/test/test-count-full.txt')
           for e in errors:
               print('::error::' + e)
           sys.exit(1 if errors else 0)
@@ -155,7 +215,7 @@ jobs:
 
   release:
     name: Build release APK
-    needs: [ unit, timing, test-count ]
+    needs: [ unit, unit-full, timing, test-count ]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
