@@ -3134,7 +3134,8 @@ image") and the CDC consumer of R7 (the canvas previews a color while it is bein
   selected objects of the layer, alone. (2) `Rule.SELECTION`: with a pixel selection, every
   object whose drawn coverage meets the mask, recolored whole: vector objects through
   `VectorOps.touching` over `ArrayDraw.effectiveVector` (a copy counts for its source id, the
-  low 53 bits of a copy id), a text by its rendered ink, a legacy shape by its path. Bounds never
+  low 53 bits of a copy id), a text by its rendered ink, a legacy shape by its path and each live
+  copy's (`ObjectCopies.expanded`, I17; the preview draws it through `shapeContent`). Bounds never
   decide: a diagonal curve whose box meets the selection but whose ink does not is unchanged.
   (3) `Rule.ALL`. `map(data, f)` maps the targets through `ObjectColorSlots` (`map`, `mapText`,
   `mapShape`; I35) and returns `data` itself when nothing changes. An array is kept as it is: its
