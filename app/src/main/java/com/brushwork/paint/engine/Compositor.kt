@@ -9,6 +9,11 @@ import android.graphics.PorterDuffXfermode
 import android.graphics.Rect
 import android.graphics.RectF
 import android.os.Looper
+import com.brushwork.paint.engine.tiles.BlankPixels
+import com.brushwork.paint.engine.tiles.FlatPixels
+import com.brushwork.paint.engine.tiles.FolderPixels
+import com.brushwork.paint.engine.tiles.TileOps
+import com.brushwork.paint.engine.tiles.TiledPixels
 import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.LayerBlendMode
@@ -276,6 +281,8 @@ class Compositor(private val doc: Document, private val overrideProvider: () -> 
             drawLayer(canvas, base, groupPaint, bounds, override)
             return
         }
+        // v1.10 (F1, X3): an empty clip base hides its whole group (DST_IN on transparent is transparent).
+        if (overrideFor(base, override) == null && skips(canvas, base, groupPaint)) return
         val save = canvas.saveLayer(bounds, groupPaint)
         drawLayer(canvas, base, null, bounds, override)
         for (c in clips) {
@@ -290,18 +297,80 @@ class Compositor(private val doc: Document, private val overrideProvider: () -> 
         canvas.restoreToCount(save)
     }
 
-    /** Draws one layer (content + mask) with [paint] (null = plain source-over). */
+    /**
+     * Draws one layer (content + mask) with [paint] (null = plain source-over). v1.10 (F1, design
+     * 2.5): the content through [drawLayerPixels] and the mask through [drawMaskPixels] (never the
+     * `bitmap` or `mask` getter, I28); an empty blank or parked layer without an override draws
+     * nothing, its `saveLayer` included (X3).
+     */
     internal fun drawLayer(canvas: Canvas, layer: Layer, paint: Paint?, bounds: RectF, override: LayerRenderOverride?) {
         val ov = overrideFor(layer, override)
-        val mask = if (layer.maskEnabled) layer.mask else null
-        if (ov == null && mask == null) {
-            canvas.drawBitmap(layer.bitmap, 0f, 0f, paint ?: plainPaint)
+        if (ov == null && skips(canvas, layer, paint)) return
+        val masked = layer.maskEnabled && layer.hasMask
+        if (ov == null && !masked) {
+            drawLayerPixels(canvas, layer, paint)
             return
         }
         val save = canvas.saveLayer(bounds, paint)
-        if (ov == null || !ov.drawContent(canvas)) canvas.drawBitmap(layer.bitmap, 0f, 0f, plainPaint)
-        if (mask != null && (ov == null || !ov.drawMask(canvas, maskPaint))) canvas.drawBitmap(mask, 0f, 0f, maskPaint)
+        if (ov == null || !ov.drawContent(canvas)) drawLayerPixels(canvas, layer, null)
+        if (masked && (ov == null || !ov.drawMask(canvas, maskPaint))) drawMaskPixels(canvas, layer, maskPaint)
         canvas.restoreToCount(save)
+    }
+
+    /**
+     * v1.10 (F1, X3): [layer] draws nothing inside [canvas]'s clip, known from its store alone: a
+     * blank or parked store that is empty there. Never for a flat layer (Classic draws as v1.9),
+     * a folder, or where [paint]'s mode clears under a transparent source (API 26-28 MULTIPLY).
+     */
+    private fun skips(canvas: Canvas, layer: Layer, paint: Paint?): Boolean {
+        val p = layer.pixels
+        if (p !is BlankPixels && p !is TiledPixels) return false
+        if (paint != null && BlendModes.clearsOnTransparent(layer.blendMode)) return false
+        val clip = TileOps.clipOf(canvas) ?: return true
+        return p.isEmptyIn(clip)
+    }
+
+    /**
+     * v1.10 (F1, design 2.5): [layer]'s content as `drawBitmap(layer.bitmap, 0, 0, paint)` draws
+     * it. Flat: that call (v1.9). Blank: nothing, or a transparent rect where [paint]'s mode
+     * clears under a transparent source (API 26-28). Tiled: the tiles inside the clip on an
+     * integer-translate canvas (X1; null tiles as transparent rects where the mode clears), else
+     * a band of the clip copied out of the tiles (X2 fallback until A9's `BandAssembler`).
+     */
+    internal fun drawLayerPixels(c: Canvas, layer: Layer, paint: Paint?) {
+        val clears = paint != null && BlendModes.clearsOnTransparent(layer.blendMode)
+        when (val p = layer.pixels) {
+            is FlatPixels -> c.drawBitmap(p.bitmap, 0f, 0f, paint ?: plainPaint)
+            is BlankPixels -> if (clears) c.drawRect(0f, 0f, p.width.toFloat(), p.height.toFloat(), Paint(paint).apply { color = 0 })
+            is TiledPixels -> {
+                val clip = TileOps.clipOf(c) ?: return
+                if (TileOps.isUnitTranslate(c)) {
+                    if (clears) TileOps.clearNullTiles(p, c, paint, clip)
+                    p.drawTo(c, paint ?: plainPaint, clip)
+                } else {
+                    TileOps.drawBand(p, c, paint ?: plainPaint)
+                }
+            }
+            FolderPixels -> c.drawBitmap(Layer.FOLDER_BITMAP, 0f, 0f, paint ?: plainPaint)
+        }
+    }
+
+    /**
+     * v1.10 (F1, design 2.5): [layer]'s mask through [maskPaint] (DST_IN, luminance to alpha), as
+     * `drawBitmap(layer.mask, 0, 0, maskPaint)` draws it; nothing without a mask. Blank: a
+     * transparent rect (a transparent mask hides). Tiled: a null tile as a transparent rect, a
+     * solid white tile skipped (X1), or a band where the canvas scales (X2 fallback).
+     */
+    internal fun drawMaskPixels(c: Canvas, layer: Layer, maskPaint: Paint) {
+        when (val m = layer.maskPixels ?: return) {
+            is FlatPixels -> c.drawBitmap(m.bitmap, 0f, 0f, maskPaint)
+            is BlankPixels -> c.drawRect(0f, 0f, m.width.toFloat(), m.height.toFloat(), Paint(maskPaint).apply { color = 0 })
+            is TiledPixels -> {
+                val clip = TileOps.clipOf(c) ?: return
+                if (TileOps.isUnitTranslate(c)) m.drawMaskTo(c, maskPaint, clip) else TileOps.drawBand(m, c, maskPaint)
+            }
+            FolderPixels -> c.drawBitmap(Layer.FOLDER_BITMAP, 0f, 0f, maskPaint)
+        }
     }
 
     /**

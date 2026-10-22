@@ -2,7 +2,18 @@ package com.brushwork.paint.model
 
 import android.graphics.Bitmap
 import android.graphics.Rect
+import com.brushwork.paint.engine.BitmapUtils
+import com.brushwork.paint.engine.EngineConfig
 import com.brushwork.paint.engine.LayerSlot
+import com.brushwork.paint.engine.budget.NativePurpose
+import com.brushwork.paint.engine.tiles.BlankPixels
+import com.brushwork.paint.engine.tiles.FlatPixels
+import com.brushwork.paint.engine.tiles.FolderPixels
+import com.brushwork.paint.engine.tiles.PixelPin
+import com.brushwork.paint.engine.tiles.PixelStore
+import com.brushwork.paint.engine.tiles.ResidencyState
+import com.brushwork.paint.engine.tiles.TileOps
+import com.brushwork.paint.engine.tiles.TiledPixels
 import com.brushwork.paint.masks.AdjustmentSpec
 import com.brushwork.paint.masks.MaskSpec
 import com.brushwork.paint.vector.VectorContent
@@ -44,37 +55,154 @@ enum class ColorMode(val label: String) {
  * v1.10 (F0, design 3.2 C16 part 1): replacing [bitmap] or [mask] by another bitmap bumps
  * [pixelGeneration], which staleness keys compare (with [contentVersion]) instead of bitmap
  * identity; [owns] answers whether a bitmap is this layer's own.
+ *
+ * v1.10 (F1, design 2.2, J5, I28): the content is a [PixelStore] ([pixels], [maskPixels]);
+ * [bitmap] and [mask] are the facade over it. In Classic every painted layer is [FlatPixels], so
+ * the facade gives v1.9's bitmaps. A BLANK, PARKED or EVICTED store is materialized by the getter
+ * (main thread only, counted in [PixelFacade]); presence checks use [hasMask], which never
+ * materializes.
  */
 class Layer(
     val id: Long,
     var name: String,
-    bitmap: Bitmap,
+    pixels: PixelStore,
 ) {
-    /** The content; replacing it by another bitmap bumps [pixelGeneration]. */
-    var bitmap: Bitmap = bitmap
+    /** v1.9's constructor: [bitmap] becomes a [FlatPixels] store ([FOLDER_BITMAP] a [FolderPixels] one). */
+    constructor(id: Long, name: String, bitmap: Bitmap) : this(id, name, storeOf(bitmap))
+
+    private var store: PixelStore = pixels
+    private var maskStore: PixelStore? = null
+
+    /**
+     * v1.10 (F1): where the content is. Replacing it by another store bumps [pixelGeneration];
+     * park, unpark, evict and swap keep the store's content and never bump it (J5).
+     */
+    var pixels: PixelStore
+        get() = store
         set(value) {
-            if (value !== field) pixelGeneration++
-            field = value
+            if (value !== store) pixelGeneration++
+            store = value
         }
 
-    /** The layer mask, if any; replacing, adding or removing it bumps [pixelGeneration]. */
-    var mask: Bitmap? = null
+    /** v1.10 (F1): where the mask is; null = no mask. The same rules as [pixels]. */
+    var maskPixels: PixelStore?
+        get() = maskStore
         set(value) {
-            if (value !== field) pixelGeneration++
-            field = value
+            if (value !== maskStore) pixelGeneration++
+            maskStore = value
         }
+
+    /**
+     * The content; replacing it by another bitmap bumps [pixelGeneration]. v1.10 (F1): the getter
+     * gives the FLAT bitmap, [FOLDER_BITMAP] for a folder, else materializes the store (main
+     * only, counted), which makes it FLAT; the setter is `pixels = FlatPixels(value)`.
+     */
+    var bitmap: Bitmap
+        get() = when (val p = store) {
+            is FlatPixels -> p.bitmap
+            FolderPixels -> FOLDER_BITMAP
+            else -> materialize(p, mask = false)
+        }
+        set(value) {
+            val cur = store
+            if (cur is FlatPixels && value === cur.bitmap) return
+            if (cur === FolderPixels && isFolderBitmap(value)) return
+            pixels = storeOf(value)
+        }
+
+    /** The layer mask, if any; replacing, adding or removing it bumps [pixelGeneration]. v1.10 (F1): the same facade over [maskPixels]. */
+    var mask: Bitmap?
+        get() = when (val m = maskStore) {
+            null -> null
+            is FlatPixels -> m.bitmap
+            else -> materialize(m, mask = true)
+        }
+        set(value) {
+            val cur = maskStore
+            if (value == null) {
+                maskPixels = null
+                return
+            }
+            if (cur is FlatPixels && value === cur.bitmap) return
+            maskPixels = FlatPixels(value)
+        }
+
+    /** v1.10 (F1): the layer has a mask. Every presence check uses it (it never materializes). */
+    val hasMask: Boolean get() = maskStore != null
 
     /**
      * v1.10 (F0, design 3.2 C16 part 1): increases whenever [bitmap] or [mask] is replaced by
      * another bitmap (assigning the same one changes nothing), so a key holding it and
      * [contentVersion] goes stale wherever v1.9's bitmap identity did. Pixel edits in place keep
-     * it ([contentVersion] counts them). Never persisted.
+     * it ([contentVersion] counts them). Never persisted. v1.10 (F1): any replacement of
+     * [pixels] or [maskPixels] by another store; NOT bumped by park, unpark, evict, swap or a
+     * materialization (J5).
      */
     var pixelGeneration: Long = 0L
         private set
 
     /** v1.10 (F0): [b] is this layer's own bitmap or mask (identity; F1 answers it without materializing). */
-    fun owns(b: Bitmap?): Boolean = b != null && (b === bitmap || b === mask)
+    fun owns(b: Bitmap?): Boolean = b != null && (holds(store, b) || holds(maskStore, b))
+
+    private fun holds(p: PixelStore?, b: Bitmap): Boolean = when (p) {
+        is FlatPixels -> b === p.bitmap
+        FolderPixels -> isFolderBitmap(b)
+        else -> false
+    }
+
+    /** v1.10 (F1, design 2.2): a non-resident pin: nothing parks, swaps out or recycles this layer's pixels until it closes; never swaps in. Main only. */
+    fun pin(): PixelPin = PixelPin(this, resident = false)
+
+    /** v1.10 (F1, design 2.2): a pin that also makes every tile resident now. Main only, outside a frame. */
+    fun pinResident(): PixelPin = PixelPin(this, resident = true)
+
+    /** May this layer be written now (section 2.13): FLAT true; else admitNative(L, LAYER) for its materialization. Never materializes. */
+    fun admitWrite(): Boolean {
+        val p = store
+        if (p is FlatPixels || p === FolderPixels) return true
+        val bytes = p.width.toLong() * p.height * 4
+        val budget = EngineConfig.budget
+        if (!budget.admitNative(bytes, NativePurpose.LAYER)) return false
+        budget.release(bytes, NativePurpose.LAYER)
+        return true
+    }
+
+    /** v1.10 (F1, design 2.0): the state of the content's store. */
+    internal val residency: ResidencyState
+        get() = when (val p = store) {
+            FolderPixels -> ResidencyState.FOLDER
+            is BlankPixels -> ResidencyState.BLANK
+            is FlatPixels -> ResidencyState.FLAT
+            is TiledPixels -> if (p.evictedTo != null) ResidencyState.EVICTED else ResidencyState.PARKED
+        }
+
+    /** v1.10 (F1): open [PixelPin]s on this layer (main only); > 0 forbids park. */
+    internal var pins = 0
+
+    /** v1.10 (F1): park, unpark, evict and materialize put the same pixels in another store: no [pixelGeneration] bump (J5). Main only. */
+    internal fun rehouse(content: PixelStore, mask: PixelStore?) {
+        store = content
+        maskStore = mask
+    }
+
+    /** The getter's materialization of [p] (content or mask): a FLAT bitmap with the same pixels, the old store released. Main only. */
+    private fun materialize(p: PixelStore, mask: Boolean): Bitmap {
+        PixelFacade.check(this)
+        val b = when (p) {
+            is TiledPixels -> p.materialize()
+            else -> {
+                val bytes = p.width.toLong() * p.height * 4
+                val budget = EngineConfig.budget
+                if (!budget.admitNative(bytes, NativePurpose.LAYER)) throw OutOfMemoryError("No room for a ${p.width}x${p.height} layer")
+                budget.release(bytes, NativePurpose.LAYER)
+                BitmapUtils.createLayerBitmap(p.width, p.height)
+            }
+        }
+        PixelFacade.materializations++
+        if (mask) maskStore = FlatPixels(b) else store = FlatPixels(b)
+        TileOps.dispose(p)
+        return b
+    }
 
     var maskEnabled: Boolean = true
     /** When true, painting tools edit the mask instead of the pixels. */
@@ -172,8 +300,12 @@ class Layer(
         array = d.array
     }
 
-    /** v1.7: recycles this layer's bitmap and mask, but never [FOLDER_BITMAP]. */
-    fun recycleBitmaps() { bitmap.recycleUnlessShared(); mask?.recycle() }
+    /**
+     * v1.7: recycles this layer's bitmap and mask, but never [FOLDER_BITMAP]. v1.10 (F1): releases
+     * the stores without materializing: a flat bitmap is recycled, a tiled store's tiles get one
+     * holder fewer.
+     */
+    fun recycleBitmaps() { TileOps.dispose(store); TileOps.dispose(maskStore) }
 
     /** Incremented on every pixel change (content or mask). Used for thumbnails and dirty saving. */
     var contentVersion: Long = 0
@@ -183,8 +315,8 @@ class Layer(
 
     fun markChanged() { contentVersion++ }
 
-    val width: Int get() = bitmap.width
-    val height: Int get() = bitmap.height
+    val width: Int get() = store.width
+    val height: Int get() = store.height
 
     /** Copies the non-pixel properties from [other]. */
     fun copyPropsFrom(other: LayerProps) {
@@ -197,11 +329,12 @@ class Layer(
     /**
      * The bitmap that painting tools should currently modify (mask when editing it). Never a
      * folder's (v1.7): callers are refused earlier (`checkUsable`), so this is the last line of
-     * defence.
+     * defence. v1.10 (F1): the first write of a BLANK or PARKED store materializes it here (on
+     * [PixelFacade]'s allow-list).
      */
     val paintTarget: Bitmap get() {
         check(!isFolder) { "A folder has no pixels to paint: $this" }
-        return if (editingMask) mask ?: bitmap else bitmap
+        return PixelFacade.allowing { if (editingMask) mask ?: bitmap else bitmap }
     }
 
     override fun toString(): String = "Layer($id '$name')"
@@ -210,15 +343,58 @@ class Layer(
         /** v1.7: the parent id of a top-level layer. Layer ids start at 1 (`Document.newLayerId`), so 0 is never a layer. */
         const val ROOT_ID = 0L
 
+        /** v1.10 (F1): the lazy behind [FOLDER_BITMAP] (declared first: [FOLDER_BITMAP] delegates to it). */
+        private val folderBitmap: Lazy<Bitmap> = lazy { Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888).copy(Bitmap.Config.ARGB_8888, false) }
+
         /**
          * The one immutable 1×1 bitmap all folders share: drawing into it throws (V9). Never
          * recycled: see [recycleBitmaps] and [recycleUnlessShared].
          */
-        val FOLDER_BITMAP: Bitmap by lazy { Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888).copy(Bitmap.Config.ARGB_8888, false) }
+        val FOLDER_BITMAP: Bitmap by folderBitmap
+
+        /** v1.10 (F1): [b] is [FOLDER_BITMAP] (asked without making it). */
+        private fun isFolderBitmap(b: Bitmap): Boolean = folderBitmap.isInitialized() && b === FOLDER_BITMAP
+
+        /** The store a v1.9 bitmap goes into: [FolderPixels] for [FOLDER_BITMAP], else [FlatPixels]. */
+        private fun storeOf(b: Bitmap): PixelStore = if (isFolderBitmap(b)) FolderPixels else FlatPixels(b)
 
         /** v1.7: a new (empty, open) folder; it owns no layers until some are put into it. */
         fun newFolder(id: Long, name: String, spec: FolderSpec = FolderSpec()): Layer =
             Layer(id, name, FOLDER_BITMAP).apply { folder = spec }
+    }
+}
+
+/**
+ * v1.10 (F1, design 2.2): the facade's materializations ([Layer.bitmap] or [Layer.mask] of a
+ * BLANK, PARKED or EVICTED store). [materializations] counts them (main only); with [strict]
+ * (tests) one outside the allow-list ([allowing]: the first write through `Layer.paintTarget`)
+ * throws [IllegalStateException].
+ */
+object PixelFacade {
+    @Volatile
+    var materializations = 0L
+
+    @Volatile
+    var strict = false
+
+    /** How deep the current thread is inside [allowing]. */
+    @PublishedApi
+    internal val depth: ThreadLocal<IntArray> = ThreadLocal.withInitial { IntArray(1) }
+
+    /** Runs [block] on the allow-list: a materialization inside it never throws under [strict]. */
+    internal inline fun <T> allowing(block: () -> T): T {
+        val d = depth.get()!!
+        d[0]++
+        try {
+            return block()
+        } finally {
+            d[0]--
+        }
+    }
+
+    /** Throws under [strict] outside [allowing]: [layer] is about to be materialized. */
+    internal fun check(layer: Layer) {
+        if (strict && depth.get()!![0] == 0) throw IllegalStateException("$layer materialized outside the allow-list (PixelFacade.strict)")
     }
 }
 
@@ -252,7 +428,20 @@ class Document(
 
     var colorMode: ColorMode = ColorMode.RGB
     val layers: MutableList<Layer> = mutableListOf()
-    var activeLayerIndex: Int = 0
+
+    private var activeIndex: Int = 0
+
+    /**
+     * v1.10 (F1, design 2.7): the setter records the change; at the end of the main-thread task
+     * the residency hears `deactivated(old)` and `activate(new)` once when the active layer's id
+     * changed (`EngineConfig`; nothing in Classic). The writers keep their source lines.
+     */
+    var activeLayerIndex: Int
+        get() = activeIndex
+        set(value) {
+            activeIndex = value
+            EngineConfig.activeIndexSet(this)
+        }
     var createdAt: Long = System.currentTimeMillis()
     var modifiedAt: Long = System.currentTimeMillis()
 
