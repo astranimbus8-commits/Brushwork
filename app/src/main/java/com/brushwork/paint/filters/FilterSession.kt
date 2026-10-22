@@ -35,6 +35,7 @@ import com.brushwork.paint.tools.ToolHistory
 import com.brushwork.paint.tools.ToolPoint
 import com.brushwork.paint.tools.text.TextCodec
 import com.brushwork.paint.tools.text.TextRenderer
+import com.brushwork.paint.tools.transform.DataRender
 import com.brushwork.paint.tools.vector.ShapeCodec
 import com.brushwork.paint.ui.common.FilterLabels19
 import com.brushwork.paint.ui.common.StabilityLabels19
@@ -915,6 +916,8 @@ class FilterSession(
         if (!checkTarget()) return
         if (!controller.checkEditable(layer)) return
         Breadcrumbs.add("filter:${filter.id}:apply")
+        // v1.10 (R6): object mode changes the layer's data, never its pixels alone.
+        if (objectMode) { applyObjects(); return }
         val vals = values
         val sel = controller.selection
         // v1.9 (A7b step 3): a local filter runs in bands of its region (FilterTiling), the others
@@ -1019,7 +1022,7 @@ class FilterSession(
         }
         val changed = outcome.changed
         if (changed == null) {
-            controller.toast("${filter.name} didn't change anything here")
+            controller.toast(unchangedMessage())
             close()
             return
         }
@@ -1032,6 +1035,39 @@ class FilterSession(
         close()
     }
     // endregion
+
+    private fun unchangedMessage() = "${filter.name} didn't change anything here"
+
+    /**
+     * v1.10 (R6, I1, I2): object mode's apply. The targets' colors are mapped in the layer's data,
+     * which is re-rendered with it as ONE step named after the filter; nothing is rasterized and
+     * the layer keeps its vector content, texts or shape. Vector content goes through
+     * `VectorLayers.update` (sync or async; a live array's copies follow their source and keep
+     * its tint), a text or shape layer through `DataRender.apply`. The preview stays shown until
+     * the layer shows the result; a data equal to the layer's says so, as the pixel path does.
+     */
+    private fun applyObjects() {
+        if (refreshObjectSource() == Refresh.FAILED) return
+        val src = objectSource ?: return
+        val mapper = filter.colorMapper(values) ?: return
+        val after = src.targets.map(src.data, mapper)
+        if (after == src.data) {
+            controller.toast(unchangedMessage())
+            close()
+            return
+        }
+        previewJob?.cancel()
+        val vector = after.vector
+        if (vector != null) {
+            isApplying = true
+            controller.vectors.update(layer, vector, filter.name) { applied ->
+                isApplying = false
+                if (applied) close() else if (!isClosed) syncWithDocument()
+            }
+            return
+        }
+        if (DataRender.apply(controller, layer, after, filter.name, Rect(), allowHidden = false)) close()
+    }
 
     /**
      * False (and the session is closed) if the target layer was removed or its bitmap replaced.
