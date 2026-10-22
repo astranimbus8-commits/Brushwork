@@ -2869,12 +2869,18 @@ class EditorController(
     /**
      * v1.10 (R4, UQ4): `ArrayLabels110.BEHIND` (the array on a new layer below) can run now. While false the
      * selection bar, the object bar and the layer menu leave the item out. The editor screen reads
-     * it in a `derivedStateOf`, so a body reads snapshot state to be followed. F0 stub (A3 body).
+     * it in a `derivedStateOf`, so a body reads snapshot state to be followed. A3: selected objects on a
+     * vector layer, a text, shape or vector layer, or a raster selection; never a folder, an adjustment
+     * layer, a linked text frame or a layer that already has an array (`ArrayBehind.available`).
      */
-    val arrayBehindAvailable: Boolean get() = false
+    val arrayBehindAvailable: Boolean get() = com.brushwork.paint.array.ArrayBehind.available(this)
 
-    /** v1.10 (R4): the array on a new layer below the main one, from the selection. F0 stub (A3 body). */
-    fun arrayBehind() {}
+    /**
+     * v1.10 (R4): the array on a new layer below the main one, from the selection: the selected
+     * objects, else the selected pixels or the whole text, shape or vector layer, as ONE step
+     * `ArrayLabels110.ARRAY_BEHIND_STEP`; the Array tool then opens on it (`ArrayBehind.run`).
+     */
+    fun arrayBehind() { com.brushwork.paint.array.ArrayBehind.run(this) }
     // endregion
 
     // ------------------------------------------------------------------ filters
