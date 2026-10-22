@@ -10,16 +10,20 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import com.brushwork.paint.filters.GradientStop
+import com.brushwork.paint.model.ArrayColorMode
 import com.brushwork.paint.model.ArrayEasing
 import com.brushwork.paint.model.ArrayLook
 import com.brushwork.paint.model.ArraySpec
 import com.brushwork.paint.tools.array.ArrayTool
+import com.brushwork.paint.ui.common.ArrayLabels110
 import com.brushwork.paint.ui.common.ArrayLabels18
 import com.brushwork.paint.ui.common.ChoiceChips
 import com.brushwork.paint.ui.common.NumberField
 import com.brushwork.paint.ui.common.SectionHeader
+import com.brushwork.paint.ui.common.V110Tags
 import com.brushwork.paint.ui.common.V18Tags
 import com.brushwork.paint.ui.filters.GradientEditor
 import com.brushwork.paint.ui.vector.Hint
@@ -46,6 +50,14 @@ import com.brushwork.paint.vector.VStop
  * lights ([ArrayTool.plainPace]) and the next field that changes the look starts from it.
  * Likewise a tint whose strength goes to 0 is no look: [ArrayTool.plainTint] keeps its colors,
  * so a strength raised again finds them.
+ *
+ * v1.10 (R5, UQ6): directly under [ArrayLabels18.TINT_COLORS], two segments say how the colors
+ * apply: [ArrayLabels110.TINTED] (v1.9's tint, the default) and [ArrayLabels110.RECOLORED] (each
+ * copy's own colors changed toward its gradient color, `ColorUtils.recolor`), tagged
+ * [V110Tags.ARRAY_COLOR_MODE], 48 dp tall across the sheet (the words wrap at large font sizes).
+ * A segment is one step [ArrayLabels18.HISTORY_LOOK] with a look, and no step without one (the
+ * tab keeps it, [ArrayTool.plainColorMode], as the Pace). The strength field reads
+ * [ArrayLabels110.RECOLOR_STRENGTH] in Recolored mode, else [ArrayLabels18.TINT_STRENGTH].
  */
 @Composable
 internal fun ArrayLookTab(tool: ArrayTool, spec: ArraySpec) {
@@ -75,6 +87,16 @@ internal fun ArrayLookTab(tool: ArrayTool, spec: ArraySpec) {
             onSelect = { i -> tool.commitLook { it.copy(easing = PACES[i].first) } },
         )
         SectionHeader(ArrayLabels18.TINT_COLORS)
+        // v1.10 (R5): how the colors apply, right under their header.
+        val mode = spec.look?.colorMode ?: tool.plainColorMode
+        Segments(
+            COLOR_MODES.map { it.second to it.second },
+            COLOR_MODES.indexOfFirst { it.first == mode },
+            Role.RadioButton,
+            minHeight = 48.dp,
+            maxLines = 2,
+            modifier = Modifier.testTag(V110Tags.ARRAY_COLOR_MODE),
+        ) { i -> tool.commitLook { it.copy(colorMode = COLOR_MODES[i].first) } }
         GradientEditor(
             stops = look.tint.map { GradientStop(it.offset, it.color) }.ifEmpty { DEFAULT_TINT },
             onChange = { stops ->
@@ -87,7 +109,7 @@ internal fun ArrayLookTab(tool: ArrayTool, spec: ArraySpec) {
             stopDescription = ArrayLabels18::tintColor,
         )
         NumberField(
-            label = ArrayLabels18.TINT_STRENGTH,
+            label = if (mode == ArrayColorMode.RECOLOR) ArrayLabels110.RECOLOR_STRENGTH else ArrayLabels18.TINT_STRENGTH,
             value = look.tintStrength * 100.0,
             onValueChange = { v ->
                 if (v.isFinite()) {
@@ -105,8 +127,10 @@ internal fun ArrayLookTab(tool: ArrayTool, spec: ArraySpec) {
         )
         OutlinedButton(
             onClick = { tool.resetLook() },
-            // Also while tint colors are remembered with no look: the bar shows them, and this forgets them.
-            enabled = spec.look != null || tool.plainPace != ArrayEasing.LINEAR || tool.plainTint.isNotEmpty(),
+            // Also while tint colors are remembered with no look: the bar shows them, and this forgets them
+            // (v1.10: and a color mode chosen with no look).
+            enabled = spec.look != null || tool.plainPace != ArrayEasing.LINEAR || tool.plainTint.isNotEmpty() ||
+                tool.plainColorMode != ArrayColorMode.TINT,
             modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp),
         ) { Text(ArrayLabels18.RESET_LOOK) }
     }
@@ -149,6 +173,12 @@ private val PACES: List<Pair<ArrayEasing, String>> = listOf(
     ArrayEasing.EASE_IN to ArrayLabels18.SPEEDS_UP,
     ArrayEasing.EASE_OUT to ArrayLabels18.SLOWS_DOWN,
     ArrayEasing.EASE_IN_OUT to ArrayLabels18.S_CURVE,
+)
+
+/** v1.10 (R5): the color mode segments: each mode and its word. */
+private val COLOR_MODES: List<Pair<ArrayColorMode, String>> = listOf(
+    ArrayColorMode.TINT to ArrayLabels110.TINTED,
+    ArrayColorMode.RECOLOR to ArrayLabels110.RECOLORED,
 )
 
 /** The tint shown while there is none, and given by a strength set first: warm to cool. */

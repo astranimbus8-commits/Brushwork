@@ -21,6 +21,7 @@ import com.brushwork.paint.engine.ArrayDraw
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.LayerRenderOverride
 import com.brushwork.paint.engine.ViewTransform
+import com.brushwork.paint.model.ArrayColorMode
 import com.brushwork.paint.model.ArrayEasing
 import com.brushwork.paint.model.ArrayInstance
 import com.brushwork.paint.model.ArrayInstances
@@ -119,6 +120,20 @@ class ArrayTool(controller: EditorController) : Tool(controller) {
     val shownPace: ArrayEasing get() = shownSpec()?.look?.easing ?: plainPace
 
     /**
+     * v1.10 (R5): the color mode (`ArrayLabels110.TINTED` or `ArrayLabels110.RECOLORED`) the Look tab
+     * shows and starts from while the array has no look (Compose state), as [plainPace]:
+     * `ArrayLook.isIdentity` ignores the mode, so a mode chosen before any tint is no look and
+     * records no step; the next field that changes the look starts from it ([lookBase]). Kept in
+     * step by [previewLook] / [commitLook]; back to TINT on another layer and on
+     * [ArrayLabels18.RESET_LOOK].
+     */
+    var plainColorMode by mutableStateOf(ArrayColorMode.TINT)
+        private set
+
+    /** v1.10 (R5): the color mode the Look tab shows: the look's own, else [plainColorMode]. */
+    val shownColorMode: ArrayColorMode get() = shownSpec()?.look?.colorMode ?: plainColorMode
+
+    /**
      * v1.8 QA: the [ArrayLabels18.TINT_COLORS] the Look tab keeps while the look shows no tint
      * (Compose state). A tint at strength 0 changes no copy, so a look that is only a tint becomes
      * no look at 0 % (`ArraySpec.sanitized`) and its stops would go with it: a finger on "Tint
@@ -142,8 +157,11 @@ class ArrayTool(controller: EditorController) : Tool(controller) {
     /** v1.10 (R4): runs [leaveBehind] once a tool switch is done (a pause or a layer switch then leaves it be). */
     private val handler = Handler(Looper.getMainLooper())
 
-    /** The look the Look tab's next edit starts from: the shown one, else no look at [plainPace] with [plainTint]. */
-    fun lookBase(): ArrayLook = shownSpec()?.look ?: ArrayLook.IDENTITY.copy(easing = plainPace, tint = plainTint)
+    /**
+     * The look the Look tab's next edit starts from: the shown one, else no look at [plainPace]
+     * with [plainTint] (v1.10: and [plainColorMode]).
+     */
+    fun lookBase(): ArrayLook = shownSpec()?.look ?: ArrayLook.IDENTITY.copy(easing = plainPace, tint = plainTint, colorMode = plainColorMode)
 
     /**
      * The Look tab: previews [change] of [lookBase] (a field moving; nothing recorded until
@@ -168,9 +186,10 @@ class ArrayTool(controller: EditorController) : Tool(controller) {
         commit(cur.copy(look = next))
     }
 
-    /** [plainPace] and [plainTint] in step with the look the tab just made. */
+    /** [plainPace], [plainTint] and [plainColorMode] in step with the look the tab just made. */
     private fun keepPlain(next: ArrayLook) {
         plainPace = next.easing
+        plainColorMode = next.colorMode
         if (next.tint.isNotEmpty()) plainTint = next.tint
     }
 
@@ -178,6 +197,7 @@ class ArrayTool(controller: EditorController) : Tool(controller) {
     fun resetLook() {
         plainPace = ArrayEasing.LINEAR
         plainTint = emptyList()
+        plainColorMode = ArrayColorMode.TINT
         val cur = shownSpec() ?: return
         if (cur.look != null) commit(cur.copy(look = null))
     }
@@ -384,6 +404,7 @@ class ArrayTool(controller: EditorController) : Tool(controller) {
             sheetTab = SheetTab.PLACEMENT
             plainPace = ArrayEasing.LINEAR
             plainTint = emptyList()
+            plainColorMode = ArrayColorMode.TINT
             finishSourceOf(layer)
             if (layer.array != null && !layer.isFolder) sheetOpen = true
             // v1.10 (R4): work on another layer ends "leave to the source".

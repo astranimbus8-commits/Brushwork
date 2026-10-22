@@ -28,6 +28,7 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.brushwork.paint.array.ArrayBehind
 import com.brushwork.paint.array.ArraySources
@@ -142,12 +143,24 @@ private fun SheetTabs(selected: ArrayTool.SheetTab, onSelect: (ArrayTool.SheetTa
     Segments(words.map { it to it }, ArrayTool.SheetTab.entries.indexOf(selected), Role.Tab) { i -> onSelect(ArrayTool.SheetTab.entries[i]) }
 }
 
-/** One selectable segment per (shown word, spoken name) of [items], 44 dp tall; [selected] is lit. */
+/**
+ * One selectable segment per (shown word, spoken name) of [items], 44 dp tall; [selected] is lit.
+ * v1.10 (R5): [minHeight], [maxLines] and [modifier] for the Look tab's color mode row (48 dp,
+ * words on up to two lines at large font sizes); the defaults are the v1.8 segments.
+ */
 @Composable
-private fun Segments(items: List<Pair<String, String>>, selected: Int, role: Role, onSelect: (Int) -> Unit) {
+internal fun Segments(
+    items: List<Pair<String, String>>,
+    selected: Int,
+    role: Role,
+    minHeight: Dp = 44.dp,
+    maxLines: Int = 1,
+    modifier: Modifier = Modifier,
+    onSelect: (Int) -> Unit,
+) {
     val shape = RoundedCornerShape(8.dp)
     Row(
-        Modifier
+        modifier
             .fillMaxWidth()
             .padding(vertical = 4.dp)
             .border(1.dp, BrushworkColors.OnChromeDim.copy(alpha = 0.5f), shape)
@@ -159,7 +172,7 @@ private fun Segments(items: List<Pair<String, String>>, selected: Int, role: Rol
             Box(
                 Modifier
                     .weight(1f)
-                    .heightIn(min = 44.dp)
+                    .heightIn(min = minHeight)
                     .background(if (on) BrushworkColors.AccentDim else Color.Transparent, shape)
                     .selectable(selected = on, role = role, onClick = { onSelect(i) })
                     .semantics { contentDescription = spoken },
@@ -167,7 +180,7 @@ private fun Segments(items: List<Pair<String, String>>, selected: Int, role: Rol
             ) {
                 Text(
                     word,
-                    maxLines = 1,
+                    maxLines = maxLines,
                     textAlign = TextAlign.Center,
                     color = if (on) Color.White else BrushworkColors.OnChrome,
                     style = MaterialTheme.typography.labelLarge,

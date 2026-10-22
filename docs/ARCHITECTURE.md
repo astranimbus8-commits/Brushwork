@@ -3104,7 +3104,87 @@ and 360 dp, font scale 1.3 and 2.0, every tap a finger's); kits `A2ToolRig`, `A2
 
 <!-- v110-A3 -->
 
-(A3 writes this section.)
+R4 (UQ4, UQ5, UQ11) puts an array's copies on a new layer behind its source. R5 (UQ6) adds a
+second way for the Look tab's colors to apply.
+
+**Array behind: the data (`array/ArrayBehind.kt`, `engine/ArrayDraw.kt`).**
+- Choice B2, "copy below". The source layer is never changed. A new layer "Array N" goes in
+  directly below it through `LayerStructure.below` (rule S): the same folder, and the source's
+  clipping, opacity and blend mode copied.
+- The new layer holds a copy of the source (the selected pixels, the touched objects with their
+  ids, or the whole text, shape or vector content). Its array has `ArraySpec.hideSource = true`.
+- `ArrayDraw.hidesSource(spec)` is `hideSource && !editingSource`. Every reader leaves copy 0
+  out when it is true, and only then:
+  - `drawWithArray`, `drawPixels` and `effectiveVector`;
+  - the export (`ExportSceneBuilder` region `v110-A3 arrayExport`: `textCopies` and
+    `arrayObjects`);
+  - Apply (`ArrayOps.apply`, `applyShape`, the frame of a shape apply).
+  `HideSourceReadersAuditTest` pins that list. `ArrayInstances.of` still returns copy 0, so the
+  layout, bounds and handles stay v1.9's. A copies-only layer with one instance draws nothing.
+- ONE step `ArrayLabels110.ARRAY_BEHIND_STEP` (I2). Its undo removes the layer and selects the
+  source again; its redo adds the layer back. Room is asked of `LayerBudget.current` (the pixel
+  copy's bytes count, as for a v1.9 pixel array), and a refusal shows its message and adds
+  nothing.
+- Pixel reads stay in `ArraySources` (`selectedPixelsOf`, `constrain`, `release`): rule P,
+  `ArrayBehind.kt` reads no `.bitmap`.
+
+**Entry points.**
+- `EditorController` region `v110-A3 arrayBehind`:
+  - `arrayBehindAvailable` (Compose-readable) is true for a raster selection, selected objects,
+    or a text, shape or vector layer. It is false for a folder, an adjustment layer and a layer
+    that already has an array.
+  - `arrayBehind()` takes the selected objects first. Otherwise it takes the active layer's
+    selection (the pixels, or the objects it touches), else the whole text, shape or vector layer.
+- The selection bar's and the object bar's `ArrayLabels110.BEHIND` (lead's chrome) call
+  `arrayBehind()`.
+- The layer window's ⋮ offers `ArrayLabels110.LAYER_MENU` on text, shape and vector rows
+  (`ui/layers/LayerControls.kt` region `v110-A3 arrayMenu`). A raster layer needs a selection, so
+  it uses the bar.
+- On a copies-only layer (`ArrayBehind.isCopiesOnly`) "Remove array" reads
+  `ArrayLabels110.REMOVE_WITH_LAYER`, in the sheet and in the ⋮. It deletes the layer in one step
+  through `LayerStructure.delete` and selects the source. "Edit source" is not offered there:
+  the source is the layer above.
+
+**The Array tool on a copies-only layer (`tools/array/ArrayTool.kt`).**
+- While a slider, field or handle adjusts the array (`preview`), the copies draw in the tool's
+  overlay, in front of every layer, so the user sees what moves. At the release (`commitPreview`
+  or `commit`), `showAll()` hands the preview to the tiles at the layer's own place (behind the
+  source) until the commit's render lands.
+- The first time per install, `ArrayLabels110.BEHIND_HINT` says so (`UiPrefs.hintArrayBehind`).
+- Leaving the tool re-selects the source once (lead's choice). This happens when the sheet
+  closes, when another tool is picked (posted, after the switch), and after "Remove array and its
+  layer". An edit's pause (`ArrayOps.paused`) keeps the layer. Picking another layer ends the
+  rule. If the source is gone, the layer stays selected.
+
+**Recolored arrays (R5: `model/ArrayInstances.kt`, `engine/ArrayDraw.kt`, `ui/array/ArrayLookTab.kt`).**
+- `CopyLook.colorMode`: `ArrayInstances.of` copies `ArrayLook.colorMode` to every tinted copy.
+  A copy without a tint carries `TINT`, so opacity-only looks are v1.9's.
+- Copy k targets the gradient color `g(t_k)` at the position Tinted uses. Its colors become
+  `ColorUtils.recolor(c, g(t_k), s)`: alpha kept, the target's alpha ignored.
+- Pixel, text and shape copies draw through `ArrayDraw.paintOf`. In RECOLOR it sets
+  `recolorFilter(target, s)`: a `ColorMatrixColorFilter(ColorUtils.recolorMatrix(target, s))`
+  from a 256-entry LRU (`RECOLOR_FILTERS`), keyed by the target's RGB and `s` clamped to 0..1.
+  The LRU is emptied by `clearCaches`. It matches `recolor` within ±1 per channel on opaque
+  pixels (`ArrayRecolorMatchesRecolorTest`).
+- Vector copies are exact. `ArrayDraw.restyled` maps every slot through
+  `ObjectColorSlots.mapObject` with `ArrayDraw.tinted`, which follows the mode. A recolored shape
+  copy's `fillFollowsColor` follows the C4 rule (fill equals stroke after the map).
+  `effectiveVector`, Apply and the SVG export (`arrayObjects`, and `textCopies` through `tinted`)
+  all use these colors.
+- The Look tab shows two segments under `ArrayLabels18.TINT_COLORS`: `ArrayLabels110.TINTED`
+  (the default) and `ArrayLabels110.RECOLORED`. The row has tag `V110Tags.ARRAY_COLOR_MODE`,
+  spans the sheet, and is 48 dp tall; the words wrap at large fonts (`Segments` takes
+  `minHeight` and `maxLines`).
+- A segment is one step `ArrayLabels18.HISTORY_LOOK` when there is a look. With no look it
+  records nothing: `ArrayTool.plainColorMode` keeps the choice (as `plainPace`), and the next tint
+  starts from it. This matters because `ArrayLook.isIdentity` ignores the mode, so a RECOLOR
+  look without a tint sanitizes to null.
+- The strength field reads `ArrayLabels110.RECOLOR_STRENGTH` in Recolored mode. "Reset look"
+  and opening another layer's array set the mode back to Tinted.
+
+**Tests:** `app/src/test/java/com/brushwork/paint/v110/a3/` (`BehindKit` holds the shared
+fixtures). The v1.9 decode checks (`ArrayBehindCompat19Test`, `ArrayColorModeCompat19Test`)
+come in step 6, after F1.
 
 <!-- /v110-A3 -->
 

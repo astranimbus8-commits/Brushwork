@@ -518,7 +518,8 @@ class ExportSceneBuilder(
      *
      * v1.10 (R4): an array that hides its source ([ArrayDraw.hidesSource]) leaves the source's
      * own items out, as its cache does: only the copies (none with one instance or an unusable
-     * source rectangle).
+     * source rectangle). v1.10 (R5): a Recolored look's copies get their recolored colors
+     * ([ArrayDraw.tinted] follows the look's mode).
      */
     private fun textCopies(layer: Layer, items: List<TextItem>, array: LayerArray): List<SceneItem>? {
         val own = ArrayList<SceneItem>()
@@ -793,7 +794,8 @@ class ExportSceneBuilder(
      * 0 is left out. Without a look the objects are v1.7's.
      *
      * v1.10 (R4): an array that hides its source ([ArrayDraw.hidesSource]) leaves the source
-     * objects (copy 0) out, as [ArrayDraw.effectiveVector] does.
+     * objects (copy 0) out, as [ArrayDraw.effectiveVector] does. v1.10 (R5): a Recolored look's
+     * copies carry their recolored slot colors ([ArrayDraw.restyled] follows the look's mode).
      */
     private fun arrayObjects(content: VectorContent, spec: ArraySpec): List<VObject> {
         val instances = ArrayInstances.of(spec, ObjectIndex.of(content).unionBounds()) // hideSource: copy 0 skipped below
