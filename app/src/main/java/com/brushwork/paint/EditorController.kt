@@ -393,6 +393,10 @@ class EditorController(
     // ------------------------------------------------------------------ memory / history
 
     // region v19-A7b layerCap
+    /** The Java heap limit (v1.9's undo cap read it; v1.10 takes the cap from the session's budget). */
+    @Suppress("unused")
+    private val maxHeap = Runtime.getRuntime().maxMemory()
+
     /** v1.10 (F1, design 2.6): the session's undo cap (F1: v1.9's `max(48 MiB, maxMemory / 4)` at every level). */
     val undoManager = UndoManager(maxBytes = EngineConfig.budget.undoCap(EngineConfig.level)).also { um ->
         um.onChanged = { canUndo = um.canUndo; canRedo = um.canRedo }
