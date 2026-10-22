@@ -11,6 +11,7 @@ import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.SymmetryType
 import com.brushwork.paint.tools.vector.ShapeObject
 import com.brushwork.paint.tools.vector.ShapeOutlines
+import com.brushwork.paint.vector.copies.CopyPick
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -189,7 +190,7 @@ object ObjectCopies {
     }
 
     /** (σmin, √|det|) of [m]'s linear part. */
-    private fun stretch(m: FloatArray): Pair<Float, Float> {
+    internal fun stretch(m: FloatArray): Pair<Float, Float> {
         val a = m[0].toDouble(); val b = m[1].toDouble(); val c = m[3].toDouble(); val d = m[4].toDouble()
         val det = abs(a * d - b * c)
         val s2 = a * a + b * b + c * c + d * d
@@ -203,27 +204,22 @@ object ObjectCopies {
      * True when [test] hits ([test] at a point and a tolerance, in the source's own space) for one
      * of the copies: the point is mapped by C_k⁻¹ and the tolerance grown by the map's largest
      * inverse stretch, so a copy is hit wherever it is drawn within [tol]. Without copies, [test]
-     * once at [p] and [tol] (v1.7).
+     * once at [p] and [tol] (v1.7). v1.10 (R1): [CopyPick.hitCopy] also says which copy.
      */
-    fun hits(copies: CopyMaps, p: Vec2, tol: Float, test: (Vec2, Float) -> Boolean): Boolean {
-        if (test(p, tol)) return true
-        if (copies.isEmpty) return false
-        for (k in 1 until copies.maps.size) {
-            val inv = inverse(copies.maps[k]) ?: continue
-            val q = Vec2(inv[0] * p.x + inv[1] * p.y + inv[2], inv[3] * p.x + inv[4] * p.y + inv[5])
-            if (!(q.x.isFinite() && q.y.isFinite())) continue
-            val (smin, _) = stretch(copies.maps[k])
-            val t = if (smin > 0f && tol.isFinite()) tol / smin else tol
-            if (test(q, t)) return true
-        }
-        return false
-    }
+    fun hits(copies: CopyMaps, p: Vec2, tol: Float, test: (Vec2, Float) -> Boolean): Boolean =
+        CopyPick.hitCopy(copies, p, tol, test = test) >= 0
 
     /** True when [p] is on the shape [s] or one of its copies (`ShapeOutlines.hits` per copy). */
-    fun hits(s: ShapeObject, p: Vec2, tol: Float): Boolean {
-        if (s.copies.isEmpty) return ShapeOutlines.hits(s, p, tol)
+    fun hits(s: ShapeObject, p: Vec2, tol: Float): Boolean = hitCopy(s, p, tol) >= 0
+
+    /**
+     * v1.10 (R1): the top-most copy of the shape [s] at [p] within [tol] (see [CopyPick.hitCopy];
+     * [skip] leaves one copy out), -1 when none; 0 for a shape without copies that is hit.
+     */
+    fun hitCopy(s: ShapeObject, p: Vec2, tol: Float, skip: Int = -1): Int {
+        if (s.copies.isEmpty) return if (skip != 0 && ShapeOutlines.hits(s, p, tol)) 0 else -1
         val src = source(s)
-        return hits(s.copies, p, tol) { q, t -> ShapeOutlines.hits(src, q, t) }
+        return CopyPick.hitCopy(s.copies, p, tol, skip) { q, t -> ShapeOutlines.hits(src, q, t) }
     }
 
     /**
@@ -304,7 +300,7 @@ object ObjectCopies {
         m[0] == 1f && m[1] == 0f && m[2] == 0f && m[3] == 0f && m[4] == 1f && m[5] == 0f && m[6] == 0f && m[7] == 0f && m[8] == 1f
 
     /** The inverse of the affine [m] (row-major 2×3 part used), or null when singular. */
-    private fun inverse(m: FloatArray): FloatArray? {
+    internal fun inverse(m: FloatArray): FloatArray? {
         val a = m[0].toDouble(); val b = m[1].toDouble(); val c = m[2].toDouble()
         val d = m[3].toDouble(); val e = m[4].toDouble(); val f = m[5].toDouble()
         val det = a * e - b * d
