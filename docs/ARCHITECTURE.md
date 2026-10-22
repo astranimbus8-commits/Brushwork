@@ -2487,7 +2487,7 @@ Rules kept from v1.9:
   resources anywhere; an existing test resource fails for everyone. Repository files outside
   `app/src/main/java` are the lead's. An area fails on `.github/workflows/**`,
   `app/build.gradle.kts`, `app/src/test/test-count*.txt`, `.wt/_tools/**` and `README.md`. In
-  `.wt/v110-full-backlog.txt` an area may only remove the lines that name it. The lead steps may
+  `app/src/test/unit-full-backlog.txt` an area may only remove the lines that name it. The lead steps may
   change every main path. Existing tests: F0 only those design 3.2 lists (`$LeadStepTests.F0`),
   F1 any outside `$FrozenTests`, G2 any. A finding on a `$Sequential` path is reported as O.
 - **R (regions):** in each file of `$Regions` and in this file, every changed line lies strictly
@@ -2552,7 +2552,44 @@ every frozen declaration as pasted from the code at each gate.
 
 ### CI: shards, `unit-full` and the two floors
 
-Written at F1 (design 6.5).
+Written at F1 (design 3.3 and 6.5). "Build APK" (`.github/workflows/android.yml`) runs:
+- `unit`: three shards at CLASSIC, as in v1.9 ("Testing and CI (v1.9)").
+- `unit-full` (new at F1): three shards of `testDebugUnitTest -PengineMode=full -PunitFull
+  -PtestShard=<i> -PtestShards=3`, 45 min each, with the setup of `unit`; each shard uploads its
+  JUnit XML and Gradle log as `test-results-full-<i>`. `-PunitFull` (`app/build.gradle.kts`) sets
+  `-PengineMode=full` unless TILES is given (it refuses CLASSIC and does not go with
+  `-PtimingOnly`, `-PsoakOnly` or `-Pbench`) and leaves out the categories `Timing`, `ClassicOnly`
+  and `EngineGolden` and the classes of `app/src/test/unit-full-backlog.txt`. At FULL the test
+  JVM's `EngineConfig.testMode()` is FULL: every session and the defaults outside a session run at
+  FULL with `ChaosResidency` (every unpinned inactive layer parks as soon as the active layer
+  settles) and `NoSwap`, unless a test installs another level or store through `EngineRule`. A
+  park or unpark puts its new stores in only when the layer still holds the ones it read, checked
+  under the layer's monitor, which the store setters and `Layer.rehouse` hold too: a test scope
+  on `Dispatchers.Unconfined` resumes a canvas commit on a worker while the main looper parks,
+  and the commit's store wins. The switch and the backlog file are task inputs, like the shard.
+- `test-count` (after `unit` and `unit-full`): the summed `tests` of the `unit` shards against
+  `app/src/test/test-count.txt`, and of the `unit-full` shards against
+  `app/src/test/test-count-full.txt`. A shard without XML or log, or a log with
+  `testDebugUnitTest NO-SOURCE`, fails; `FROM-CACHE` only warns (the XML still counts).
+- The release APK needs `unit`, `unit-full`, `timing` and `test-count`.
+- Nightly (`.github/workflows/soak.yml`): beside `soak`, the `chaos` job runs the
+  `com.brushwork.paint.engine`, `tools` and `storage` test packages with `-PengineMode=full
+  -PparkChaos -PunitFull` in three shards (45 min each): `ChaosResidency` parks again at every idle
+  of the main looper.
+
+**The backlog file.** The design names `.wt/v110-full-backlog.txt`, but `.wt/` is not in the
+repository, so CI could never read it: the file is `app/src/test/unit-full-backlog.txt`. One line
+per class, `<fully.qualified.TestClass> <A1..A11> <reason>`, `#` starting a comment; a line of
+another shape fails the Gradle configuration, and a nested class goes with its outer class. The
+lead wrote the lines at F1 for the `unit-full` failures an area owns (design 4.1); each area
+removes its own lines before it merges, and its classes then pass at FULL (rule O lets it remove
+only lines naming it). The file is empty after Gate 2.
+
+**The two floors.** `test-count.txt` (the `unit` count) and `test-count-full.txt` (the
+`unit-full` count, new at F1) are raised by the lead at each merge to the merged branch's counts
+and lowered only in the commit that deletes tests on purpose; neither has a trailing newline.
+Locally, `CI=true` with `testDebugUnitTest -PengineMode=full -PunitFull --continue` is the
+`unit-full` run in two JVMs (its XML sum is the `unit-full` count).
 
 ## v1.10 areas
 
@@ -4815,7 +4852,41 @@ A7b 0 of 1, Gate 2 2 of 3 (`CrossObjectsBarsUiTest`, `StripFontScaleTest`): 37 o
   `qa18/Qa18PolishChromeVerifyTest` and `qa18/Qa18PolishChromeLongPressTest`; each passes run
   alone. A failure elsewhere is a real one.
 
-## UI (`ui/`)
+## Testing and CI (v1.10)
+
+Written by the lead at F1 (design 2.16, 3.3 and 6.4-6.5); Gate 2 completes it. The v1.9 rules
+above still hold; the jobs, the backlog file and the two floors are in "CI: shards, `unit-full`
+and the two floors" ("v1.10 foundation" above).
+
+**Engine levels in tests.** `-PengineMode=classic|tiles|full` and `-PparkChaos` reach the test
+JVMs as the properties `brushwork.engineMode` and `brushwork.parkChaos`, which only
+`EngineConfig.testMode()` and `parkChaos()` read. Without them every test runs at CLASSIC, as in
+v1.9. A test that needs a level, probes, budgets or a swap store takes them from `EngineRule`
+(`testing/EngineRule.kt`), which installs them for each test and puts `EngineConfig`,
+`LayerBudget.current`, `PixelFacade.strict`, `EngineNotices.current` and the property back after
+it, also after a failure; v1.10 numbers are tested only through it with a `FakeMemoryProbe` (J3).
+The rule also fails a test that finds the level, `LayerBudget.current`, a probe, the swap store,
+the residency or the property changed from the fork's first record (an earlier test leaked it),
+names the value and repairs it (`EngineRuleLeakTest`).
+
+**Categories.** Beside `Timing`: `ClassicOnly` marks a test (class or method) that pins a fact
+true only at CLASSIC, for example `layer.bitmap === x` after a layer switch, with a one-line
+comment saying which; `EngineGolden` marks the goldens that build the Flat, Tiled and Blank
+stores themselves. `unit` runs both; `unit-full` runs neither. A test failing at FULL for any
+other reason is fixed or goes to the backlog file with its owner area.
+
+**Frozen kits** (`testing/`, F1; `EngineKitTest` checks what each promises):
+`FakeProbes.kt` (`MemoryPreset` T606, GB3, GB6, GB8, LOW_RAM, BIT32 and UNKNOWN, the all-zero
+answer that keeps v1.9's budgets; `FakeMemoryProbe` with settable fields and failures,
+`FakeStorageProbe`, `FakeExitInfo`), `FakeSwapStore.kt` (in memory, Deflate-1 like the real
+store; latency, an `IOException` after n writes and CRC corruption), `FakeClock.kt`,
+`EngineRule.kt`, `TiledGoldenKit.kt` (the Flat, Tiled and Blank copies of one document and a
+bitwise comparison of their composites), `RandomStacks.kt` (seeded documents with blends, clips,
+masks, folders, adjustments, blank, sparse and hidden layers, at most 512 x 512),
+`ProjectionOracle.kt` (a frame drawn layer by layer with the projections off),
+`FakeObjectColorEditor.kt` and `FakeCornerEditor.kt` (the F0 editor interfaces with their
+contracts, recording every call).
+
 `MainActivity` → gallery or editor. `ui/common/Components.kt` holds shared controls (sheets,
 nudge pad, chips, swatches) and `ui/common/NumberControls.kt` (v1.6) the number controls (typeable
 sliders, numeric/length fields with units + automatic sliders / drag-to-scrub, with increment
