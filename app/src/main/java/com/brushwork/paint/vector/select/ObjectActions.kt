@@ -212,7 +212,7 @@ object ObjectActions {
         return o !is VStroke
     }
 
-    /** v1.10 (R11): whether the object bar offers "Turn into shape": exactly one path is selected. */
+    /** v1.10 (R11): whether the object bar offers [ObjectBarLabels110.TO_SHAPE]: exactly one path is selected. */
     fun toShapeShown(c: EditorController): Boolean = selectedObject(c) is VPath
 
     /**

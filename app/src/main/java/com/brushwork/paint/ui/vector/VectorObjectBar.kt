@@ -167,7 +167,7 @@ fun VectorObjectBar(
     val summary = if (count == 1) "1 object selected" else "$count objects selected"
     // v1.7 (item 3): Array after Deselect, so the nine v1.6 buttons keep their places; v1.8 (I15):
     // Detach only while a selected object has live mirror copies, twice as wide (its words stay
-    // readable). v1.10: Behind after Array, "Turn into shape" (as wide as Detach) after Detach.
+    // readable). v1.10: Behind after Array, TO_SHAPE (as wide as Detach) after Detach.
     val slots = ObjectBarSlot.shown(edit = editShown, behind = onArrayBehind != null, detach = hasCopies, toShape = toShapeShown)
     val button: @Composable (ObjectBarSlot, Dp) -> Unit = { slot, w ->
         when (slot) {
