@@ -38,6 +38,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -58,9 +59,14 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.brushwork.paint.EditorController
+import com.brushwork.paint.model.Layer
+import com.brushwork.paint.model.Selection
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.remove.ContentAwareFillJob
 import com.brushwork.paint.tools.select.SelectionDuplicate
+import com.brushwork.paint.tools.text.TextCodec
+import com.brushwork.paint.tools.text.TextTool
+import com.brushwork.paint.tools.text.textRectOf
 import com.brushwork.paint.ui.common.ArrayLabels
 import com.brushwork.paint.ui.common.ArrayLabels110
 import com.brushwork.paint.ui.common.LayerLabels19
@@ -73,9 +79,11 @@ import com.brushwork.paint.ui.common.icons.arrayBehind
 import com.brushwork.paint.ui.common.longPressLabel
 import com.brushwork.paint.ui.remove.ContentAwareFillSheet
 import com.brushwork.paint.ui.editor.chrome.ChromeTags
+import com.brushwork.paint.ui.layers.LayerOps
 import com.brushwork.paint.ui.theme.BrushworkColors
 import com.brushwork.paint.ui.theme.IbisColors
 import kotlin.math.ceil
+import kotlin.math.max
 
 /**
  * Floating actions for the current selection (whatever made it: marquee, lasso, magic wand,
@@ -88,7 +96,10 @@ import kotlin.math.ceil
  *
  * v1.10 (F0, design 3.2; A6 owns the bar): [onEdit] adds [ObjectBarLabels110.EDIT] as the first
  * item (R10) and [onArrayBehind] adds [ArrayLabels110.BEHIND] right after Array (R4); each is
- * hidden while its callback is null, so without them the bar is v1.9's.
+ * hidden while its callback is null, so without them the bar is v1.9's. A6 (R10): without an
+ * [onEdit] the bar offers Edit itself where [SelectionBarEdit.target] finds something to edit
+ * (one text of a text layer that the selection meets, or a legacy shape layer), first so it is
+ * on screen at scroll 0 on a 360 dp phone; the Array pair stays before Save, Duplicate and Hide.
  */
 @Composable
 internal fun SelectionActionBar(
@@ -103,6 +114,11 @@ internal fun SelectionActionBar(
     val canPaste = controller.clipboard != null
     // v1.9 (R14): reading layersVersion, the bar follows a change of the active layer or its kind.
     val canDuplicate = controller.layersVersion.let { SelectionDuplicate.kindOf(controller) != null }
+    // v1.10 (R10, A6): what Edit opens; it follows the selection, the active layer and its data.
+    val editTarget by remember(controller) {
+        derivedStateOf { controller.layersVersion.let { SelectionBarEdit.target(controller) } }
+    }
+    val edit: (() -> Unit)? = onEdit ?: editTarget?.let { t -> { SelectionBarEdit.open(controller, t) } }
     // Content-aware fill options; Fill closes them (the busy overlay shows the progress).
     var fillOptionsOpen by remember { mutableStateOf(false) }
     if (fillOptionsOpen) ContentAwareFillSheet(controller, onDismiss = { fillOptionsOpen = false })
@@ -130,9 +146,9 @@ internal fun SelectionActionBar(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 // v1.10 (R10, F0): the first item whenever it shows (A6 decides when).
-                if (onEdit != null) {
+                if (edit != null) {
                     BarItem(Icons.Outlined.Edit, ObjectBarLabels110.EDIT, ObjectBarLabels110.EDIT_DESC, modifier = Modifier.testTag(V110Tags.SEL_EDIT)) {
-                        controller.endCanvasGesture(); onEdit()
+                        controller.endCanvasGesture(); edit()
                     }
                 }
                 if (hasSelection) {
@@ -231,6 +247,85 @@ private fun ScrollCue(forward: Boolean, modifier: Modifier) {
             modifier = Modifier.requiredSize(24.dp),
         )
     }
+}
+
+/**
+ * v1.10 (R10, A6): the selection bar's Edit. It shows while a selection is drawn and the active
+ * layer is either a text layer of which exactly one text meets the selection (its painted rect
+ * holds a selected pixel), or a legacy shape layer. Edit then opens that text in the Text tool
+ * with its editor open ([TextTool.editLayer] with the text's index; a frame of a linked story
+ * through [LayerOps.editText]), or the shape in the Shape tool ([LayerOps.editShape]). Edit adds
+ * no undo step; the selection stays. The tool's ✓ records its own step.
+ */
+internal object SelectionBarEdit {
+    /** What Edit opens. */
+    sealed interface Target {
+        val layer: Layer
+    }
+
+    /** Text [index] of text layer [layer] (picture order, as [TextTool.editLayer] counts). */
+    data class Text(override val layer: Layer, val index: Int) : Target
+
+    /** The shape of legacy shape layer [layer]. */
+    data class Shape(override val layer: Layer) : Target
+
+    /** What Edit would open now, or null (Edit hidden). */
+    fun target(c: EditorController): Target? {
+        val sel = c.selection ?: return null
+        if (sel.isEmpty) return null
+        val layer = c.activeLayer
+        if (layer.isShapeLayer) return Shape(layer)
+        val data = layer.textData ?: return null
+        var hit = -1
+        for ((i, t) in TextCodec.decodeAll(data).withIndex()) {
+            val r = textRectOf(t) ?: continue
+            if (!meets(sel, r)) continue
+            // Two texts meet it: which one is meant is unclear, so no Edit.
+            if (hit >= 0) return null
+            hit = i
+        }
+        return if (hit >= 0) Text(layer, hit) else null
+    }
+
+    /** Opens [t]; true when its tool opened it (false with the tool's message otherwise). */
+    fun open(c: EditorController, t: Target): Boolean {
+        val layer = t.layer
+        if (c.doc.indexOf(layer) < 0) return false
+        return when (t) {
+            is Shape -> LayerOps.editShape(c, layer)
+            is Text -> {
+                // A frame of a linked story: the Text frames tool opens its story (as "Edit text").
+                if (c.textThreads.isFrame(layer)) return LayerOps.editText(c, layer)
+                if (!c.checkEditable(layer)) return false
+                c.selectTool(ToolId.TEXT)
+                val tool = c.tools[ToolId.TEXT] as? TextTool ?: return false
+                tool.editLayer(layer, openEditor = true, index = t.index)
+            }
+        }
+    }
+
+    /**
+     * True when the selection [sel] holds a pixel of [rect] (document px). The overlap is sampled
+     * on a grid of at most [SAMPLES] × [SAMPLES] points, so a large text costs no more than a
+     * small one.
+     */
+    private fun meets(sel: Selection, rect: android.graphics.Rect): Boolean {
+        val r = android.graphics.Rect(rect)
+        if (!r.intersect(sel.bounds)) return false
+        val step = max(1, max(r.width(), r.height()) / SAMPLES)
+        var y = r.top
+        while (y < r.bottom) {
+            var x = r.left
+            while (x < r.right) {
+                if (sel.alphaAt(x, y) > 0) return true
+                x += step
+            }
+            y += step
+        }
+        return false
+    }
+
+    private const val SAMPLES = 64
 }
 
 /**
