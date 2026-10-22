@@ -55,6 +55,7 @@ import com.brushwork.paint.ui.common.ArrayLabels
 import com.brushwork.paint.ui.common.MirrorLabels110
 import com.brushwork.paint.ui.common.TransformLabels17
 import com.brushwork.paint.vector.VectorLayerOps
+import com.brushwork.paint.vector.convert.LegacyShapes
 import com.brushwork.paint.vector.lift.CopyLift
 import com.brushwork.paint.vector.lift.VectorLift
 import com.brushwork.paint.vector.lift.VectorLiftProvider
@@ -646,6 +647,7 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
         controller.snapping.cancel()
         // v1.10 (R1): the next tap starts a new cycle, and no mirror side stays picked.
         VectorLift.toolLeft(controller)
+        LegacyShapes.release(controller, null)
     }
 
     override fun onDispose() {
@@ -1559,7 +1561,8 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
         }
         s.objectLift?.let { lift ->
             // v1.10 (R1): one mirror side picked: only that side goes, as one step "Delete one side".
-            val deleted = lift.delete(if (lift is CopyLift) MirrorLabels110.DELETE_SIDE else DELETE_LABEL)
+            val label = if (lift is CopyLift) MirrorLabels110.DELETE_SIDE else DELETE_LABEL
+            val deleted = LegacyShapes.fold(controller, layer, label) { lift.delete(label) }
             endSession(s)
             return deleted
         }
@@ -2716,6 +2719,8 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
         }
         // v1.10 (R1, LA4): one mirror side lifted alone: moved, turned and flipped only.
         sidePicked = ((s.objectLift as? VectorObjectLift)?.side ?: -1) >= 0
+        // v1.10 (R1): a legacy shape layer converted for a side pick is kept only for its own lift.
+        if (s.objectLift !is VectorObjectLift || !LegacyShapes.isHeld(controller, s.layer)) LegacyShapes.release(controller, null)
         // v1.7: a mode what was lifted can't take falls back to Free.
         if (modeRefusal(modeState) != null) modeState = Mode.FREE
         rebuildPreviewPaint()
@@ -2773,7 +2778,9 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
         if (objects != null && !pixelFallback(objects, st)) {
             // Vector objects: their geometry is mapped exactly (one step, made by the lift); a
             // text, shape or array layer keeps its data, mapped and re-rendered (v1.7, §3.11).
-            val recorded = objects.commit(st, if (objects is DataLift || objects is FolderLift) TRANSFORM_LABEL else TRANSFORM_OBJECTS_LABEL)
+            val label = if (objects is DataLift || objects is FolderLift) TRANSFORM_LABEL else TRANSFORM_OBJECTS_LABEL
+            // v1.10 (R1): a legacy shape layer converted for a side pick: the conversion joins this step.
+            val recorded = LegacyShapes.fold(controller, s.layer, label) { objects.commit(st, label) }
             endSession(s)
             return recorded
         }
@@ -2850,6 +2857,8 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
         if (s.ownsFloating) s.floating.recycle()
         // After its commit / delete: a lift that applies its result later keeps what it needs.
         s.objectLift?.release()
+        // v1.10 (R1): a legacy shape layer converted for this lift and not committed is a shape layer again.
+        if (s.objectLift is VectorObjectLift) LegacyShapes.release(controller, s.layer)
     }
 
     private fun cancelJobs() {
