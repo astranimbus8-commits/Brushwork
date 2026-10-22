@@ -2661,7 +2661,9 @@ Tests: `v110/a1/**` (`CopyPickTest`, `StrokeStaysWholeTest`, `SideTapCycleTest`,
 `OneSideMovedThenAllSidesTest`, `PerspectiveCopyTapCycleTest`, `SideHintFirstThreePicksTest`,
 `CopyOffsetMathTest`, `OneSidePinchNeverScalesTest`, `OneSideResizeBlockedTest`,
 `SideEditPlanTest`, `SideRefusedTest`, `DeleteOneSideTest`, `CoincidingMapsMergeTest`,
-`OneCheckOneStepTest`, `LegacyConvertOneStepTest`, `OneSideCompat19Test`, the two timing tests)
+`OneCheckOneStepTest`, `LegacyConvertOneStepTest`, `OneSideCompat19Test`,
+`MovedSideFollowsLaterEditsTest` (a moved side takes later point, color and size edits where it
+is), `SelectShapesPicksWholeTest`, `CopyEditIsometryTest`, the two timing tests)
 and `qa110/Qa110OneSideUiTest` (392 and 360 dp, font scales 1, 1.3 and 2.0).
 
 <!-- /v110-A1 -->
