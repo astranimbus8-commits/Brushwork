@@ -55,7 +55,7 @@ class CodecV19NeverTest {
         assertEquals("TextCodec", 5, TextCodec.VERSION)
         assertEquals("ShapeCodec", 2, ShapeCodec.VERSION)
         assertEquals("VectorCodec", 1, VectorCodec.VERSION)
-        assertEquals("ProjectFormat", 3, ProjectFormat.VERSION)
+        assertEquals("ProjectFormat (v1.10: format 4, design 2.9)", 4, ProjectFormat.VERSION)
         assertEquals("Payload", 2, Payload.VERSION)
     }
 

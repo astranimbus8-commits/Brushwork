@@ -11,6 +11,7 @@ import android.provider.OpenableColumns
 import android.util.Log
 import com.brushwork.paint.ImageImport
 import com.brushwork.paint.engine.Compositor
+import com.brushwork.paint.engine.LayerBudget
 import com.brushwork.paint.engine.MemoryGovernor
 import com.brushwork.paint.model.Document
 import com.brushwork.paint.storage.backup.BackupRestore
@@ -180,7 +181,7 @@ class ProjectRepository(private val context: Context) {
      */
     suspend fun createFromImage(uri: Uri): String = withContext(Dispatchers.IO) {
         val maxSide = pictureBounds(uri)?.let { (w, h) ->
-            CanvasLimits.importMaxSide(w, h, Runtime.getRuntime().maxMemory())
+            LayerBudget.current.importMaxSide(w, h)
         } ?: CanvasLimits.IMPORT_MAX_SIDE
         val decoded = ImageImport.decode(context, uri, maxSide)
         val picture = if (LayerCodec.isStorable(decoded)) {
@@ -303,7 +304,7 @@ class ProjectRepository(private val context: Context) {
             val layers = doc.layers.toList()
             val selections = doc.savedSelections
             val meta = ProjectFileDto(
-                formatVersion = ProjectFormat.writtenVersion(layers),
+                formatVersion = ProjectFormat.writtenVersion(layers, w, h),
                 id = id,
                 name = doc.name,
                 width = w,

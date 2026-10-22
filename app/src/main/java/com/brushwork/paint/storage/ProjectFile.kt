@@ -30,7 +30,8 @@ import java.nio.file.StandardCopyOption
 internal data class ProjectFileDto(
     /**
      * The format this file needs to be read: 1 (v1.0–v1.4 readable) unless the project has an
-     * adjustment layer (2) or a folder (3), see [ProjectFormat.writtenVersion].
+     * adjustment layer (2) or a folder (3), see [ProjectFormat.writtenVersion]. v1.10: 4 when
+     * v1.9 could not hold the artwork (more layers than v1.9's cap on a 512 MiB heap, or above 100).
      */
     val formatVersion: Int = ProjectFormat.BASE_VERSION,
     val id: String,
@@ -137,10 +138,14 @@ internal data class SelectionEntryDto(
  * pixel file (`file` = ""). An arrayed layer is a plain raster entry (its cache) plus its spec and
  * an `array_<id>_r<revision>.bin` source container; saved selections are
  * `sel_<id>_r<revision>.bin` files. Neither changes the format version.
+ *
+ * v1.10 (F1, design 2.9, I30): an artwork v1.9 could not hold is format 4 (v1.9 refuses it
+ * instead of running out of memory); every other artwork is written as v1.9 wrote it. The
+ * version depends only on the layers and the size, never on the engine level or the phone.
  */
 internal object ProjectFormat {
     /** Highest format this version reads. */
-    const val VERSION = 3
+    const val VERSION = 4
     /** The format of projects without adjustment layers (v1.0–v1.4 read it; vector data is extra). */
     const val BASE_VERSION = 1
     const val PROJECT_FILE = "project.json"
@@ -199,6 +204,33 @@ internal object ProjectFormat {
         layers.any { it.isFolder } -> 3
         layers.any { it.isAdjustmentLayer } -> 2
         else -> BASE_VERSION
+    }
+
+    /** v1.10 (F1, design 2.9): the heap [v19Cap] is computed for (fixed, so the format never depends on the phone). */
+    const val V19_HEAP = 512L shl 20
+
+    /**
+     * v1.10 (F1, design 2.9): the layers v1.9 opens for [layers] on a [w] x [h] canvas, as its
+     * `effectiveLayerCount` counted them: every non-folder layer, every mask, and the array
+     * sources by their bytes in layer-sized units.
+     */
+    fun v19OpenCount(layers: List<Layer>, w: Int, h: Int): Int {
+        val l = maxOf(1L, w.toLong() * h * 4)
+        val arrays = layers.sumOf { it.array?.pixels?.bytes ?: 0L }
+        return layers.count { !it.isFolder } + layers.count { it.hasMask } + ((arrays + l - 1) / l).toInt()
+    }
+
+    /** v1.10 (F1, design 2.9): v1.9's layer cap for a [w] x [h] canvas on a [V19_HEAP] heap (phone 25, 2048 x 2048 14, 4000 x 5000 2). */
+    fun v19Cap(w: Int, h: Int): Int = ((0.55 * V19_HEAP) / (w.toLong() * h * 4) - 3).toInt().coerceIn(2, 100)
+
+    /**
+     * v1.10 (F1, design 2.9, I30): the format version a save writes: 4 when v1.9 could not hold
+     * the artwork ([v19OpenCount] above [v19Cap] or above 100), else the one-argument
+     * [writtenVersion] (3, 2 or 1). Depends only on its arguments.
+     */
+    fun writtenVersion(layers: List<Layer>, w: Int, h: Int): Int {
+        val count = v19OpenCount(layers, w, h)
+        return if (count > v19Cap(w, h) || count > 100) 4 else writtenVersion(layers)
     }
 
     fun defaultProps(name: String) = LayerProps(
