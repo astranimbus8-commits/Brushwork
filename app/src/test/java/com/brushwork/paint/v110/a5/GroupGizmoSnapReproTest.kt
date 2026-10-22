@@ -10,7 +10,6 @@ import com.brushwork.paint.v110.a5.GroupSnapFixtures.Companion.SHAPE_TL
 import com.brushwork.paint.v110.a5.GroupSnapFixtures.Companion.assertVec
 import com.brushwork.paint.v110.a5.GroupSnapFixtures.Companion.dragBy
 import org.junit.After
-import org.junit.Ignore
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -20,7 +19,6 @@ import org.robolectric.RobolectricTestRunner
  * moving group like any other move. In 1.9 the gizmo never snapped: the group followed the finger
  * past every guide (the grid was ignored too).
  */
-@Ignore("v110-A5 repro: fails on 1.9")
 @RunWith(RobolectricTestRunner::class)
 class GroupGizmoSnapReproTest {
     private val fx = GroupSnapFixtures()

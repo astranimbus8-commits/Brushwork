@@ -2103,6 +2103,8 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
     /** Starts snapping for a gesture on the pending shape (see the class comment). */
     private fun beginSnap() {
         val exclude = snapExclude()
+        // v1.10 (A5, R8): a new gesture measures its own moving group ([groupSnapMove]).
+        groupSnapBase = null
         when (mode) {
             Mode.POINT, Mode.NEW_POINT, Mode.HANDLE_IN, Mode.HANDLE_OUT -> {
                 // The shape's other points: points line up with each other.
@@ -2114,6 +2116,12 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
                 // The points that stay: the group (and the point joining it) moves along.
                 val sel = pointSelection
                 val others = startAnchors.filterIndexed { i, _ -> i !in sel && i != dragIndex }.flatMap { SnapLine.point(it.pos, "Vertex") }
+                snap.begin(exclude = exclude, extra = { others })
+            }
+            Mode.GIZMO -> {
+                // v1.10 (A5, R8 cause A): the gizmo moves the selected points; the others are targets.
+                val sel = pointSelection
+                val others = startAnchors.filterIndexed { i, _ -> i !in sel }.flatMap { SnapLine.point(it.pos, "Vertex") }
                 snap.begin(exclude = exclude, extra = { others })
             }
             Mode.MOVE -> {
@@ -2383,21 +2391,61 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
     }
 
     // region v110-A5 snap
-    /** The selected points dragged by one of them: it snaps (and steps) like a dragged point, the others follow. */
+    /**
+     * The selected points dragged by one of them. v1.10 (A5, R8 cause B): the GROUP snaps (its box
+     * and every moving point, `PointGroupSnap`), then the grid and the step; in 1.9 only the grabbed
+     * point snapped.
+     */
     private fun dragGroup(pt: Vec2) {
-        val d = pt - downPoint
-        val target = steppedPoint(grabStart, d, snap.snapPoint(grabStart + d))
-        val move = target - grabStart
+        val move = groupSnapMove(pt - downPoint, dragIndex)
         setGroupTransform(Affine2.translate(move.x, move.y))
     }
 
-    /** A drag on the gizmo: its map from where the finger went down (increments as `PointGizmo.dragMap` applies them). */
+    /**
+     * A drag on the gizmo: its map from where the finger went down (increments as `PointGizmo.dragMap`
+     * applies them). v1.10 (A5, R8 cause A): a drag inside the box moves the group as [dragGroup]
+     * does, snapped; scale and rotate keep their map.
+     */
     private fun dragGizmo(pt: Vec2) {
         val layout = gizmoLayout ?: return
+        if (gizmoPart == PointGizmo.Part.MOVE) {
+            val move = groupSnapMove(pt - downPoint, -1)
+            setGroupTransform(Affine2.translate(move.x, move.y))
+            return
+        }
         val inc = controller.increments.state
         val m = gizmo.dragMap(layout, gizmoPart, downPoint, pt, keepScaleProportions(), inc)
         if (inc.enabled) stepReadout = gizmoReadout(m)
         setGroupTransform(m)
+    }
+
+    /** The group edit whose moving points [groupSnapPoints] holds (null: measure them again). */
+    private var groupSnapBase: List<ShapeAnchor>? = null
+    /** The moving points where the group gesture began, as x, y pairs. */
+    private var groupSnapPoints = FloatArray(0)
+    /** Their bounds then. */
+    private var groupSnapBox: DocBox? = null
+    /** The grabbed point's index in [groupSnapPoints], or -1 (the gizmo). */
+    private var groupSnapGrabbed = -1
+
+    /**
+     * v1.10 (A5, R8): the snapped delta of the group edit in progress for the finger's raw delta
+     * [d], the point [grabbed] (a shape point index, or -1) under the finger. The moving points are
+     * the group edit's, measured once per gesture; while increments are on the readout shows the move.
+     */
+    private fun groupSnapMove(d: Vec2, grabbed: Int): Vec2 {
+        val base = groupBase ?: return d
+        if (groupSnapBase !== base) {
+            val moving = groupSelection.indices.filter { it in base.indices }
+            groupSnapPoints = com.brushwork.paint.tools.points.PointGroupSnap.pairs(moving.map { base[it].pos })
+            groupSnapBox = com.brushwork.paint.tools.points.PointGroupSnap.bounds(groupSnapPoints)
+            groupSnapGrabbed = moving.indexOf(grabbed)
+            groupSnapBase = base
+        }
+        val box = groupSnapBox ?: return d
+        val move = com.brushwork.paint.tools.points.PointGroupSnap.of(snap, controller).snap(groupSnapPoints, box, groupSnapGrabbed, d)
+        if (controller.increments.state.enabled) stepReadout = IncrementReadout.move(move.x, move.y)
+        return move
     }
     // endregion
 

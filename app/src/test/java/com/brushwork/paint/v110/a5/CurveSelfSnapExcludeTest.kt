@@ -22,7 +22,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import org.junit.After
-import org.junit.Ignore
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -39,7 +38,6 @@ import kotlin.math.abs
  * bounds before the edit; in 1.9 the Curve tools began their snap without excluding the layer and
  * a dragged point jumped back onto that old edge. (Shape already excluded its layer.)
  */
-@Ignore("v110-A5 repro: fails on 1.9")
 @RunWith(RobolectricTestRunner::class)
 class CurveSelfSnapExcludeTest {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -53,11 +51,18 @@ class CurveSelfSnapExcludeTest {
         order = 4,
     )
 
+    /** A small path in the top left corner, inside the bounds of [spline]'s layer on x. */
+    private val small = VSpline(
+        listOf(VSplinePoint(80f, 20f), VSplinePoint(100f, 30f), VSplinePoint(120f, 20f), VSplinePoint(140f, 30f), VSplinePoint(160f, 20f)),
+        order = 4,
+    )
+
     /**
      * A 400 x 300 canvas at zoom 1 with an empty raster layer and the vector layer "Vector 1"
-     * whose only object is the spline path [spline] (4 px line), opened in the Path tool.
+     * whose only object is the spline path [spline] (4 px line), opened in the Path tool; with
+     * [withOther], the layer also holds [small] (the path opened is still [spline]).
      */
-    private fun opened(): Triple<EditorController, Layer, CurveTool> {
+    private fun opened(withOther: Boolean = false): Triple<EditorController, Layer, CurveTool> {
         val app = RuntimeEnvironment.getApplication()
         val settings = AppSettings(app)
         settings.prefs.edit().clear().commit()
@@ -70,15 +75,16 @@ class CurveSelfSnapExcludeTest {
             it.viewTransform.set(Matrix())
             it.tools
         }
-        val path = VPath(id = 0, subpaths = listOf(SplineBezier.toSubpath(spline)), stroke = VStrokeStyle(color = 0xFF203080.toInt(), width = 4f), spline = spline)
-        c.vectors.addObjects(vector, listOf(path), "Import")
+        fun path(s: VSpline) = VPath(id = 0, subpaths = listOf(SplineBezier.toSubpath(s)), stroke = VStrokeStyle(color = 0xFF203080.toInt(), width = 4f), spline = s)
+        c.vectors.addObjects(vector, listOf(path(spline)), "Import")
+        if (withOther) c.vectors.addObjects(vector, listOf(path(small)), "Import")
         idle()
-        val obj = vector.vector!!.objects.single() as VPath
+        val obj = vector.vector!!.objects.first() as VPath
         val tool = c.tools.getValue(ToolId.PATH) as CurveTool
         tool.openPath(vector.id, obj.id, intArrayOf())
         idle()
         assertTrue("the path is open", tool.isReopened)
-        assertEquals("it is the layer's only object", 1, vector.vector!!.objects.size)
+        assertEquals("the layer's objects", if (withOther) 2 else 1, vector.vector!!.objects.size)
         c.snapping.enabled = true
         return Triple(c, vector, tool)
     }
@@ -100,6 +106,21 @@ class CurveSelfSnapExcludeTest {
         assertTrue(abs(to.x - 400f) >= 10f)
         c.drag(start, start + Vec2(12f, 0f), to)
         assertEquals("the point stays where the finger put it", to.x, tool.pointAt(4).x, 0.01f)
+        tool.discard()
+    }
+
+    @Test
+    fun withOtherObjectsOnTheLayerItsBoundsStayATarget() {
+        val (c, layer, tool) = opened(withOther = true)
+        c.snapping.prepare()
+        idle()
+        val right = c.snapping.bounds(layer)!!.right.toFloat()
+        val start = Vec2(340f, 190f)
+        assertTrue("the layer's right edge is the opened path's ($right)", abs(right - start.x) < 6f)
+        // Only a layer whose only object is the opened path is left out (design R8): this one stays
+        // a target for its other object, so the point lands on the layer's right edge.
+        c.drag(start, start + Vec2(12f, 0f), Vec2(right + 5f, 190f))
+        assertEquals(right, tool.pointAt(4).x, 0.01f)
         tool.discard()
     }
 }

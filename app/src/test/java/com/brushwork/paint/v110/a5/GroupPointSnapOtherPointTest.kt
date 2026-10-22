@@ -10,7 +10,6 @@ import com.brushwork.paint.v110.a5.GroupSnapFixtures.Companion.SHAPE_TL
 import com.brushwork.paint.v110.a5.GroupSnapFixtures.Companion.assertVec
 import com.brushwork.paint.v110.a5.GroupSnapFixtures.Companion.dragBy
 import org.junit.After
-import org.junit.Ignore
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -21,7 +20,6 @@ import org.robolectric.RobolectricTestRunner
  * the whole group moves by the same correction. In 1.9 only the grabbed point was snapped, so the
  * others passed every guide.
  */
-@Ignore("v110-A5 repro: fails on 1.9")
 @RunWith(RobolectricTestRunner::class)
 class GroupPointSnapOtherPointTest {
     private val fx = GroupSnapFixtures()
