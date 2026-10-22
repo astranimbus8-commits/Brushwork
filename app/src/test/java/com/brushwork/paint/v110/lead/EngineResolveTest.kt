@@ -33,14 +33,19 @@ import org.robolectric.RobolectricTestRunner
  */
 @RunWith(RobolectricTestRunner::class)
 class EngineResolveTest {
-    private val fields = listOf("idleLayerBudget", "idleBudgets", "budget")
+    // The whole static state of EngineConfig, put back after each test (also under -PengineMode, where it is not Classic).
+    private val fields = listOf(
+        "level", "budget", "strokeBelowMinLayers", "aboveProjection", "residency", "swapStore", "sessionOpen", "idleLayerBudget", "idleBudgets",
+    )
     private val saved = HashMap<String, Any?>()
     private lateinit var savedCurrent: LayerBudget
+    private var savedMode: String? = null
 
     private fun field(name: String) = EngineConfig::class.java.getDeclaredField(name).apply { isAccessible = true }
 
     @Before
     fun setUp() {
+        savedMode = System.getProperty(MODE)
         EngineConfig.closeSession()
         for (f in fields) saved[f] = field(f).get(null)
         savedCurrent = LayerBudget.current
@@ -48,11 +53,9 @@ class EngineResolveTest {
 
     @After
     fun tearDown() {
-        System.clearProperty("brushwork.engineMode")
-        EngineConfig.closeSession()
+        savedMode.let { if (it == null) System.clearProperty(MODE) else System.setProperty(MODE, it) }
         for (f in fields) field(f).set(null, saved[f])
         LayerBudget.current = savedCurrent
-        EngineConfig.residency = ClassicResidency
     }
 
     private fun check(level: EngineLevel, key: String = KEY, below: Int? = null, above: Boolean = false) = EngineCheckResult(
@@ -168,16 +171,16 @@ class EngineResolveTest {
 
     @Test
     fun theTestModeSetsTheLevelAndTheChaosResidency() {
-        System.setProperty("brushwork.engineMode", "tiles")
+        System.setProperty(MODE, "tiles")
         assertEquals(EngineLevel.TILES, EngineConfig.testMode())
         EngineConfig.openSession(EngineLevel.CLASSIC, Budgets.v19(512L shl 20), null)
         assertEquals("the test level wins", EngineLevel.TILES, EngineConfig.level)
         assertTrue(EngineConfig.residency is ChaosResidency)
-        System.setProperty("brushwork.engineMode", " Classic ")
+        System.setProperty(MODE, " Classic ")
         assertEquals(EngineLevel.CLASSIC, EngineConfig.testMode())
-        System.setProperty("brushwork.engineMode", "nonsense")
+        System.setProperty(MODE, "nonsense")
         assertNull(EngineConfig.testMode())
-        System.clearProperty("brushwork.engineMode")
+        System.clearProperty(MODE)
         EngineConfig.closeSession()
         assertEquals(EngineLevel.CLASSIC, EngineConfig.level)
         assertSame(ClassicResidency, EngineConfig.residency)
@@ -186,5 +189,6 @@ class EngineResolveTest {
     private companion object {
         const val KEY = "Pixel 7/8192MiB"
         const val OTHER = "SM-A105/3584MiB"
+        const val MODE = "brushwork.engineMode"
     }
 }

@@ -7,8 +7,11 @@ import android.os.Build
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.Compositor
 import com.brushwork.paint.engine.EngineConfig
+import com.brushwork.paint.engine.EngineLevel
 import com.brushwork.paint.engine.EngineNotices
+import com.brushwork.paint.engine.tiles.ChaosResidency
 import com.brushwork.paint.engine.tiles.ClassicResidency
+import com.brushwork.paint.engine.tiles.ResidencyHooks
 import com.brushwork.paint.engine.tiles.TILE_SIZE
 import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.PixelFacade
@@ -134,11 +137,21 @@ internal object F1Pixels {
         }
     }
 
-    /** Puts the engine's static state back as v1.9 has it: no session, Classic residency, the facade lenient, no notice. */
+    /**
+     * Puts the engine's static state back: no session, the facade lenient, no notice, and the
+     * residency the JVM started with: [ClassicResidency], or [ChaosResidency] under a test level
+     * above CLASSIC (`-PengineMode`, unit-full), so a lead test never turns a unit-full shard Classic.
+     */
     fun resetEngine() {
         PixelFacade.strict = false
         EngineConfig.closeSession()
-        EngineConfig.residency = ClassicResidency
+        EngineConfig.residency = defaultResidency()
         EngineNotices.current = null
+    }
+
+    /** The residency outside a session: the test level's (as `EngineConfig` starts with it). */
+    fun defaultResidency(): ResidencyHooks {
+        val level = EngineConfig.testMode()
+        return if (level != null && level != EngineLevel.CLASSIC) ChaosResidency(EngineConfig.parkChaos()) else ClassicResidency
     }
 }
