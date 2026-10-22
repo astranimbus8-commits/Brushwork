@@ -17,6 +17,8 @@ import com.brushwork.paint.vector.VObject
 import com.brushwork.paint.vector.VectorContent
 import com.brushwork.paint.vector.VectorLayers
 import com.brushwork.paint.vector.VectorOps
+import com.brushwork.paint.vector.copies.CopyEdit
+import com.brushwork.paint.vector.copies.CopyPick
 import com.brushwork.paint.vector.select.ObjectBounds
 import com.brushwork.paint.vector.select.ObjectTouch
 import com.brushwork.paint.vector.select.PendingRenders
@@ -204,7 +206,8 @@ internal class VectorLiftProvider(private val c: EditorController) : ObjectLiftP
         // 1. The object selection (on this layer).
         if (!all && v.selectedLayer === layer) {
             val ids = v.selectedIds
-            if (ids.isNotEmpty()) return begin(layer, ids, onReady)
+            // v1.10 (R1): just the object a side of which was picked: that side alone.
+            if (ids.isNotEmpty()) return begin(layer, ids, sideOf(layer, content, ids), onReady)
         }
         // 2. The objects the pixel selection touches (they become the object selection).
         val sel = c.selection
@@ -248,8 +251,8 @@ internal class VectorLiftProvider(private val c: EditorController) : ObjectLiftP
                 }
                 v.setSelection(layer, ids)
                 if (inline) {
-                    accepted = begin(layer, ids, onReady)
-                } else if (!begin(layer, ids, onReady)) {
+                    accepted = begin(layer, ids, -1, onReady)
+                } else if (!begin(layer, ids, -1, onReady)) {
                     onReady(null)
                 }
             }
@@ -258,25 +261,42 @@ internal class VectorLiftProvider(private val c: EditorController) : ObjectLiftP
             return accepted
         }
         // 3. Every object: the cache is exactly their rendering (nothing to render).
-        return begin(layer, content.objects.mapTo(LinkedHashSet()) { it.id }, onReady)
+        return begin(layer, content.objects.mapTo(LinkedHashSet()) { it.id }, -1, onReady)
     }
 
-    /** The objects of the lift whose preview is being prepared (see [liftBox]), with their layer. */
-    private class Preparing(layer: Layer, val ids: Set<Long>) {
+    /**
+     * v1.10 (R1): the copy of [sidePick] when the lift of [ids] is just its object and that object
+     * still has it (and can show it alone), else -1 (the pick is forgotten then).
+     */
+    private fun sideOf(layer: Layer, content: VectorContent, ids: Set<Long>): Int {
+        val s = sidePick ?: return -1
+        val o = if (s.layer === layer && ids.size == 1 && s.id in ids) content.byId(s.id) else null
+        if (o == null || !CopyEdit.canLift(o, s.k)) {
+            sidePick = null
+            return -1
+        }
+        return s.k
+    }
+
+    /** The objects of the lift whose preview is being prepared (see [liftBox]), with their layer and the side (v1.10, or -1). */
+    private class Preparing(layer: Layer, val ids: Set<Long>, val side: Int) {
         private val ref = WeakReference(layer)
         val layer: Layer? get() = ref.get()
     }
 
     private var preparing: Preparing? = null
 
-    /** Starts the preview of [ids] ([onReady] gets the lift, or null); false = refused right away. */
-    private fun begin(layer: Layer, ids: Set<Long>, onReady: (ObjectLift?) -> Unit): Boolean {
+    /**
+     * Starts the preview of [ids] ([onReady] gets the lift, or null); false = refused right away.
+     * v1.10 (R1): [side] ≥ 0 lifts that copy of the one object [ids] names alone (a [CopyLift]).
+     */
+    private fun begin(layer: Layer, ids: Set<Long>, side: Int, onReady: (ObjectLift?) -> Unit): Boolean {
         request = null
         var refused = false
         var sync = true
-        val prep = Preparing(layer, ids)
+        val prep = Preparing(layer, ids, side)
         preparing = prep
-        c.vectors.beginEdit(layer, ids) { session ->
+        c.vectors.beginEdit(layer, ids, side) { session ->
             if (preparing === prep) preparing = null
             if (session == null) {
                 if (sync) refused = true else onReady(null)
@@ -292,7 +312,12 @@ internal class VectorLiftProvider(private val c: EditorController) : ObjectLiftP
             }
             val apply: (Layer, VectorContent, String, VectorLayers.ShiftHint?, (Boolean) -> Unit) -> Unit =
                 { l, after, label, shift, done -> update(l, after, label, shift, done) }
-            val lift = VectorObjectLift(c, session, session.ids, apply) { ended -> if (current === ended) current = null }
+            val onEnded: (VectorObjectLift) -> Unit = { ended -> if (current === ended) current = null }
+            // (The session shows the side alone only when the object can still show it: the same test.)
+            val one = session.ids.singleOrNull()
+            val obj = one?.let { layer.vector?.byId(it) }
+            val lift = if (side >= 0 && obj != null && CopyEdit.canLift(obj, side)) CopyLift(c, session, obj.id, side, apply, onEnded)
+            else VectorObjectLift(c, session, session.ids, apply, onEnded)
             current = lift
             onReady(lift)
         }
@@ -442,17 +467,27 @@ internal class VectorLiftProvider(private val c: EditorController) : ObjectLiftP
     override fun liftBox(layer: Layer): RectF? {
         val content = layer.vector ?: return null
         if (content.objects.isEmpty()) return null
-        preparing?.takeIf { it.layer === layer }?.let { return boxOf(content, it.ids) }
+        preparing?.takeIf { it.layer === layer }?.let { return sideBox(content, it.ids, it.side) ?: boxOf(content, it.ids) }
         val v = c.vectors
         val la = liftAll
         val all = la != null && la.selection === c.selection && !(v.selectedLayer === layer && v.selectedIds.isNotEmpty())
         if (!all && v.selectedLayer === layer) {
             val ids = v.selectedIds
-            if (ids.isNotEmpty()) return boxOf(content, ids)
+            // v1.10 (R1): a picked side: that copy's box.
+            val k = sidePick?.takeIf { it.layer === layer && ids.size == 1 && it.id in ids }?.k ?: -1
+            if (ids.isNotEmpty()) return sideBox(content, ids, k) ?: boxOf(content, ids)
         }
         val sel = c.selection
         if (!all && sel != null) return if (sel.isEmpty) null else RectF(sel.bounds)
         return boxOf(content, null)
+    }
+
+    /** v1.10 (R1): the box of copy [k] when [ids] is just one object that has it, else null. */
+    private fun sideBox(content: VectorContent, ids: Set<Long>, k: Int): RectF? {
+        if (k < 0) return null
+        val o = ids.singleOrNull()?.let { content.byId(it) } ?: return null
+        if (!CopyEdit.canLift(o, k)) return null
+        return CopyPick.boundsOf(o, k).takeUnless { it.isEmpty }
     }
 
     /** The union of the paint bounds of [ids] of [content] (null = every object), or null when empty. */

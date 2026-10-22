@@ -88,26 +88,40 @@ internal open class VectorObjectLift(
         val shift = LiftGeometry.wholePixelShift(m0)
         if (shift != null && shift[0] == 0 && shift[1] == 0) return finish(false)
         // A whole-pixel move maps the data by exactly that many pixels (the cache can be shifted).
-        val m = if (shift != null) LiftGeometry.translation(shift[0].toFloat(), shift[1].toFloat()) else m0
+        val m = if (shift != null) LiftGeometry.translation(shift[0].toFloat(), shift[1].toFloat()) else committed(m0)
         val content = currentContent() ?: return finish(false)
         val map = HashMap<Long, List<VObject>>()
         // v1.8 (I17): under Distort an object with live copies becomes its mapped pieces.
-        for (o in content.objects) if (o.id in ids) map[o.id] = ObjectCopies.transformedAll(o, m)
+        for (o in content.objects) if (o.id in ids) map[o.id] = mapped(o, m) ?: return finish(false)
         if (map.isEmpty()) return finish(false)
-        val hint = shift?.let { VectorLayers.ShiftHint(map.keys.toSet(), it[0], it[1]) }
+        val hint = if (shiftsCache) shift?.let { VectorLayers.ShiftHint(map.keys.toSet(), it[0], it[1]) } else null
         return apply(content.replaced(map), label, m, hint) {}
     }
+
+    /** v1.10 (R1): the document transform [commit] applies for [m] (a [CopyLift] snaps a drift to an isometry). */
+    protected open fun committed(m: FloatArray): FloatArray = m
+
+    /** v1.10 (R1): what the lifted [o] becomes under [m] (its pieces), or null when that is refused. */
+    protected open fun mapped(o: VObject, m: FloatArray): List<VObject>? = ObjectCopies.transformedAll(o, m)
+
+    /** v1.10 (R1): a whole-pixel move may shift the layer's cache (not for one side: the rest of its object stays). */
+    protected open val shiftsCache: Boolean get() = true
 
     /** Deletes the lifted objects (one undo step [label]); they leave the object selection. */
     override fun delete(label: String): Boolean {
         if (!isOpen) return false
         val content = currentContent() ?: return finish(false)
-        val after = content.without(ids)
-        if (after === content) return finish(false)
-        return apply(after, label, null, null) {
-            val v = c.vectors
-            if (v.selectedLayer === layer) v.setSelection(layer, v.selectedIds - ids)
-        }
+        val after = deleted(content) ?: return finish(false)
+        return apply(after, label, null, null) { afterDelete() }
+    }
+
+    /** v1.10 (R1): [content] once the lifted objects are deleted, or null when nothing would change. */
+    protected open fun deleted(content: VectorContent): VectorContent? = content.without(ids).takeIf { it !== content }
+
+    /** v1.10 (R1): runs once a delete is applied: the deleted objects leave the object selection. */
+    protected open fun afterDelete() {
+        val v = c.vectors
+        if (v.selectedLayer === layer) v.setSelection(layer, v.selectedIds - ids)
     }
 
     override fun release() {
@@ -120,7 +134,7 @@ internal open class VectorObjectLift(
     }
 
     /** The layer's content when the lift can still be applied to it, else null. */
-    private fun currentContent(): VectorContent? = layer.vector?.takeIf { c.doc.indexOf(layer) >= 0 }
+    protected fun currentContent(): VectorContent? = layer.vector?.takeIf { c.doc.indexOf(layer) >= 0 }
 
     /**
      * Applies [after] as one step [label]. Done at once: the lift ends. Rendered in the background:

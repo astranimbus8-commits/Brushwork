@@ -53,6 +53,7 @@ import com.brushwork.paint.ui.common.ArrayLabels
 import com.brushwork.paint.ui.common.TransformLabels17
 import com.brushwork.paint.vector.VectorLayerOps
 import com.brushwork.paint.vector.lift.VectorLift
+import com.brushwork.paint.vector.lift.VectorObjectLift
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -1271,17 +1272,24 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
         if (liveSession() == null) { pinch = null; return }
         // v1.6 increments: the scale on the Scale step (percent of the original), the angle on the Angle step.
         val inc = controller.increments
-        val scaleStep = inc.step(IncrementKind.SCALE)
+        // v1.10 (R1, J18): one mirror side picked: two fingers move and turn it only (the scale
+        // stays 1.0, so a turning pinch never resizes the side and it stays linked).
+        val side = sideLifted()
+        val scale = if (side) 1f else p.scale
+        val scaleStep = if (side) null else inc.step(IncrementKind.SCALE)
         val angleStep = inc.step(IncrementKind.ANGLE)
         val next = if (scaleStep == null && angleStep == null) {
-            TransformHandles.pinch(start, p.focus, p.translation, p.scale, p.rotationDeg)
+            TransformHandles.pinch(start, p.focus, p.translation, scale, p.rotationDeg)
         } else {
-            TransformHandles.pinchStepped(start, p.focus, p.translation, p.scale, p.rotationDeg, scaleStep, angleStep).also { st ->
+            TransformHandles.pinchStepped(start, p.focus, p.translation, scale, p.rotationDeg, scaleStep, angleStep).also { st ->
                 showReadout(listOfNotNull(scaleStep?.let { IncrementReadout.percent(st.scalePercent) }, angleStep?.let { IncrementReadout.angle(st.rotationDeg) }).joinToString(" · "))
             }
         }
         if (next != transformState) applyState(next)
     }
+
+    /** v1.10 (R1): one side of a mirrored object is lifted alone (a `CopyLift`): it can be moved, turned and flipped only (LA4). */
+    private fun sideLifted(): Boolean = ((session?.objectLift as? VectorObjectLift)?.side ?: -1) >= 0
 
     /** Ends the pinch: [cancelled] goes back to where it started, else it settles on whole pixels. */
     private fun finishPinch(p: Pinch, cancelled: Boolean) {

@@ -27,11 +27,14 @@ internal object A1Kit {
     fun translate(dx: Float, dy: Float) = floatArrayOf(1f, 0f, dx, 0f, 1f, dy, 0f, 0f, 1f)
 
     /** A turn by [deg] about the document centre. */
-    fun turn(deg: Double): FloatArray {
+    fun turn(deg: Double): FloatArray = turnAbout(CX, CY, deg)
+
+    /** A turn by [deg] about ([px], [py]). */
+    fun turnAbout(px: Float, py: Float, deg: Double): FloatArray {
         val r = Math.toRadians(deg)
         val c = cos(r).toFloat()
         val s = sin(r).toFloat()
-        return floatArrayOf(c, -s, CX - c * CX + s * CY, s, c, CY - s * CX - c * CY, 0f, 0f, 1f)
+        return floatArrayOf(c, -s, px - c * px + s * py, s, c, py - s * px - c * py, 0f, 0f, 1f)
     }
 
     fun mul(a: FloatArray, b: FloatArray): FloatArray = FloatArray(9) { i ->

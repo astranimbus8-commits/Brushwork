@@ -113,6 +113,12 @@ object CopyEdit {
     }
 
     /**
+     * True when side [k] of [o] can be lifted alone: [o] has live copies, copy k among them, and
+     * the object without it ([dropCopy], what the edit preview's hole shows) is usable.
+     */
+    fun canLift(o: VObject, k: Int): Boolean = CopyPick.side(o, k) != null && ObjectCopies.hasCopies(o) && dropCopy(o, k) != null
+
+    /**
      * [maps] (identity first) without the maps j ≥ 1 that coincide with the identity or with an
      * earlier kept map (within [MERGE_EPS]); null when a map is not affine or not usable.
      */
