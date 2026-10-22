@@ -2621,9 +2621,10 @@ every other end (✕, another tool, a tap) drops the move.
 **Resizing one side is blocked (LA4, the user's answer).** While `sidePicked`: no scale handles
 are drawn or hit (`sideHandlesShown`; a corner touch is a move), `objectScale` is null so the
 pill hides its Scale row, `modeRefusal` names Distort and Free deform `SIDE_RESIZE_BLOCKED`
-(dimmed in the mode menu, the reason under the row), skew and the scale setters are refused, the
-two-finger gesture moves and turns only (`applyPinch` locks its scale to 1.0), and the first
-refusal of a pick toasts `SIDE_RESIZE_BLOCKED`. A same-spot second tap lifts all sides, where
+(dimmed in the mode menu, the reason under the row), skew, the scale setters and Fit to canvas
+are refused, the two-finger gesture moves and turns only (`applyPinch` locks its scale to 1.0),
+and the first refusal of a pick, or the first drag that starts at a box corner, toasts
+`SIDE_RESIZE_BLOCKED`. A same-spot second tap lifts all sides, where
 every handle and mode works as in v1.9. **Detach is not built:** a picked side always stays
 linked (`CopyEdit.detachOne` does not exist).
 

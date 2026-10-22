@@ -264,8 +264,9 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
     /**
      * v1.10 (R1, LA4: the user's answer "Block resizing"): one side of a mirrored object is
      * lifted alone (a `CopyLift`): it can be moved, turned and flipped only. The box has no scale
-     * handles, the Scale row is hidden ([objectScale] null) and Distort / Free deform and the
-     * sizes are refused with `MirrorLabels110.SIDE_RESIZE_BLOCKED` (a toast once per pick).
+     * handles, the Scale row is hidden ([objectScale] null) and Distort / Free deform, the sizes
+     * and Fit to canvas are refused with `MirrorLabels110.SIDE_RESIZE_BLOCKED` (a toast once per
+     * pick, also shown when a drag starts at a box corner).
      */
     var sidePicked by mutableStateOf(false)
         private set
@@ -762,7 +763,15 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
 
     // ------------------------------------------------------------------ input
 
-    private class Gesture(val hit: HandleHit, val start: TransformState, val from: Vec2, val pivot: Vec2, val rotateEdge: Int) {
+    private class Gesture(
+        val hit: HandleHit,
+        val start: TransformState,
+        val from: Vec2,
+        val pivot: Vec2,
+        val rotateEdge: Int,
+        /** v1.10 (LA4): it went down on a corner of a picked side (no handle there: it moves the side). */
+        val sideCorner: Boolean = false,
+    ) {
         /** What the box snaps to during this gesture (built on the first move; rebuilt when layer bounds arrive). */
         var targets: SnapTargets? = null
         var targetsVersion = -1
@@ -792,9 +801,11 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
         val t = controller.viewTransform
         val layout = HandleLayout.compute(st, { t.docToScreen(it) }, t.density, sides = sideHandlesShown)
         val found = layout.hitTest(t.docToScreen(Vec2(p.x, p.y)))
-        // v1.10 (LA4): one mirror side picked: no corner handle is drawn, so none is hit (a drag there moves it).
-        val hit = if (sidePicked && found.kind == HandleKind.CORNER) HandleHit(HandleKind.MOVE) else found
-        gesture = Gesture(hit, st, Vec2(p.x, p.y), st.center(), layout.rotateEdge)
+        // v1.10 (LA4): one mirror side picked: no corner handle is drawn, so none is hit (a drag
+        // there moves it, and once it drags the toast says why it does not resize).
+        val sideCorner = sidePicked && found.kind == HandleKind.CORNER
+        val hit = if (sideCorner) HandleHit(HandleKind.MOVE) else found
+        gesture = Gesture(hit, st, Vec2(p.x, p.y), st.center(), layout.rotateEdge, sideCorner)
         session?.let { if (snapToObjects && hit.kind != HandleKind.ROTATE) requestSnapBounds(it) }
         controller.invalidateOverlay()
     }
@@ -809,7 +820,10 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
         val distort = mode == Mode.DISTORT
         if (!g.dragging) {
             val t = controller.viewTransform
-            if (t.docToScreen(to).distanceTo(t.docToScreen(g.from)) > t.dp(SNAP_SLOP_DP)) g.dragging = true
+            if (t.docToScreen(to).distanceTo(t.docToScreen(g.from)) > t.dp(SNAP_SLOP_DP)) {
+                g.dragging = true
+                if (g.sideCorner) sideResizeBlocked()
+            }
         }
         // Every frame snaps what the finger alone gives (never the last snapped state), so
         // moving farther than the snap distance lets go of a guide.
@@ -1626,8 +1640,14 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
         update { s.initial }
     }
 
-    /** Scales uniformly to fit the canvas, centered, straightened (flips are kept). */
-    fun fitToCanvas() = update { it.fittedTo(controller.doc.width, controller.doc.height) }
+    /**
+     * Scales uniformly to fit the canvas, centered, straightened (flips are kept). v1.10 (LA4):
+     * refused while one mirror side is picked (it would resize that side alone).
+     */
+    fun fitToCanvas() {
+        if (sidePicked) { sideResizeBlocked(); return }
+        update { it.fittedTo(controller.doc.width, controller.doc.height) }
+    }
 
     /**
      * Applies a command to the pending transform (not while a finger is moving it). Anything but

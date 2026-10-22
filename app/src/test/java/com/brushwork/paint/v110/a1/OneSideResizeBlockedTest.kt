@@ -5,6 +5,7 @@ import android.graphics.Color
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.engine.BitmapUtils
+import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
 import com.brushwork.paint.tools.transform.TransformTool
 import com.brushwork.paint.tools.transform.TransformTool.Mode
@@ -35,8 +36,9 @@ import kotlin.math.abs
 /**
  * v1.10 (R1 (a), LA4: the user's answer "Block resizing"): with one side picked, no scale handle
  * is drawn or hit (a drag on a corner moves the side), the Scale row is hidden, Distort and Free
- * deform are refused with `MirrorLabels110.SIDE_RESIZE_BLOCKED` and so are typed sizes, the toast
- * shows once per pick; a drifting transform is snapped to an isometry before the commit. After
+ * deform are refused with `MirrorLabels110.SIDE_RESIZE_BLOCKED` and so are typed sizes and Fit to
+ * canvas, the toast shows once per pick (also for a drag at the box's corner); a drifting
+ * transform is snapped to an isometry before the commit. After
  * the same-spot second tap (all sides) every handle and mode works as in v1.9.
  */
 @RunWith(RobolectricTestRunner::class)
@@ -134,6 +136,56 @@ class OneSideResizeBlockedTest {
         tool.mode = Mode.DISTORT
         assertEquals(Mode.DISTORT, tool.mode)
         tool.discard()
+    }
+
+    @Test
+    fun fitToCanvasAndACornerDragShowTheToastOncePerPick() {
+        val (c, tool) = mirrored()
+        c.tap(422f, 120f)
+        assertTrue(kit.idleUntil { VectorLift.activeLift(c)?.side == 1 })
+
+        // Fit to canvas would resize the side alone: refused, with the toast; nothing changes.
+        val st0 = tool.transformState!!
+        c.message = null
+        tool.fitToCanvas()
+        assertEquals(MirrorLabels110.SIDE_RESIZE_BLOCKED, c.message)
+        assertEquals("not fitted", st0, tool.transformState)
+        // A drag at the handle-less corner moves the side; the toast was already shown for this pick.
+        c.message = null
+        c.drag(st0.corners()[2], 37f, 23f)
+        assertNull("once per pick", c.message)
+        assertEquals("not resized", 1f, abs(tool.transformState!!.sx), 1e-4f)
+        tool.commit()
+        assertTrue(kit.idleUntil { !c.vectors.isRendering })
+
+        // A new pick (the tool chosen again: ✓ keeps the pick): a drag inside the side says
+        // nothing; a drag at its corner shows the toast once it drags, and moves the side without
+        // resizing it.
+        c.selectTool(ToolId.BRUSH)
+        kit.transform(c)
+        val copy = CopyPick.boundsOf(c.vec.vector!!.byId(1)!!, 1)
+        c.tap(copy.centerX(), copy.centerY())
+        assertTrue(kit.idleUntil { VectorLift.activeLift(c)?.side == 1 })
+        c.message = null
+        c.drag(tool.transformState!!.center(), -40f, 0f)
+        assertNull("a move inside the side", c.message)
+        assertTrue("still one side", tool.sidePicked)
+        val st1 = tool.transformState!!
+        c.drag(st1.corners()[2], -30f, 20f)
+        assertEquals(MirrorLabels110.SIDE_RESIZE_BLOCKED, c.message)
+        val st2 = tool.transformState!!
+        assertEquals("not resized", 1f, abs(st2.sx), 1e-4f)
+        assertEquals("not resized", 1f, abs(st2.sy), 1e-4f)
+        assertTrue("moved", st2.center().x < st1.center().x - 20f && st2.center().y > st1.center().y + 10f)
+        c.message = null
+        tool.fitToCanvas()
+        assertNull("once per pick", c.message)
+        assertEquals("not fitted", st2, tool.transformState)
+        tool.commit()
+        assertTrue(kit.idleUntil { !c.vectors.isRendering })
+        val maps = ObjectCopies.of(c.vec.vector!!.byId(1)!!).maps
+        assertEquals("still linked", 2, maps.size)
+        assertTrue("an isometry", CopyEdit.isIsometry(maps[1]))
     }
 
     @Test
