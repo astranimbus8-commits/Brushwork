@@ -44,6 +44,13 @@ object BlendModes {
         }
     }
 
+    /**
+     * v1.10 (F1, design 2.5): true where a transparent source clears the destination with this
+     * mode's paint: MULTIPLY below API 29 (PorterDuff MULTIPLY). There a transparent part of a
+     * layer is drawn, never skipped (`Compositor.drawLayerPixels`).
+     */
+    fun clearsOnTransparent(mode: LayerBlendMode): Boolean = Build.VERSION.SDK_INT < 29 && mode == LayerBlendMode.MULTIPLY
+
     /** New paint configured with [mode] and [opacity] (0..1). */
     fun paint(mode: LayerBlendMode, opacity: Float): Paint = Paint(Paint.FILTER_BITMAP_FLAG).apply {
         alpha = (opacity.coerceIn(0f, 1f) * 255f + 0.5f).toInt()

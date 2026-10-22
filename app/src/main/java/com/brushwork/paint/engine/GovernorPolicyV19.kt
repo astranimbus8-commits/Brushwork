@@ -143,7 +143,7 @@ object GovernorPolicyV19 : GovernorPolicy {
      * thread alone could take longer than the 50 ms a CRITICAL trim may. Nothing while
      * `UndoManager.holdTrim` holds (an edit in progress). Main thread.
      */
-    fun trimUndo(history: UndoManager): UndoTrim {
+    override fun trimUndo(history: UndoManager): UndoTrim {
         val h = heap
         val target = (h.max() * HEAP_TARGET).toLong()
         val over = h.used() + h.nativeUsed() - target

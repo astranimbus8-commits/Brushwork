@@ -18,6 +18,13 @@ interface GovernorPolicy {
 
     /** Whether an allocation of [bytes] for [purpose] (a short name, for logs) may go ahead. */
     fun admit(bytes: Long, purpose: String): Boolean
+
+    /**
+     * v1.10 (F1, design 2.4, finding 8): drops the oldest undo steps of [history] as memory
+     * requires. The default is v1.9's ([GovernorPolicyV19.trimUndo]); A7's `GovernorPolicyV110`
+     * overrides it.
+     */
+    fun trimUndo(history: UndoManager): GovernorPolicyV19.UndoTrim = GovernorPolicyV19.trimUndo(history)
 }
 
 /**
