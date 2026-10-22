@@ -331,16 +331,15 @@ internal object ShapeStripItems {
             StripItem(STYLE, if (lineLike) LINE_ENDS_LABEL else STYLE_LABEL, STYLE_DP.dp, shown = info.styleShown) {
                 val s = tool.settings
                 if (!s.type.isLineLike) {
-                    val fill = s.fillColor ?: c.color
-                    ShapeMenuCell(
+                    // v1.10 (R3): the paint mode's glyph; its menu holds the three icon segments.
+                    PaintModeMenuCell(
                         label = STYLE_LABEL,
-                        entries = ShapeStyle.entries,
-                        selected = s.style,
-                        entryText = { it.label },
-                        onPick = { st -> set { it.copy(style = st) } },
+                        mode = s.style.paintMode(),
+                        fill = s.fillColor ?: c.color,
                         width = STYLE_DP.dp,
-                        entryGlyph = { StyleGlyph(it, fill) },
-                    ) { StyleGlyph(s.style, fill) }
+                        tag = PaintModeTags.SHAPE_STRIP,
+                        onPick = { m -> set { it.copy(style = m.shapeStyle()) } },
+                    )
                 } else if (s.strokeWith == ShapeStroke.PLAIN) {
                     // A brush paints its own ends: the line caps only apply to plain lines.
                     ShapeMenuCell(

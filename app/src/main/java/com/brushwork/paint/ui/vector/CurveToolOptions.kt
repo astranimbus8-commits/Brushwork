@@ -645,7 +645,11 @@ internal fun CurveSettingsSheet(tool: CurveTool, onDismiss: () -> Unit) {
 
     BwSheet(title = tool.id.label, onDismiss = onDismiss) {
         // region v110-A2 paintMode
+        // v1.10 (R3): the paint mode, the three icon segments of every paint-mode control (Fill is
+        // a fill without a stroke, Stroke no fill); they replace v1.9's fill switch.
+        PaintModeSheetRow(tool.paintMode?.paintMode(), PaintModeTags.CURVE) { m -> tool.setPaintMode(m.curvePaint()) }
         SectionHeader("Stroke")
+        // (The stroke kinds still offer "No stroke", the Fill segment's stroke: LeadRequest.)
         ChoiceChips(CurveStroke.entries.map { it.label }, s.stroke.ordinal, { i ->
             val e = CurveStroke.entries[i]
             set { it.copy(stroke = e, lastStroke = if (e != CurveStroke.NONE) e else it.lastStroke) }
@@ -695,12 +699,9 @@ internal fun CurveSettingsSheet(tool: CurveTool, onDismiss: () -> Unit) {
             CurveStroke.NONE -> Hint("Only the fill is painted")
         }
 
-        SectionHeader("Fill")
-        ToggleRow(
-            "Fill the path", s.fill, { v -> set { it.copy(fill = v) } },
-            description = if (if (tool.isPath) tool.pathCyclic else s.closed) "Fills the inside of the closed path" else "An open path is filled as if it were closed",
-        )
         if (s.fill) {
+            SectionHeader("Fill")
+            Hint(if (if (tool.isPath) tool.pathCyclic else s.closed) "Fills the inside of the closed path" else "An open path is filled as if it were closed")
             // A reopened path with a gradient fill (an imported SVG) keeps it until a color is picked.
             FillColorRow(s.fillColor, controller.color, keptLabel = if (tool.reopenedGradientFill) GRADIENT_KEPT else null) { col -> set { it.copy(fillColor = col) } }
         }

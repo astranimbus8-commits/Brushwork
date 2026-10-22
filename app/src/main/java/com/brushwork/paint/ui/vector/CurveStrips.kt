@@ -507,31 +507,38 @@ private const val PATH_SHAPES = "Path shapes"
 
 // region v110-A2 paintMode
 /**
- * "Stroke kind": the paint mode's icon; its dropdown holds v1.7's three segments ("Stroke",
- * "Fill", "Both", known as [CurveLabels17.STROKE_ONLY], [CurveLabels17.FILL_ONLY] and
- * [CurveLabels17.BOTH]; Fill and Both greyed with 1 or 2 points, a tap says
- * [CurveLabels17.FILL_NEEDS_3]) and the stroke kinds ("Current brush", "Plain line").
+ * "Stroke kind": the paint mode's glyph (v1.10, R3: the [PaintModeChoices] glyph, filled with the
+ * fill color); its dropdown holds the three paint-mode segments, icons only (known as
+ * [CurveLabels17.STROKE_ONLY], [CurveLabels17.FILL_ONLY] and [CurveLabels17.BOTH]; Fill and Both
+ * greyed with 1 or 2 points, a tap says [CurveLabels17.FILL_NEEDS_3]) and the stroke kinds
+ * ("Current brush", "Plain line").
  */
 private fun strokeKindItem(tool: CurveTool, f: CurveStripFacts, row: StripRow, rank: Int) =
     item(CurveKeys.STROKE_KIND, CurveLabels17.STROKE_KIND, CURVE_STROKE_KIND_DP, row, rank) {
         val mode = tool.paintMode
         val erasing = tool.eraseOn
-        val icon = when {
-            // v1.9 (R11 a): the eraser's glyph while the tool erases.
-            erasing -> EditorIcons.Eraser
-            mode == CurvePaint.FILL -> Icons.Filled.FormatColorFill
-            mode == CurvePaint.BOTH -> Icons.Filled.FormatShapes
-            else -> Icons.Filled.LineWeight
-        }
-        DropCell(CurveLabels17.STROKE_KIND, CURVE_STROKE_KIND_DP, face = { Icon(icon, contentDescription = null, tint = BrushworkColors.OnChrome, modifier = Modifier.size(22.dp)) }) { close ->
-            val fillOk = tool.fillPossible
-            fun pick(m: CurvePaint) {
-                if (m != CurvePaint.STROKE && !fillOk) tool.controller.toast(CurveLabels17.FILL_NEEDS_3) else tool.setPaintMode(m)
-                close()
+        DropCell(CurveLabels17.STROKE_KIND, CURVE_STROKE_KIND_DP, face = {
+            if (erasing) {
+                // v1.9 (R11 a): the eraser's glyph while the tool erases.
+                Icon(EditorIcons.Eraser, contentDescription = null, tint = BrushworkColors.OnChrome, modifier = Modifier.size(22.dp))
+            } else {
+                com.brushwork.paint.ui.common.PaintModeGlyph((mode ?: CurvePaint.STROKE).paintMode(), Color(tool.settings.fillColor ?: tool.controller.color))
             }
-            PaintModeEntry("Stroke", CurveLabels17.STROKE_ONLY, mode == CurvePaint.STROKE, available = true) { pick(CurvePaint.STROKE) }
-            PaintModeEntry("Fill", CurveLabels17.FILL_ONLY, mode == CurvePaint.FILL, available = fillOk) { pick(CurvePaint.FILL) }
-            PaintModeEntry("Both", CurveLabels17.BOTH, mode == CurvePaint.BOTH, available = fillOk) { pick(CurvePaint.BOTH) }
+        }) { close ->
+            val fillOk = tool.fillPossible
+            PaintModeChoices(
+                selected = mode?.paintMode(),
+                refusal = { m -> if (m.curvePaint() != CurvePaint.STROKE && !fillOk) CurveLabels17.FILL_NEEDS_3 else null },
+                tag = PaintModeTags.CURVE_STRIP,
+                onSelect = { m ->
+                    tool.setPaintMode(m.curvePaint())
+                    close()
+                },
+                onRefused = { why ->
+                    tool.controller.toast(why)
+                    close()
+                },
+            )
             HorizontalDivider(color = BrushworkColors.ChromeBorder)
             val stroke = tool.settings.stroke
             for (k in STROKE_KINDS) {
