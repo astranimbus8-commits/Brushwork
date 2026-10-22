@@ -18,6 +18,8 @@ import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.LayerArray
 import com.brushwork.paint.model.LayerData
+import com.brushwork.paint.tools.ToolId
+import com.brushwork.paint.tools.array.ArrayTool
 import com.brushwork.paint.ui.common.ArrayLabels
 import com.brushwork.paint.ui.common.ArrayLabels110
 import com.brushwork.paint.vector.VectorContent
@@ -149,7 +151,7 @@ object ArrayBehind {
             } ?: return@paused null
             placeBelow(c, layer, newLayer(c, layer, bmp, data))
         } ?: return false
-        ArrayOps.openTool(c, made)
+        opened(c, made, layer)
         return true
     }
 
@@ -212,7 +214,7 @@ object ArrayBehind {
                 px?.let { ArraySources.release(it) }
             }
         } ?: return false
-        ArrayOps.openTool(c, made)
+        opened(c, made, src)
         return true
     }
 
@@ -233,8 +235,17 @@ object ArrayBehind {
             placeBelow(c, layer, newLayer(c, layer, bmp, data))
         } ?: return false
         c.vectors.setSelection(null, emptySet())
-        ArrayOps.openTool(c, made)
+        opened(c, made, layer)
         return true
+    }
+
+    /**
+     * The Array tool opened on the new copies-only layer [made], remembering [src] so that leaving
+     * the tool selects the source again (`ArrayTool.madeBehind`, the lead's choice).
+     */
+    private fun opened(c: EditorController, made: Layer, src: Layer) {
+        ArrayOps.openTool(c, made)
+        (c.tools[ToolId.ARRAY] as? ArrayTool)?.madeBehind(made, src)
     }
 
     /**

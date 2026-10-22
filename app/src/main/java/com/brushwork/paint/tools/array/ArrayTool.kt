@@ -6,10 +6,13 @@ import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.RectF
+import android.os.Handler
+import android.os.Looper
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.brushwork.paint.EditorController
+import com.brushwork.paint.UiPrefs
 import com.brushwork.paint.array.ArrayBehind
 import com.brushwork.paint.array.ArrayOps
 import com.brushwork.paint.array.ArraySources
@@ -31,6 +34,7 @@ import com.brushwork.paint.model.LayerTree
 import com.brushwork.paint.tools.Tool
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
+import com.brushwork.paint.ui.common.ArrayLabels110
 import com.brushwork.paint.ui.common.ArrayLabels18
 import com.brushwork.paint.vector.VPath
 import com.brushwork.paint.vector.VStop
@@ -66,6 +70,14 @@ import kotlin.math.roundToInt
  *   their opacity and size only; the tint returns on release (the commit's preview and the
  *   cache). A change of the look alone commits as ONE step [ArrayLabels18.HISTORY_LOOK]
  *   ([ArrayOps.labelFor]).
+ * - v1.10 (R4, UQ5): on a copies-only layer (`ArraySpec.hideSource`, made by `ArrayBehind`) the
+ *   copies show in front of every layer while a handle, slider or field adjusts them (the
+ *   overlay, as above) and drop behind at the release: a preview still up while its commit
+ *   renders is drawn in the tiles, at the layer's place ([Preview.showAll]); the next adjustment
+ *   brings it to the front again ([Preview.showInFront]). The first time per install,
+ *   `ArrayLabels110.BEHIND_HINT` says so (`UiPrefs.hintArrayBehind`). Leaving the tool (another
+ *   tool, the sheet closed) off a layer made behind its source selects that source again
+ *   ([madeBehind]), once.
  *
  * On a layer without an array it draws nothing and takes no touches. Opening it on a layer whose
  * raster source is being edited runs "Finish source edit" (§3.3 a). Nothing is ever pending
@@ -116,6 +128,19 @@ class ArrayTool(controller: EditorController) : Tool(controller) {
      */
     var plainTint by mutableStateOf<List<VStop>>(emptyList())
         private set
+
+    /**
+     * v1.10 (R4): the copies-only layer `ArrayBehind` just made and its source, while the tool
+     * works on that layer; leaving the tool selects the source again ([leaveBehind]). Cleared on
+     * another layer and once used.
+     */
+    private var behind: Pair<Layer, Layer>? = null
+
+    /** v1.10 (R4): `ArrayLabels110.BEHIND_HINT` was asked for in this session (the preference is read once). */
+    private var hintAsked = false
+
+    /** v1.10 (R4): runs [leaveBehind] once a tool switch is done (a pause or a layer switch then leaves it be). */
+    private val handler = Handler(Looper.getMainLooper())
 
     /** The look the Look tab's next edit starts from: the shown one, else no look at [plainPace] with [plainTint]. */
     fun lookBase(): ArrayLook = shownSpec()?.look ?: ArrayLook.IDENTITY.copy(easing = plainPace, tint = plainTint)
@@ -273,11 +298,35 @@ class ArrayTool(controller: EditorController) : Tool(controller) {
 
     /**
      * Closes the Array sheet (✕, Back). A value still being typed is kept: what the preview
-     * shows is committed as ONE step, as the field's own focus loss would.
+     * shows is committed as ONE step, as the field's own focus loss would. v1.10 (R4): on a
+     * layer just made behind its source, the source is selected again ([leaveBehind]).
      */
     fun closeSheet() {
         commitPreview()
         sheetOpen = false
+        leaveBehind()
+    }
+
+    /**
+     * v1.10 (R4, lead's choice): `ArrayBehind` made the copies-only [layer] behind [source] and
+     * opened this tool on it; leaving the tool (another tool, the sheet closed) selects [source]
+     * again, once, while it exists and [layer] is still the active one.
+     */
+    fun madeBehind(layer: Layer, source: Layer) {
+        behind = if (controller.activeLayer === layer) layer to source else null
+    }
+
+    /**
+     * v1.10 (R4): selects the source of the layer made behind it ([madeBehind]) when [layer] is
+     * still active and the source exists; [afterSwitch]: only once this tool is no longer the
+     * current one (a pause around an operation keeps it for later).
+     */
+    private fun leaveBehind(afterSwitch: Boolean = false) {
+        val (layer, source) = behind ?: return
+        if (afterSwitch && controller.currentTool === this) return
+        behind = null
+        if (controller.activeLayer !== layer || controller.doc.indexOf(source) < 0) return
+        controller.selectLayer(source)
     }
 
     /** "Apply array" on the active layer (a text array asks first). */
@@ -289,13 +338,18 @@ class ArrayTool(controller: EditorController) : Tool(controller) {
 
     /**
      * "Remove array" on the active layer. v1.10 (R4, UQ11): on a copies-only layer the whole layer
-     * goes (`ArrayBehind.removeWithLayer`), and the sheet with it.
+     * goes (`ArrayBehind.removeWithLayer`), and the sheet with it; the source it was made behind
+     * is selected again ([madeBehind]).
      */
     fun removeArray() {
         val layer = target ?: return
         dropPreview()
         val whole = ArrayBehind.isCopiesOnly(layer)
-        if (ArrayOps.remove(controller, layer) && whole) sheetOpen = false
+        val source = behind?.takeIf { it.first === layer }?.second
+        if (!ArrayOps.remove(controller, layer) || !whole) return
+        sheetOpen = false
+        behind = null
+        if (source != null && controller.doc.indexOf(source) >= 0) controller.selectLayer(source)
     }
 
     /** "Edit source pixels" on the active layer, then the last painting tool to paint the source with. */
@@ -332,6 +386,8 @@ class ArrayTool(controller: EditorController) : Tool(controller) {
             plainTint = emptyList()
             finishSourceOf(layer)
             if (layer.array != null && !layer.isFolder) sheetOpen = true
+            // v1.10 (R4): work on another layer ends "leave to the source".
+            if (behind?.first !== layer) behind = null
         }
     }
 
@@ -354,6 +410,9 @@ class ArrayTool(controller: EditorController) : Tool(controller) {
         // A vector commit still rendering keeps its preview, drawn in the tiles from now on
         // (this tool's overlay stops drawing).
         if (committing == null) dropPreview() else preview?.showAll()
+        // v1.10 (R4): a tool switch off a layer made behind its source selects the source, once
+        // the switch is done (a pause around an operation, or a layer switch, leaves it be).
+        if (behind != null) handler.post { leaveBehind(afterSwitch = true) }
     }
 
     override fun onDispose() {
@@ -522,9 +581,24 @@ class ArrayTool(controller: EditorController) : Tool(controller) {
         // nothing: no step would ever end that preview.
         if (running == null && s == a.spec) return
         val p = running ?: startPreview(layer) ?: return
+        // v1.10 (R4, UQ5): a copies-only layer's copies come to the front while they are adjusted.
+        if (draft && ArrayDraw.hidesSource(s)) {
+            p.showInFront()
+            hintBehind()
+        }
         p.update(s, draft)
         previewSpec = p.spec
         previewChanges++
+    }
+
+    /** v1.10 (R4): [ArrayLabels110.BEHIND_HINT], the first time per install the copies of a copies-only layer come to the front. */
+    private fun hintBehind() {
+        if (hintAsked) return
+        hintAsked = true
+        val prefs = UiPrefs(controller.appContext)
+        if (prefs.hintArrayBehind) return
+        prefs.hintArrayBehind = true
+        controller.toast(ArrayLabels110.BEHIND_HINT)
     }
 
     private fun commitOn(layer: Layer, spec: ArraySpec) {
@@ -559,6 +633,9 @@ class ArrayTool(controller: EditorController) : Tool(controller) {
         // shows the new copies until it lands (a superseded render's preview goes on).
         if (!vector && committing === token && s != a.spec && !a.spec.editingSource) previewOn(layer, s)
         if (committing === token) shownAtCommit = previewChanges
+        // v1.10 (R4, UQ5): released, a copies-only layer's copies drop behind: the preview still up
+        // while the commit renders is drawn in the tiles, at the layer's place.
+        if (committing === token && ArrayDraw.hidesSource(s)) preview?.takeIf { it.layer === layer }?.showAll()
         controller.invalidateOverlay()
     }
 
@@ -771,6 +848,17 @@ class ArrayTool(controller: EditorController) : Tool(controller) {
             val dirty = RectF(drawn).apply { union(cover) }
             drawn.set(cover)
             controller.invalidateDoc(outward(dirty))
+        }
+
+        /**
+         * v1.10 (R4, UQ5): back from [showAll] to this tool's overlay (a copies-only layer adjusted
+         * again while its last commit renders): the tiles hide the layer again, once.
+         */
+        fun showInFront() {
+            if (!inTiles) return
+            inTiles = false
+            controller.invalidateDoc(outward(drawn))
+            controller.invalidateOverlay()
         }
 
         /** The copies in screen space over the canvas (the tool's overlay), while the tiles hide the layer. */
