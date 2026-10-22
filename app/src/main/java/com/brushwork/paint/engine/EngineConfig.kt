@@ -24,7 +24,7 @@ import java.util.Collections
 import java.util.IdentityHashMap
 import java.util.WeakHashMap
 
-/** v1.10 (F1, design 2.11): the "Layer storage" setting (`AppSettings.layerStorageMode`). */
+/** v1.10 (F1, design 2.11): the layer storage setting (`AppSettings.layerStorageMode`; its label is `LabelsV110`'s). */
 enum class LayerStorageMode { AUTOMATIC, FULL, CLASSIC }
 
 /** v1.10 (F1, design 2.0, J1): what the engine runs with while an editor is open (I31: fixed for the session). */
