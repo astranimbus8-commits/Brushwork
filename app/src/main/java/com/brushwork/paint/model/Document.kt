@@ -61,6 +61,12 @@ enum class ColorMode(val label: String) {
  * the facade gives v1.9's bitmaps. A BLANK, PARKED or EVICTED store is materialized by the getter
  * (main thread only, counted in [PixelFacade]); presence checks use [hasMask], which never
  * materializes.
+ *
+ * v1.10 (F1c): the store swaps (the [pixels] and [maskPixels] setters, [rehouse], the getter's
+ * materialization) hold this layer's monitor, so a residency that cut or materialized a store can
+ * check under it that the layer still holds what it read (`ChaosResidency.park`): the design keeps
+ * them on the main thread, but a test scope (`Dispatchers.Unconfined`) resumes a canvas commit on a
+ * worker while the main looper parks.
  */
 class Layer(
     val id: Long,
@@ -70,8 +76,8 @@ class Layer(
     /** v1.9's constructor: [bitmap] becomes a [FlatPixels] store ([FOLDER_BITMAP] a [FolderPixels] one). */
     constructor(id: Long, name: String, bitmap: Bitmap) : this(id, name, storeOf(bitmap))
 
-    private var store: PixelStore = pixels
-    private var maskStore: PixelStore? = null
+    @Volatile private var store: PixelStore = pixels
+    @Volatile private var maskStore: PixelStore? = null
 
     /**
      * v1.10 (F1): where the content is. Replacing it by another store bumps [pixelGeneration];
@@ -80,16 +86,20 @@ class Layer(
     var pixels: PixelStore
         get() = store
         set(value) {
-            if (value !== store) pixelGeneration++
-            store = value
+            synchronized(this) {
+                if (value !== store) pixelGeneration++
+                store = value
+            }
         }
 
     /** v1.10 (F1): where the mask is; null = no mask. The same rules as [pixels]. */
     var maskPixels: PixelStore?
         get() = maskStore
         set(value) {
-            if (value !== maskStore) pixelGeneration++
-            maskStore = value
+            synchronized(this) {
+                if (value !== maskStore) pixelGeneration++
+                maskStore = value
+            }
         }
 
     /**
@@ -181,8 +191,10 @@ class Layer(
 
     /** v1.10 (F1): park, unpark, evict and materialize put the same pixels in another store: no [pixelGeneration] bump (J5). Main only. */
     internal fun rehouse(content: PixelStore, mask: PixelStore?) {
-        store = content
-        maskStore = mask
+        synchronized(this) {
+            store = content
+            maskStore = mask
+        }
     }
 
     /** The getter's materialization of [p] (content or mask): a FLAT bitmap with the same pixels, the old store released. Main only. */
@@ -199,7 +211,7 @@ class Layer(
             }
         }
         PixelFacade.materializations++
-        if (mask) maskStore = FlatPixels(b) else store = FlatPixels(b)
+        synchronized(this) { if (mask) maskStore = FlatPixels(b) else store = FlatPixels(b) }
         TileOps.dispose(p)
         return b
     }

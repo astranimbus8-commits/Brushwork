@@ -51,6 +51,10 @@ object ClassicResidency : ResidencyHooks {
  *
  * A park keeps the flat bitmap alive (it is not recycled): v1.9 code (undo steps, tools) may
  * still hold it. An unpark releases the tiles it replaced.
+ *
+ * F1c: a park or unpark puts its new stores in only when the layer still holds the ones it read
+ * (checked under the layer's monitor, `Layer.rehouse`); a store replaced meanwhile, by a canvas
+ * commit a test scope resumed on a worker, wins and the new tiles or bitmaps are let go.
  */
 class ChaosResidency(private val everyTask: Boolean = false) : ResidencyHooks {
     override fun activate(layer: Layer) = unpark(layer)
@@ -66,28 +70,46 @@ class ChaosResidency(private val everyTask: Boolean = false) : ResidencyHooks {
     /** Parks [layer]'s flat content and mask; false when nothing was parked (a folder, a pinned layer, nothing flat). Main only. */
     fun park(layer: Layer): Boolean {
         if (layer.isFolder || layer.pins > 0) return false
-        val content = layer.pixels as? FlatPixels
-        val mask = layer.maskPixels as? FlatPixels
+        val readContent = layer.pixels
+        val readMask = layer.maskPixels
+        val content = readContent as? FlatPixels
+        val mask = readMask as? FlatPixels
         if (!parkable(content) && !parkable(mask)) return false
-        val c = if (parkable(content)) TiledPixels.fromBitmap(content!!.bitmap) else layer.pixels
-        val m = if (parkable(mask)) TiledPixels.fromBitmap(mask!!.bitmap) else layer.maskPixels
-        layer.rehouse(c, m)
-        return true
+        val c = if (parkable(content)) TiledPixels.fromBitmap(content!!.bitmap) else readContent
+        val m = if (parkable(mask)) TiledPixels.fromBitmap(mask!!.bitmap) else readMask
+        if (rehouseIfUnchanged(layer, readContent, readMask, c, m)) return true
+        if (c !== readContent) TileOps.releaseStore(c as TiledPixels)
+        if (m !== readMask) TileOps.releaseStore(m as TiledPixels)
+        return false
     }
 
     private fun parkable(p: FlatPixels?): Boolean = p != null && !p.bitmap.isRecycled && p.bitmap.width > 0 && p.bitmap.height > 0
 
     /** Makes [layer]'s parked content and mask flat again and releases their tiles. Main only. */
     fun unpark(layer: Layer) {
-        val content = layer.pixels as? TiledPixels
-        val mask = layer.maskPixels as? TiledPixels
+        val readContent = layer.pixels
+        val readMask = layer.maskPixels
+        val content = readContent as? TiledPixels
+        val mask = readMask as? TiledPixels
         if (content == null && mask == null) return
-        val c = content?.let { FlatPixels(it.materialize()) } ?: layer.pixels
-        val m = mask?.let { FlatPixels(it.materialize()) } ?: layer.maskPixels
-        layer.rehouse(c, m)
-        content?.let { TileOps.releaseStore(it) }
-        mask?.let { TileOps.releaseStore(it) }
+        val c = content?.let { FlatPixels(it.materialize()) } ?: readContent
+        val m = mask?.let { FlatPixels(it.materialize()) } ?: readMask
+        if (rehouseIfUnchanged(layer, readContent, readMask, c, m)) {
+            content?.let { TileOps.releaseStore(it) }
+            mask?.let { TileOps.releaseStore(it) }
+        } else {
+            if (c !== readContent) (c as FlatPixels).bitmap.recycle()
+            if (m !== readMask) (m as FlatPixels).bitmap.recycle()
+        }
     }
+
+    /** Puts [c] and [m] in when [layer] still holds [readContent] and [readMask] (atomic with its store setters). */
+    private fun rehouseIfUnchanged(layer: Layer, readContent: PixelStore, readMask: PixelStore?, c: PixelStore, m: PixelStore?): Boolean =
+        synchronized(layer) {
+            val same = layer.pixels === readContent && layer.maskPixels === readMask
+            if (same) layer.rehouse(c, m)
+            same
+        }
 
     /** Parks every layer of [doc] but the active one; returns how many were parked. Main only. */
     fun parkInactive(doc: Document): Int {
