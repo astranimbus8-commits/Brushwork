@@ -2,9 +2,11 @@ package com.brushwork.paint.v110.a2
 
 import com.brushwork.paint.tools.vector.CurvePaint
 import com.brushwork.paint.tools.vector.ShapeStyle
+import com.brushwork.paint.ui.common.CurveLabels17
 import com.brushwork.paint.ui.common.PaintMode
 import com.brushwork.paint.ui.common.paintModeName
 import com.brushwork.paint.ui.vector.curvePaint
+import com.brushwork.paint.ui.vector.curvePaintRefusal
 import com.brushwork.paint.ui.vector.paintMode
 import com.brushwork.paint.ui.vector.shapeStyle
 import org.junit.Assert.assertEquals
@@ -91,11 +93,13 @@ class PaintModeConsistencyTest {
         // Row 4: the curve settings sheet: the segments; no "Fill the path" switch.
         val curveOptions = paintModeRegions("ui/vector/CurveToolOptions.kt")
         assertTrue("Curve settings: PaintModeSheetRow", curveOptions.contains("PaintModeSheetRow(") && curveOptions.contains("PaintModeTags.CURVE"))
+        // Review fix: the sheet refuses Fill and Both with 1 or 2 points, as the strip's menu does.
+        assertTrue("Curve settings: the strip's refusal", curveOptions.contains("refusal = curvePaintRefusal(tool.fillPossible)"))
         assertNoneGone("CurveToolOptions' region", curveOptions)
 
-        // The Object colors sheet's mode glyphs.
+        // The Object colors sheet's mode glyphs (drawn by PaintModeChoices, so a refused mode says why).
         val sheet = source("ui/vector/ObjectColorsSheet.kt")
-        assertTrue("Object colors: PaintModeSegments", sheet.contains("PaintModeSegments("))
+        assertTrue("Object colors: the paint-mode glyphs", sheet.contains("PaintModeChoices("))
         assertNoneGone("ObjectColorsSheet.kt", sheet)
 
         // The three VectorWidgets controls are built from the F0 controls; StyleGlyph moved to F0.
@@ -125,6 +129,9 @@ class PaintModeConsistencyTest {
             assertEquals(m, m.shapeStyle().paintMode())
             assertEquals(m, m.curvePaint().paintMode())
             assertEquals("the same enum name everywhere", m.name, m.curvePaint().name)
+            // The curve tools' refusal: Fill and Both need 3 points; Stroke never refused.
+            assertEquals(if (m == PaintMode.STROKE) null else CurveLabels17.FILL_NEEDS_3, curvePaintRefusal(false)(m))
+            assertEquals(null, curvePaintRefusal(true)(m))
         }
         assertNotNull(ShapeStyle.entries.firstOrNull { it.paintMode() == PaintMode.BOTH })
     }

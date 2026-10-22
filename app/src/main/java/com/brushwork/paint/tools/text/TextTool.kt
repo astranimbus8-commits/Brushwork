@@ -1362,6 +1362,13 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
     private inner class ColorsHost : TextColorsHost {
         override val controller: EditorController get() = this@TextTool.controller
         override val spec: TextSpec? get() = item?.spec
+
+        /**
+         * The open text's layer and id there, and whether the editor shows a text just created
+         * (a tap away places the open text and starts the next one in the same call; the new
+         * text's editor shows before it can be colored).
+         */
+        override val session: Any? get() = if (item == null) null else Triple(editingLayer, openId, editorOpen && editingNew)
         override fun updateSpec(transform: (TextSpec) -> TextSpec) = this@TextTool.updateSpec(transform)
     }
     // endregion

@@ -22,6 +22,13 @@ internal interface TextColorsHost {
     /** The look of the open text, or null when no text is open (Compose state). */
     val spec: TextSpec?
 
+    /**
+     * Which text is open (Compose state reads), null when none: another value means another
+     * text's session. The Text tool places the open text and opens the next one in one call (a tap
+     * away, the next text of a layer), so [spec] alone never shows the change.
+     */
+    val session: Any?
+
     /** `TextEditorHost.updateSpec`: a pending change of the open text, redrawn (no undo step). */
     fun updateSpec(transform: (TextSpec) -> TextSpec)
 }
@@ -42,13 +49,14 @@ internal interface TextColorsHost {
  * Text colors do not go through `ObjectColorSlots`: it maps a text's slots all together
  * (`mapText`, for Change Drawing Color) and has no setter of one slot of the open text.
  *
- * Once no text is open, [preview], [setNone] and [cancel] do nothing (C13); the start values are
- * dropped when the text's session ends, so a Cancel never reaches the next text.
+ * Once no text is open, [preview], [setNone] and [cancel] do nothing (C13); the start values belong
+ * to the text's session ([TextColorsHost.session]) and are dropped when it ends, so a Cancel never
+ * reaches the next text, even one the tool opened in the same call.
  */
 internal class TextColorsDelegate(private val host: TextColorsHost) : ObjectColorEditor, ObjectColorExtras {
 
-    /** The values [begin] found (Cancel restores them). */
-    private data class Start(val color: Int, val strokeColor: Int, val strokeWidthPx: Float)
+    /** The values [begin] found (Cancel restores them) in the text's [session]. */
+    private data class Start(val color: Int, val strokeColor: Int, val strokeWidthPx: Float, val session: Any?)
 
     private var start: Start? = null
     private var watch: Job? = null
@@ -79,10 +87,11 @@ internal class TextColorsDelegate(private val host: TextColorsHost) : ObjectColo
 
     override fun begin() {
         val s = host.spec ?: return
-        start = Start(s.color, s.strokeColor, s.strokeWidthPx)
+        val session = host.session
+        start = Start(s.color, s.strokeColor, s.strokeWidthPx, session)
         watch?.cancel()
         watch = host.controller.scope.launch {
-            snapshotFlow { host.spec != null }.first { !it }
+            snapshotFlow { host.spec != null && host.session == session }.first { !it }
             start = null
         }
     }
@@ -111,6 +120,8 @@ internal class TextColorsDelegate(private val host: TextColorsHost) : ObjectColo
         val st = start ?: return
         commit()
         val s = host.spec ?: return
+        // Another text is open (placed and the next opened in one call, before the watch ran).
+        if (host.session != st.session) return
         if (s.color == st.color && s.strokeColor == st.strokeColor && s.strokeWidthPx == st.strokeWidthPx) return
         host.updateSpec { it.copy(color = st.color, strokeColor = st.strokeColor, strokeWidthPx = st.strokeWidthPx) }
     }

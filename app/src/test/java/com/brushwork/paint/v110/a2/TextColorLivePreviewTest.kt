@@ -180,4 +180,32 @@ class TextColorLivePreviewTest {
         ed.cancel()
         assertEquals("a Cancel after the session ended changes nothing", reopened, tool.item!!.spec)
     }
+
+    /**
+     * Review fix: a tap away places the open text and starts the next one in the SAME call (no
+     * frame between, so no snapshot ever shows "no text open"): a Cancel afterwards must leave the
+     * next text alone, and the placed text keeps the previewed colors.
+     */
+    @Test
+    fun aCancelNeverReachesTheTextTheSameTapOpened() {
+        val (c, tool) = setup()
+        newText(c, tool)
+        val ed = editor(tool)
+        ed.begin()
+        ed.preview(ObjectColorTarget.TEXT, BLUE)
+        ed.preview(ObjectColorTarget.OUTLINE, GREEN)
+        val steps = c.undoManager.undoCount
+        c.tap(40f, 40f)
+        assertEquals("the open text was placed (its step)", steps + 1, c.undoManager.undoCount)
+        val next = tool.item ?: throw AssertionError("the tap away started a new text")
+        assertTrue("its editor shows", tool.editorOpen && tool.editingNew)
+        ed.cancel()
+        assertEquals("the Cancel leaves the next text alone", next.spec, tool.item!!.spec)
+        tool.cancelEditor()
+        frame()
+        val placed = c.composite()
+        assertTrue("placed with the previewed text color", count(placed, BLUE) > 100)
+        assertTrue("placed with the previewed outline", count(placed, GREEN) > 50)
+        assertEquals("the drawing color never changed", RED, c.color)
+    }
 }

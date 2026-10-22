@@ -646,8 +646,14 @@ internal fun CurveSettingsSheet(tool: CurveTool, onDismiss: () -> Unit) {
     BwSheet(title = tool.id.label, onDismiss = onDismiss) {
         // region v110-A2 paintMode
         // v1.10 (R3): the paint mode, the three icon segments of every paint-mode control (Fill is
-        // a fill without a stroke, Stroke no fill); they replace v1.9's fill switch.
-        PaintModeSheetRow(tool.paintMode?.paintMode(), PaintModeTags.CURVE) { m -> tool.setPaintMode(m.curvePaint()) }
+        // a fill without a stroke, Stroke no fill); they replace v1.9's fill switch. As in the
+        // strip's menu, Fill and Both need 3 points: greyed, a tap says why.
+        PaintModeSheetRow(
+            tool.paintMode?.paintMode(),
+            PaintModeTags.CURVE,
+            refusal = curvePaintRefusal(tool.fillPossible),
+            onRefused = { why -> controller.toast(why) },
+        ) { m -> tool.setPaintMode(m.curvePaint()) }
         SectionHeader("Stroke")
         // (The stroke kinds still offer "No stroke", the Fill segment's stroke: LeadRequest.)
         ChoiceChips(CurveStroke.entries.map { it.label }, s.stroke.ordinal, { i ->

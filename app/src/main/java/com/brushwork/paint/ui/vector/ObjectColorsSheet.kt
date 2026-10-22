@@ -15,6 +15,7 @@ import androidx.compose.material.icons.outlined.FormatColorReset
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -67,14 +68,16 @@ import com.brushwork.paint.ui.theme.BrushworkColors
  * - while the Fill (Outline) tab is selected, the "none" button ([ObjectColorLabels110.NO_FILL],
  *   [ObjectColorLabels110.NO_OUTLINE]; [ObjectColorEditor.setNone]: no fill is paint mode Stroke,
  *   no outline is width 0). It sits in the row, not above the body, so the body keeps its room;
- * - for a shape or a path, the three [PaintModeSegments] at the row's end (R3: the glyphs and names
- *   of every other paint-mode control; tags `V110Tags.COLORS_SHEET_MODE.<MODE>`).
+ * - for a shape or a path, the three [PaintModeSegments] glyphs at the row's end (R3: the glyphs and
+ *   names of every other paint-mode control; tags `V110Tags.COLORS_SHEET_MODE.<MODE>`), drawn by
+ *   [PaintModeChoices] so that Fill and Both, refused with the fill, say why on a tap.
  *
  * The selected tab drives the embedded [ColorDialogBody] (`extraAbove` = the row, so the wheel and
  * OK fit without scrolling), whose color goes to the object live ([ObjectColorEditor.preview], R7).
  * Each tab has its own picker state, started from the object's color when the sheet opened. A
  * target the editor refuses now ([ObjectColorEditor.unavailable], a curve's fill with fewer than 3
- * points) is dimmed; a tap on it shows the reason ([ObjectColorExtras.toast]).
+ * points) is dimmed; a tap on it shows the reason ([ObjectColorExtras.toast]); the sheet opens on
+ * the first target that is not refused and leaves a target refused meanwhile.
  *
  * Sheet contract (R7, J21): OK keeps the previewed colors ([ObjectColorEditor.commit]; no undo step
  * of its own, the object's ✓ carries them); Cancel, Back and the host's close restore the colors the
@@ -93,8 +96,11 @@ internal fun ObjectColorsSheet(editor: ObjectColorEditor, onClose: () -> Unit) {
         editor.begin()
         onDispose { }
     }
-    var chosen by rememberSaveable(editor) { mutableStateOf(targets.first()) }
-    val target = if (chosen in targets) chosen else targets.first()
+    // The sheet opens on the first target the editor takes now (a curve with 1 or 2 points: its
+    // Stroke, as its Fill is refused) and never stays on a target that is refused meanwhile.
+    var chosen by rememberSaveable(editor) { mutableStateOf(firstAvailable(editor, targets)) }
+    val target = chosen.takeIf { it in targets && editor.unavailable(it) == null } ?: firstAvailable(editor, targets)
+    if (target != chosen) SideEffect { chosen = target }
     val session = remember(editor) { SheetSession() }
     // One picker state per tab, each started from that target's color as the sheet opened.
     val models = HashMap<ObjectColorTarget, ColorDialogModel>()
@@ -169,12 +175,15 @@ private fun ObjectColorsRow(
             }
             Spacer(Modifier.weight(1f))
             if (ObjectColorTarget.FILL in targets && ObjectColorTarget.STROKE in targets) {
-                val fillOk = editor.unavailable(ObjectColorTarget.FILL) == null
-                PaintModeSegments(
+                // The PaintModeSegments glyphs; Fill and Both are refused while the fill is (a curve
+                // with 1 or 2 points): greyed, and a tap says why (R2: the FILL_NEEDS_3 toast).
+                val fillRefused = editor.unavailable(ObjectColorTarget.FILL)
+                PaintModeChoices(
                     selected = editor.paintMode,
-                    enabled = { m -> fillOk || m == PaintMode.STROKE },
-                    tagPrefix = V110Tags.COLORS_SHEET_MODE,
+                    refusal = { m -> if (m != PaintMode.STROKE) fillRefused else null },
+                    tag = V110Tags.COLORS_SHEET_MODE,
                     onSelect = { m -> editor.setPaintMode(m) },
+                    onRefused = { why -> (editor as? ObjectColorExtras)?.toast(why) },
                 )
             }
         }
@@ -273,6 +282,10 @@ internal fun objectColorName(t: ObjectColorTarget): String = when (t) {
     ObjectColorTarget.TEXT -> ObjectColorLabels110.TEXT
     ObjectColorTarget.OUTLINE -> ObjectColorLabels110.OUTLINE
 }
+
+/** The first of [targets] that [editor] takes now (none refused by `unavailable`), else the first. */
+private fun firstAvailable(editor: ObjectColorEditor, targets: List<ObjectColorTarget>): ObjectColorTarget =
+    targets.firstOrNull { editor.unavailable(it) == null } ?: targets.first()
 
 /** The "none" of [t] (Fill: no fill, Outline: no outline), or null when [t] has none. */
 private fun noneLabel(t: ObjectColorTarget): String? = when (t) {

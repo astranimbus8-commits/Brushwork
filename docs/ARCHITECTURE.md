@@ -2951,14 +2951,23 @@ button (`setNone`: no fill is paint mode Stroke, no outline is width 0). Every c
 delivers goes to `editor.preview(target, argb)`; OK calls `commit`, Cancel and Back call `cancel`,
 a swipe or an outside touch only minimizes the sheet (the preview stays, and the object's own ✓
 or ✕ decides). A2's editors also implement `ObjectColorExtras` (`colorOf`, so a picker starts at
-a color that is not painted, and `toast`, for a refused target's reason from `unavailable`).
+a color that is not painted, and `toast`, for a refused target's reason from `unavailable`). The
+sheet opens on the first target `unavailable` does not refuse (a curve with 1 or 2 points: its
+Stroke tab) and leaves a target refused meanwhile; its mode glyphs are drawn by
+`PaintModeChoices`, so Fill and Both, refused with the fill, are greyed and a tap toasts
+`FILL_NEEDS_3` (the frozen `PaintModeSegments` drops a tap on a disabled segment silently). The
+sheet keys its state on the editor, and one delegate serves every object of its tool: the step-6
+host must close (or `key`) the sheet when the object's session ends, as the delegates already
+drop their start values then.
 
 **One paint-mode control (R3).** Shape and the curve tools show the paint mode only as the
 `PaintModeGlyph` faces: `PaintModeSegments` in the sheets, a menu of them on the strips
 (regions `v110-A2 paintMode` in `ShapeStrip.kt`, `CurveStrips.kt` and `CurveToolOptions.kt`, and
 A2's own `ShapeToolOptions.kt`); the curve sheet's fill switch became the segments; `StyleGlyph` is gone.
 The curve strip's menu keeps its refusal semantics (`PaintModeChoices`: Fill and Both need 3
-points), and the curve sheet keeps its stroke kind chips.
+points), and the curve settings sheet refuses the same way (`PaintModeSheetRow(refusal =
+curvePaintRefusal(tool.fillPossible))`, which draws `PaintModeChoices`); the curve sheet keeps
+its stroke kind chips.
 
 **The delegates.** Each tool's region `v110-A2 colors` returns its editor while an object is
 open (null otherwise, which hides the pill cell) and gives it a private inner host; the tool's
@@ -2986,7 +2995,10 @@ state stays private.
   font size, the box presets' border ratio) through `TextSpec.withOutlineColor`, which the text
   editor's Outline color picker uses too. Text has no single-slot setter in `ObjectColorSlots`
   (`mapText` maps every slot together), so text colors go straight to `updateSpec`. The start
-  values are dropped when the text's session ends.
+  values belong to the text's session (`TextColorsHost.session`: the open text's layer, its id
+  there, and whether a just-created text's editor shows), because the Text tool places the open
+  text and opens the next one in one call (a tap away, the next text of a layer); Cancel in
+  another session does nothing.
 
 No preview is an undo step: the object's ✓ step carries the colors; Cancel restores what
 `begin` found; once the object is closed every call does nothing (C13).
@@ -2999,7 +3011,7 @@ still reverts the whole edit from its backup.
 
 Tests (`app/src/test/java/com/brushwork/paint/v110/a2/`): `ObjectColorSheetFitsAt873Test`,
 `ObjectColorSheetMinimizedThenCheckTest`, `ObjectColorSheetMinimizedThenCrossTest`,
-`PaintModeConsistencyTest`, `PaintModeSegmentsFingerTest`, `R3NoTextModeSelectorsTest`,
+`ObjectColorSheetRefusedFillTest` (also the sheet's Cancel and Back), `PaintModeConsistencyTest`, `PaintModeSegmentsFingerTest`, `R3NoTextModeSelectorsTest`,
 `FillFollowsPinTest`, `ShapeFillLivePreviewTest`, `CurveFillLivePreviewTest`,
 `TextColorLivePreviewTest`, `TextOutlineDefaultWidthTest`; kits `A2ToolRig`, `A2FakeColorEditor`.
 

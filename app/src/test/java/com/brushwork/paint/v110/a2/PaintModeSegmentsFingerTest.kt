@@ -31,6 +31,7 @@ import com.brushwork.paint.ui.theme.BrushworkTheme
 import com.brushwork.paint.ui.vector.PaintModeChoices
 import com.brushwork.paint.ui.vector.PaintModeSheetRow
 import com.brushwork.paint.ui.vector.PaintModeTags
+import com.brushwork.paint.ui.vector.curvePaintRefusal
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -49,7 +50,8 @@ import java.time.Duration
  * kind menu does (PaintModeChoices): each segment is 48 x 40 dp, icon only, known by
  * CurveLabels17's name of its mode, which a long press shows in a bubble without picking it; a
  * tap picks it. In the menu a mode that is refused (Fill and Both with 1 or 2 points) is greyed,
- * marked disabled, reads why, and a tap says why and picks nothing.
+ * marked disabled, reads why, and a tap says why and picks nothing; the curve settings sheet's row
+ * (PaintModeSheetRow with `curvePaintRefusal`, review fix) refuses the same way.
  *
  * One test in its own sandbox: Compose's frame clock only serves the first test of a sandbox.
  */
@@ -103,8 +105,10 @@ class PaintModeSegmentsFingerTest {
         val activity = Robolectric.buildActivity(ComponentActivity::class.java).setup().get()
         var sheetMode by mutableStateOf<PaintMode?>(PaintMode.STROKE)
         var menuMode by mutableStateOf<PaintMode?>(PaintMode.STROKE)
+        var curveMode by mutableStateOf<PaintMode?>(PaintMode.STROKE)
         var fillOk by mutableStateOf(false)
         val refused = mutableListOf<String>()
+        val sheetRefused = mutableListOf<String>()
         activity.setContent {
             BrushworkTheme {
                 LongPressLabelHost(Modifier.fillMaxWidth().height(400.dp)) {
@@ -121,6 +125,9 @@ class PaintModeSegmentsFingerTest {
                                 onRefused = { refused += it },
                             )
                         }
+                        Spacer(Modifier.height(40.dp))
+                        // The curve settings sheet's row (review fix): the strip menu's refusal.
+                        PaintModeSheetRow(curveMode, PaintModeTags.CURVE, refusal = curvePaintRefusal(fillOk), onRefused = { sheetRefused += it }) { curveMode = it }
                     }
                 }
             }
@@ -129,7 +136,7 @@ class PaintModeSegmentsFingerTest {
         val density = activity.resources.displayMetrics.density
 
         // 48 x 40 dp, icon only, known by its name; the selected one reads as selected.
-        for (prefix in listOf(PaintModeTags.SHAPE, PaintModeTags.CURVE_STRIP)) {
+        for (prefix in listOf(PaintModeTags.SHAPE, PaintModeTags.CURVE_STRIP, PaintModeTags.CURVE)) {
             for (m in PaintMode.entries) {
                 val e = byTag("$prefix.${m.name}")
                 val where = "$prefix.${m.name}"
@@ -163,6 +170,15 @@ class PaintModeSegmentsFingerTest {
         byTag("${PaintModeTags.CURVE_STRIP}.${PaintMode.FILL.name}").tap()
         assertEquals(listOf(CurveLabels17.FILL_NEEDS_3), refused)
         assertEquals(PaintMode.STROKE, menuMode)
+        // The curve settings sheet's row refuses the same way (review fix).
+        for (m in listOf(PaintMode.FILL, PaintMode.BOTH)) {
+            val n = byTag("${PaintModeTags.CURVE}.${m.name}").node
+            assertTrue("the sheet's ${m.name} refused: disabled", n.config.contains(SemanticsProperties.Disabled))
+            assertEquals(CurveLabels17.FILL_NEEDS_3, n.config.getOrNull(SemanticsProperties.StateDescription))
+        }
+        byTag("${PaintModeTags.CURVE}.${PaintMode.BOTH.name}").tap()
+        assertEquals(listOf(CurveLabels17.FILL_NEEDS_3), sheetRefused)
+        assertEquals(PaintMode.STROKE, curveMode)
         // Possible again (a third point): the tap picks.
         fillOk = true
         RobolectricUi.settle(4, 50)
@@ -172,5 +188,8 @@ class PaintModeSegmentsFingerTest {
         fill.tap()
         assertEquals(PaintMode.FILL, menuMode)
         assertEquals(1, refused.size)
+        byTag("${PaintModeTags.CURVE}.${PaintMode.BOTH.name}").tap()
+        assertEquals("the sheet's row picks too", PaintMode.BOTH, curveMode)
+        assertEquals(1, sheetRefused.size)
     }
 }

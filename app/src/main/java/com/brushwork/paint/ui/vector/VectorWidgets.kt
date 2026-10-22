@@ -71,6 +71,7 @@ import com.brushwork.paint.tools.vector.ShapeStyle
 import com.brushwork.paint.tools.vector.ShapeType
 import com.brushwork.paint.ui.color.ColorPickerDialog
 import com.brushwork.paint.ui.common.ColorSwatch
+import com.brushwork.paint.ui.common.CurveLabels17
 import com.brushwork.paint.ui.common.IconLongPressScope
 import com.brushwork.paint.ui.common.IncrementStepping
 import com.brushwork.paint.ui.common.LabeledSlider
@@ -326,16 +327,35 @@ internal object PaintModeTags {
 /**
  * v1.10 (R3): the paint mode in a settings sheet: the three [PaintModeSegments] (icons only,
  * tagged "$tag.<MODE>") with their long-press names (the sheet host resets the scope, so the row
- * provides its own).
+ * provides its own). With a [refusal] (the curve tools: [curvePaintRefusal]) they are drawn by
+ * [PaintModeChoices], so a refused mode is greyed and a tap hands its reason to [onRefused], as
+ * the strip's menu does.
  */
 @Composable
-internal fun PaintModeSheetRow(selected: PaintMode?, tag: String, onSelect: (PaintMode) -> Unit) {
+internal fun PaintModeSheetRow(
+    selected: PaintMode?,
+    tag: String,
+    refusal: ((PaintMode) -> String?)? = null,
+    onRefused: (String) -> Unit = {},
+    onSelect: (PaintMode) -> Unit,
+) {
     IconLongPressScope {
         Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            PaintModeSegments(selected = selected, tagPrefix = tag, onSelect = onSelect)
+            if (refusal == null) {
+                PaintModeSegments(selected = selected, tagPrefix = tag, onSelect = onSelect)
+            } else {
+                PaintModeChoices(selected = selected, refusal = refusal, tag = tag, onSelect = onSelect, onRefused = onRefused)
+            }
         }
     }
 }
+
+/**
+ * v1.10 (R2, R3): the curve tools' refusal of a paint mode: Fill and Both need 3 points
+ * ([CurveLabels17.FILL_NEEDS_3]) while the path cannot be filled (`CurveTool.fillPossible`).
+ */
+internal fun curvePaintRefusal(fillPossible: Boolean): (PaintMode) -> String? =
+    { m -> if (m != PaintMode.STROKE && !fillPossible) CurveLabels17.FILL_NEEDS_3 else null }
 
 /**
  * v1.10 (R3; the strip's v1.7 style dropdown): a cell [width] wide showing [mode]'s

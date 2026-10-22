@@ -12,6 +12,7 @@ import com.brushwork.paint.tools.vector.CurveSettings
 import com.brushwork.paint.tools.vector.CurveStroke
 import com.brushwork.paint.tools.vector.CurveTool
 import com.brushwork.paint.ui.common.CurveLabels17
+import com.brushwork.paint.ui.common.ObjectColorLabels110
 import com.brushwork.paint.ui.common.PaintMode
 import com.brushwork.paint.v110.a2.A2ToolRig.Companion.BLACK
 import com.brushwork.paint.v110.a2.A2ToolRig.Companion.BLUE
@@ -20,8 +21,11 @@ import com.brushwork.paint.v110.a2.A2ToolRig.Companion.RED
 import com.brushwork.paint.v110.a2.A2ToolRig.Companion.composite
 import com.brushwork.paint.v110.a2.A2ToolRig.Companion.frame
 import com.brushwork.paint.v110.a2.A2ToolRig.Companion.hex
+import com.brushwork.paint.vector.VAnchor
 import com.brushwork.paint.vector.VPaint
 import com.brushwork.paint.vector.VPath
+import com.brushwork.paint.vector.VStop
+import com.brushwork.paint.vector.VSubpath
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -191,5 +195,62 @@ class CurveFillLivePreviewTest {
         c.undo()
         settle()
         assertEquals("one undo takes the color back", hex(RED), hex((layer.vector!!.objects.single() as VPath).stroke!!.color))
+    }
+
+    /**
+     * Review addition (R2: gradients are kept until touched): a reopened path with a gradient fill
+     * shows it as the Fill face; the first fill color replaces it, says
+     * [ObjectColorLabels110.GRADIENT_REPLACED] once per opening of the sheet, and Cancel brings
+     * the gradient back. A fill-only edit kept by ✓ stores the solid fill in the edit's one step;
+     * one undo brings the gradient back.
+     */
+    @Test
+    fun aReopenedGradientFillIsKeptUntilAFillColorIsPicked() {
+        val c = rig.controller(400, 300)
+        c.snapping.enabled = false
+        val layer = c.addVectorLayer() ?: throw AssertionError("a vector layer")
+        val gradient = VPaint.Linear(100f, 0f, 300f, 0f, listOf(VStop(0f, RED), VStop(1f, BLUE)))
+        val blob = VPath(
+            0,
+            subpaths = listOf(VSubpath(listOf(VAnchor(100f, 100f), VAnchor(300f, 100f), VAnchor(300f, 220f), VAnchor(100f, 220f)), closed = true)),
+            fill = gradient,
+        )
+        c.vectors.addObjects(layer, listOf(blob), "Import")
+        c.settleVectorWork()
+        c.selectTool(ToolId.CURVE)
+        val tool = c.tools.getValue(ToolId.CURVE) as CurveTool
+        settle()
+        assertTrue(tool.reopen(layer.vector!!.objects.single() as VPath))
+        c.settleVectorWork()
+        settle()
+        assertTrue("reopened", tool.isReopened)
+        val ed = editor(tool)
+        assertEquals("the gradient is the Fill face", ObjectColorFace.Gradient(listOf(RED, BLUE)), ed.face(ObjectColorTarget.FILL))
+
+        ed.begin()
+        c.message = null
+        ed.preview(ObjectColorTarget.FILL, GREEN)
+        assertEquals("the first fill color says so", ObjectColorLabels110.GRADIENT_REPLACED, c.message)
+        assertEquals(ObjectColorFace.Solid(GREEN), ed.face(ObjectColorTarget.FILL))
+        c.message = null
+        ed.preview(ObjectColorTarget.FILL, BLACK)
+        assertNull("said once per opening", c.message)
+        ed.cancel()
+        assertEquals("Cancel brings the gradient back", ObjectColorFace.Gradient(listOf(RED, BLUE)), ed.face(ObjectColorTarget.FILL))
+
+        ed.begin()
+        ed.preview(ObjectColorTarget.FILL, GREEN)
+        assertEquals("said again in a new opening", ObjectColorLabels110.GRADIENT_REPLACED, c.message)
+        ed.commit()
+        val steps = c.undoManager.undoCount
+        tool.commit()
+        c.settleVectorWork()
+        settle()
+        assertEquals("the edit's one step", steps + 1, c.undoManager.undoCount)
+        assertEquals("stored with the solid fill", VPaint.Solid(GREEN), (layer.vector!!.objects.single() as VPath).fill)
+        c.undo()
+        c.settleVectorWork()
+        settle()
+        assertEquals("one undo brings the gradient back", gradient, (layer.vector!!.objects.single() as VPath).fill)
     }
 }

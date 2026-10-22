@@ -8,21 +8,25 @@ import com.brushwork.paint.tools.ObjectColorEditor
 import com.brushwork.paint.tools.ObjectColorFace
 import com.brushwork.paint.tools.ObjectColorTarget
 import com.brushwork.paint.ui.common.PaintMode
+import com.brushwork.paint.ui.vector.ObjectColorExtras
 
 /**
  * A2 test kit: an [ObjectColorEditor] over a fake open object (a fill, a stroke and a paint mode,
  * Compose state) that records every call, for the Object colors sheet's tests. Its own "session"
  * stands for the tool's: [check] keeps the colors (the ✓ step, counted in [steps]), [cross]
- * restores the colors the session opened with (✕); either ends it ([sessionOpen]).
+ * restores the colors the session opened with (✕); either ends it ([sessionOpen]). [fillRefusal]
+ * refuses the fill as a curve with 1 or 2 points does; the reasons the sheet shows go to [toasts].
  */
-internal class A2FakeColorEditor(fill: Int, stroke: Int, mode: PaintMode = PaintMode.BOTH) : ObjectColorEditor {
+internal class A2FakeColorEditor(fill: Int, stroke: Int, mode: PaintMode = PaintMode.BOTH) : ObjectColorEditor, ObjectColorExtras {
     var fill by mutableIntStateOf(fill)
     var stroke by mutableIntStateOf(stroke)
     var mode by mutableStateOf(mode)
     var sessionOpen by mutableStateOf(true)
+    var fillRefusal by mutableStateOf<String?>(null)
     var steps = 0
         private set
     val calls = mutableListOf<String>()
+    val toasts = mutableListOf<String>()
 
     private val opened = Triple(fill, stroke, mode)
     private var start = opened
@@ -35,7 +39,13 @@ internal class A2FakeColorEditor(fill: Int, stroke: Int, mode: PaintMode = Paint
         else -> ObjectColorFace.Solid(stroke)
     }
 
-    override fun unavailable(t: ObjectColorTarget): String? = null
+    override fun unavailable(t: ObjectColorTarget): String? = if (t == ObjectColorTarget.FILL) fillRefusal else null
+
+    override fun colorOf(t: ObjectColorTarget): Int = if (t == ObjectColorTarget.FILL) fill else stroke
+
+    override fun toast(text: String) {
+        toasts += text
+    }
 
     override fun setPaintMode(m: PaintMode) {
         calls += "mode $m"
