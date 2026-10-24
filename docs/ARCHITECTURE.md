@@ -122,6 +122,13 @@ I1–I19 stay as they are. I10 now reads `ui/common/LabelsV19.kt` (tags in `V19T
 
 ## Invariants (v1.10)
 I1–I27 stay as they are. I10 also reads `ui/common/LabelsV110.kt` (tags in `V110Tags`), checked by `LabelsV110Test`. v1.10 adds eight, I28–I35 (design 0.4): the lead writes I35 with the UI seams (F0) and I28–I34 with the engine contracts (F1). Where an invariant names an area's work, the foundation put the seam in place ("v1.10 foundation (gates 0 and 1)" below):
+- **I28 Pixel facade.** Code that walks several layers reads `layer.pixels` and never `layer.bitmap`. `layer.bitmap` is for the active layer, or one layer at a time on the main thread. Identity checks use `pixelGeneration` (never `===` on bitmaps). `UndoAction.byteSize` is fixed at construction and never materializes. `PixelFacade.materializations` stays 0 for a frame, an undo push, autosave, save, the layers panel and a layer switch (apart from the newly active layer).
+- **I29 Residency and leases.** The active layer, its mask and every layer with a resident pin (`pinResident`) are resident; whatever sets `Document.activeLayerIndex` goes through its F1 setter, which activates the new layer. Only the main thread changes a tile's state, recycles a bitmap or subtracts from the ledger, in a posted task, never for a pinned tile and never during a gesture; `refs`, `pins` and `lastUse` are main-only. An off-main reader holds a lease taken on main (a `snapshot()` or a non-resident `pin()`) and releases it with a post; it reads swapped tiles through `bitmapForRead()` into private scratch and never swaps them in. A multi-layer job holds at most one resident pin at a time.
+- **I30 Deterministic format.** `writtenVersion(layers, w, h)` depends only on its arguments; it is 4 exactly when v1.9's open count exceeds v1.9's cap at a 512 MiB heap, or exceeds 100. BWLY stays version 1. Equal pixels write equal bytes at every level (X6). The compatibility promise is scoped: a format-3 artwork opens in v1.9 on a phone whose heap is at least 512 MiB; on a smaller heap v1.9 treats it as any big v1.9 artwork.
+- **I31 Engine levels.** CLASSIC is v1.9 plus S1; its compositor is v1.9's plus the exact blank skip (X3), so I5 holds there. The exactness of the blank and null-tile skips holds for every blend mode at API 29 and above; below API 29 the levels reproduce v1.9's behaviour (section 2.5), so all levels match each other and v1.9 there too. Classic's layer count is never below v1.9's cap (section 2.15). The level is fixed when an editor opens and never changes while it is open. TILES and FULL code runs only when `EngineConfig.level` allows it.
+- **I32 Unknown memory is v1.9.** With no memory information (`totalMem == 0`, a probe failure, Robolectric), budgets, caps and messages are exactly v1.9's.
+- **I33 Projections are views.** A projection (below, above) is derived, droppable at any time, keyed on `pixelGeneration`/`contentVersion`, and never the only copy of anything. Exports, sampling, thumbnails, autosave and the first frame after a gesture never use the above projection.
+- **I34 Swap is a cache.** Swap lives outside every project, is deleted at editor close and at app start, is never named in a project file and is never resumed after a process death; losing it loses only what a v1.9 kill loses.
 - **I35 Object colors go through one walker.** Every per-object color change (R2 pill, R5 vector recolor, R6 filter, R7 previews) reads and writes colors through `vector/ObjectColorSlots`, which applies the fill-follows pin (C4).
 
 ## v1.6 foundation contracts (frozen APIs the areas build on)
@@ -2343,9 +2350,12 @@ The invariants are in "Invariants (v1.10)" above.
   area's merge (recorded in `.wt/_tools/v110-merges.json`) is an ancestor of its HEAD.
 - Each area keeps `.wt/v110<x>-progress.txt`, seeded by the lead from
   `.wt/_tools/v110-progress-template.txt`; rule C reads it.
-- The test-count floor (`app/src/test/test-count.txt`, no trailing newline) is 4837 after F0:
-  v1.9.0's 4787 and F0's 50 new non-Timing tests. The Timing run (`-PtimingOnly`) has 360 tests.
-  Only the lead changes the floor, in a commit of its own after each step and merge.
+- The test-count floor (`app/src/test/test-count.txt`, no trailing newline) is 4918 after F1:
+  v1.9.0's 4787, F0's 50 and F1's 81 new non-Timing tests. The `unit-full` floor
+  (`app/src/test/test-count-full.txt`, new at F1) is 4890: the same suite at FULL without
+  `EngineKitTest`'s `EngineGolden` test and the 27 tests of the three classes in
+  `app/src/test/unit-full-backlog.txt`. The Timing run (`-PtimingOnly`) has 360 tests; F1 adds
+  none. Only the lead changes the floors, in a commit of its own after each step and merge.
 
 ### The UI seams (F0)
 
@@ -2451,7 +2461,89 @@ object. F1 adds its part to `PARTS`.
 
 ### The engine contracts (F1)
 
-Written at F1 (design 3.3): the frozen declarations listed in `.wt/_tools/v110-frozen-api.md`.
+Written at F1 (design 3.3). F1 declares the engine's interfaces with a working reference
+implementation, so that A7-A11 build against one frozen surface from `gate-v110-1`. The exact
+text of every frozen declaration, pasted from the code at the gate, is in
+`.wt/_tools/v110-frozen-api.md` section 3 (its section 4 holds the test-side contract);
+`FrozenApiSignatureTest` pins them (its F1 part in `PARTS`). An area that needs one changed asks
+the lead (LeadRequest, the v1.9 process). "Layer storage (v1.10)" below says what they mean.
+
+- **Tiles** (`engine/tiles/`): `Tile.kt` (`TILE_SIZE` = 256, `TileState`, `Tile` with the
+  threading rules of I29 in its KDoc, `bitmapForRead()`, `Tile.of`, `Tile.solid`);
+  `PixelStore.kt` (`sealed class PixelStore` with `residentBytes`, `logicalBytes`, `isBlank`,
+  `isEmptyIn` and `isEmpty`; `FlatPixels`, `BlankPixels`, `FolderPixels`, `TiledPixels` with
+  `snapshot`, `withTiles`, `replaceTiles`, `materialize` and `fromBitmap`; `SavedFileRef`);
+  `PixelPin.kt`; `Residency.kt` (`ResidencyState`, `ResidencyHooks`, `ClassicResidency`,
+  `ChaosResidency`); `Projection.kt`; `SwapStore.kt` (`SwapSlot`, `SwapStore`, `NoSwap`);
+  `PixelReads.kt` (signatures frozen; A9 replaces the bodies). `TileOps.kt` and `SolidTiles.kt`
+  hold F1's reference bodies, which A8 owns and tunes (every tile bitmap carries
+  `Bitmap.DENSITY_NONE`; A8 keeps that).
+- **Budget** (`engine/budget/`): `MemoryProbe.kt` (`MemSnapshot`, `MemoryProbe`,
+  `StorageProbe`, `ExitRecord`, `ExitInfoSource`); the Android stubs `AndroidMemoryProbe` (A7),
+  `AndroidStorageProbe` and `AndroidExitInfo` (A10), whose F1 answers are "unknown";
+  `PixelLedger.kt` (`LedgerCategory`, `NativePurpose`, `PixelLedger` with `tryReserve` and
+  `release` from any thread and `add` / `sub` on main, `NativeAdmission`); `MemoryBudget.kt`
+  (`Budgets` with `v19` and `compute`, `MemoryBudget`; signatures frozen, A7 bodies, F1 numbers
+  v1.9's); `LayerBudgetV110` (constructor frozen; F1 delegates to `LayerBudgetV19`).
+- **Configuration and notices** (`engine/`): `EngineConfig.kt` (`LayerStorageMode`,
+  `EngineLevel`, `EngineConfig` with `resolve`, `deviceKey`, `openSession`, `closeSession`,
+  `applyIdle`, `testMode()` and `parkChaos()`; only it and `EditorSession.kt` open or close a
+  session, rule E); `EngineNotice.kt` (`EngineNotice`, `EngineNotices.current`);
+  `EngineStats.kt`, `EngineStartup.kt` and `engine/check/CheckStore.kt` (signatures frozen,
+  no-op bodies until A10).
+- **The facade** (`model/Document.kt`): `Layer.pixels`, `maskPixels`, the counted `bitmap` and
+  `mask` getters, `hasMask`, `pixelGeneration`, `owns`, `pin`, `pinResident`, `admitWrite`,
+  `residency` and `recycleBitmaps`; `PixelFacade` (`materializations`, `strict`); the
+  `Document.activeLayerIndex` setter, which reports a change to `EngineConfig.activeIndexSet`.
+- **Governor, blend modes, settings and format:** `GovernorPolicy.trimUndo` (its default
+  delegates to `GovernorPolicyV19`; `EditorController` trims through it);
+  `BlendModes.clearsOnTransparent` (MULTIPLY below API 29); `AppSettings.layerStorageMode`
+  (journaled, default AUTOMATIC); the `UiPrefs` keys `engine.noticeShownAt` and
+  `engine.lmkNoticeShownAt`; `storage/engine/EngineState.kt` (`EngineState` and
+  `EngineStateStore`) and `storage/engine/EngineCheckResult.kt` (`EngineCheckResult`,
+  `CheckReasons`), both `@Serializable` files in `noBackupFilesDir`; `ProjectFormat.VERSION` = 4,
+  `writtenVersion(layers, w, h)`, `v19OpenCount`, `v19Cap` and `V19_HEAP` (the save writes
+  `writtenVersion(layers, w, h)`).
+
+**The hooks (J32).** Each lead-owned file got one call into an area-owned file whose F1 body is a
+no-op; no region was added to those files, and the call sites are listed with their lines in
+`v110-frozen-api.md` section 3.7:
+- `BrushworkApp.onCreate` calls `EngineStartup.onAppCreate(this)` (A10: the swap janitor, the
+  exit watch, the gallery budget through `applyIdle`).
+- `EditorSession`, before the controller exists: `CheckStore.read`, `Budgets.compute`,
+  `EngineConfig.resolve` with this phone's `deviceKey` and free storage, then `openSession`. The
+  engine session closes when the editor session's scope completes, and only the newest session
+  closes it: opening another artwork opens its session before the previous one has saved.
+- `GalleryScreen` composes `EngineCheckHost()` (A10: the automatic check while the gallery shows).
+- `GalleryNotices` adds `GalleryNotice.Engine` and the last parameter `engine` of `pickNotice`
+  (crash, then engine, then backup). It reads `EngineNotices.current` when its slot composes,
+  draws `EngineNoticeCard` (A10) and clears the notice on OK.
+- `EditorSettingsDialog` calls `LayerStorageSection()` after Autosave and before Backup, and the
+  editor's More menu has Settings in a last section of its own, out of "This artwork" (J14).
+- `EditorScreen` composes `EngineEditorChrome(controller)` (A10: the "Preparing the layer" ring
+  while `EditorController.activating` holds input).
+
+**`EngineStats`** (A10's file): `record(stat, value)` and `summary()` over the stats of
+`EngineStat`. Its F1 bodies keep nothing, so A8, A9 and A11 may call `record` before A10 merges;
+at the gate nothing calls it.
+
+**What runs at the gate.** Without a check (`CheckStore.read` is null) and with unknown memory
+(the probes answer zero), every session resolves to CLASSIC with v1.9's budgets and
+`ClassicResidency`, so the app behaves as v1.9 (I31, I32) apart from what F1 itself changed: the
+blank skip (X3), `BlankPixels` for never-painted layers, the facade's counters and format 4. TILES
+and FULL run only in tests, through `-PengineMode` or `EngineRule`: then `ChaosResidency` parks
+every unpinned inactive layer into `TiledPixels` as soon as the active layer settles, and
+`NoSwap` is the store.
+
+**Where F1 differs from design 3.3** (the full list is in `v110-frozen-api.md` section 6):
+`drawLayerPixels` and `drawMaskPixels` take no clip or `CompositeTarget` and read the canvas's
+matrix and clip instead, and a folder draws `Layer.FOLDER_BITMAP` as v1.9 does; `PixelReads`
+reads tiles directly and never materializes; the edit-session blank stays v1.9's 1 x 1 bitmap; an
+`activeLayerIndex` set off the main thread is no activation (F1 has no session identity on a
+document); `EngineConfig`'s defaults outside a session follow `testMode()`;
+`EngineStateStore` lives beside `EngineState`; `EngineCheckResult.schema` is always written;
+`applyIdle` treats the stored check as this phone's and never gives TILES; and
+`DocumentBitmapsAction.Entry` (`engine/Undo.kt`) is left to A8.
 
 ### Region markers and rules P, M, E, W, N, F and G
 
@@ -2597,6 +2689,128 @@ only lines naming it). The file is empty after Gate 2.
 and lowered only in the commit that deletes tests on purpose; neither has a trailing newline.
 Locally, `CI=true` with `testDebugUnitTest -PengineMode=full -PunitFull --continue` is the
 `unit-full` run in two JVMs (its XML sum is the `unit-full` count).
+
+## Layer storage (v1.10)
+
+The contract part, written by the lead at F1 (design section 2 and 3.3); Gate 2 completes it from
+the areas' sections under "v1.10 areas". The frozen declarations are listed in "The engine
+contracts (F1)" above. Each paragraph names what F1 provides and which area fills the rest.
+
+**Levels and modes (J1, I31).** The user picks `LayerStorageMode` (AUTOMATIC, the default; FULL;
+CLASSIC) in `AppSettings.layerStorageMode`; the engine runs an `EngineLevel`. CLASSIC is stage S1:
+v1.9's engine plus the J/R budgets, `BlankPixels` for never-painted and adjustment layers,
+streamed load and the check's `StrokeBelowCache` switch; every painted layer is `FlatPixels` and
+nothing parks. TILES (S1 + S2) adds parking into `TiledPixels`, the projections, tile-native
+readers, undo on tile references and eviction of clean layers to their saved file, without swap.
+FULL (S1 + S2 + S3) adds the compressed swap and the native watch. `EngineConfig.resolve(mode,
+check, deviceKey, freeBytes, memoryKnown)` decides at open: unknown memory gives CLASSIC (I32);
+CLASSIC or FULL count only with a check of this phone (`deviceKey` = `Build.MODEL` plus `totalMem`
+rounded to 256 MiB, J13, J15), FULL becoming TILES below 2 GiB free; otherwise the check's level,
+or CLASSIC without one. `openSession` fixes the level, budgets, flags, `LayerBudget.current`,
+residency and swap store for the whole session, and `closeSession` puts the gallery's back
+(`applyIdle`). F1 provides all of this; A10 provides the check and the probes that make it pick
+anything but CLASSIC.
+
+**J, R and the ledger (J2, J3, section 2.4).** J is `Runtime.maxMemory()`, for Java arrays, with
+`GovernorPolicyV19.admit` unchanged. R is the native pixel budget, computed once per session at
+open: `base = min(0.30 totalMem, availMem - 400 MiB)`, `f = 0.6 (low-RAM) x 0.6 (32-bit) x
+stepDown`, `R = clamp(base x f, 0.55 J, 2 GiB or 700 MiB)`. With unknown memory (`totalMem == 0`
+or a probe failure) `Budgets.compute` returns `Budgets.v19(J)` and every number is v1.9's (I32).
+`PixelLedger` counts the native bytes the engine holds per `LedgerCategory`; `tryReserve` is a
+CAS on the total against R, safe from any thread, and `release` gives bytes back; `add` and `sub`
+are main-only. `NativeAdmission.admitNative(bytes, purpose)` guards every bitmap of 4 MiB or
+more; on main it may park cold layers and drop projections first, off main it only reserves.
+F1: the ledger and admission (`LedgerRaceTest`), `Budgets.v19`, `LayerBudgetV110` delegating to
+`LayerBudgetV19`, and `GovernorPolicy.trimUndo` delegating to v1.9. A7: the R formula, the
+canvas ceiling (`6.0 L + 184 MB <= R`), Classic's count `max(v19Cap, (R - 3.8 L - 184 MB) / L)`,
+the limits and `GovernorPolicyV110.trimUndo`.
+
+**States and residency (P1-P6, J6, I29).** A layer is FOLDER (`FolderPixels`), BLANK
+(`BlankPixels`, 0 bytes until its first write), FLAT (`FlatPixels`, one bitmap), PARKED
+(`TiledPixels`, its tiles RESIDENT, PACKED or SWAPPED) or EVICTED (`TiledPixels` with
+`evictedTo`, no tiles). P1: the active layer, its mask and every layer with a resident pin stay
+resident, and at TILES and FULL the layer about to be activated too. P2: an inactive layer parks
+2 s after deactivation (an idle tick every 500 ms), never during a gesture, an open tool session
+or a pin, and at once under pressure. P3: over the tile RAM, clean cold layers are evicted
+first, then undo-only tiles swapped, then cold parked tiles. P4: a frame never blocks on I/O. P5:
+projections go first under pressure. P6: at CLASSIC P1-P5 are off. The `Document.activeLayerIndex`
+setter reports every change; at the end of the main-thread task `EngineConfig` tells the
+residency `deactivated(old)` and `activate(new)` once (an off-main set is no activation). F1:
+`ResidencyHooks`, `ClassicResidency` (nothing) and the test residency `ChaosResidency`, which
+parks every unpinned inactive layer as soon as the active layer settles and unparks the
+activated one. A8: `ResidencyPolicy` with P1-P5, the `TileWorker` and the `activating` input
+hold.
+
+**Tiles, the facade, pins and generations (J4, J5, I28).** A tile is a 256 px ARGB bitmap,
+sparse (null is transparent), copy-on-write and refcounted; a uniform tile shares one immutable
+bitmap per color (`SolidTiles`, at most 256 colors), and every tile bitmap carries no density.
+`Layer.pixels` holds the content; `Layer.bitmap` stays as a counted facade that materializes a
+BLANK, PARKED or EVICTED layer on main (`PixelFacade.materializations`; under
+`PixelFacade.strict` a materialization outside the allow-list throws). `hasMask` answers
+without materializing, and `admitWrite()` asks admission before a first write
+(`EditorController.checkEditable` and `updateLayerData` call it). `pixelGeneration` changes when
+the content is replaced, never on park, unpark, evict or swap. `pin()` forbids park, swap-out,
+eviction and recycle and never swaps in; `pinResident()` also makes every tile resident, for a
+synchronous reader on main outside a frame. An off-main reader takes a `snapshot()` or a pin on
+main and reads swapped tiles with `Tile.bitmapForRead()`. F1: the stores, the facade, the pins
+and the reference `TileOps`; A8: their tuning and the edit-session and duplicate paths.
+
+**Projections and exactness (J7, I33, X1-X6).** F1's `Compositor.drawLayerPixels` and
+`drawMaskPixels` dispatch on the store: flat as v1.9, blank skipped (X3; a blank mask clears),
+tiled drawn tile by tile at an integer translate (X1), else from a materialized band (X2's
+fallback). `BlendModes.clearsOnTransparent` keeps MULTIPLY's v1.9 look below API 29. X1: a tile
+draw equals the whole bitmap's bit for bit; X2: scaled targets draw from 256-row bands with a
+2 px apron; X3: an empty unit or clip base skips its whole unit, exact for all 17 blend modes at
+API 29 and above; X4: the below projection is exact; X5: the above projection is used only while
+a finger is down, within 2 LSB, and the frame after the lift is exact; X6: saved bytes are equal
+at every level. Projections are views (`Projection`: `validFor`, `drop`, `heldBytes`), keyed on
+`pixelGeneration` and `contentVersion`, built only with at least 8 visible units on their side.
+A9: `BandAssembler`, `BelowProjection`, `AboveProjection`, `PixelReads` and the thumbnails.
+
+**Undo on tiles (section 2.6).** `PixelStore.logicalBytes()` (Flat L, Blank 0, Tiled the
+occupied tiles) is what every `byteSize` takes, at construction. `TiledPixels.replaceTiles`
+swaps tiles in place and returns the replaced references, so an undo step on a parked layer
+costs its touched tiles once and materializes nothing. Undo caps: CLASSIC `max(48 MiB, J/4)`;
+TILES `max(128 MiB, R/8)`; FULL `max(128 MiB, min(1 GiB, swapCap/8))`. One action is one undo step
+(I2); parking, swapping and evicting never create, merge or drop steps. F1: `logicalBytes`,
+`replaceTiles` and `MemoryBudget.undoCap` (v1.9's number); A8: `PixelEditRecorder` and the
+actions on tile references, `DocumentBitmapsAction` with stores, and asynchronous undo of
+swapped tiles.
+
+**Swap and eviction (J8-J10, I34).** At FULL only: `SlabSwapStore` writes Deflate-1 tiles to
+`noBackupFilesDir/swap/<session UUID>/slab-NNN.bin` (64 MiB slabs, 4 KiB pages) through a Java
+pool of `min(64 MiB, J/8)`; `swapCap = min(16 GiB, 0.5 (free - 1 GiB))`, recomputed every 60 s;
+writes stop below 1 GiB free. Swap is deleted at editor close and at app start (`SwapJanitor`,
+which spares a live session's directory), never named in a project and never resumed after a
+death. A clean layer whose file is in the last save is evicted at no write cost and streamed back
+on its first read. F1: `SwapStore`, `SwapSlot` and `NoSwap` (the only store until A10) and
+`FakeSwapStore`; A10: the store, the janitor and eviction (with A11's reload of an evicted
+layer).
+
+**The automatic check (M1-M5, section 2.10).** In the gallery only (`EngineCheckHost`), 1 s after
+its first frame, at most 3 s, never while an editor is open: M1 `MemoryInfo`, M2 a bounded native
+probe (always 768 MiB above the low-memory threshold), M3 Deflate and Inflate speed, M4 storage
+speed in `noBackupFilesDir/engine-probe/`, M5 a 64-layer composite and the `StrokeBelowCache`
+A/B. `AutoCheck.decide` uses stable inputs only: low memory gives CLASSIC, a composite over 60 ms
+CLASSIC, slow or small storage TILES, else FULL; a margin-limited or interrupted run is
+provisional and re-runs at the next 3 cold starts. The result is `EngineCheckResult` in
+`noBackupFilesDir/engine-check.json`, never backed up; `EngineState` (`engineCheckPending`,
+`lastExitSeen`, `slowSwapReads`) sits beside it. F1: both files' classes, `CheckStore.read`
+(null) and `EngineCheckHost` (empty); A10: the check, its marker and the Settings row.
+
+**Safety nets (section 2.12).** `ExitWatch` reads `ApplicationExitInfo` at start: a low-memory
+closing while the editor was in the foreground steps R down (`stepDown` 1: x 0.8; a second within
+30 days: x 0.64 and CLASSIC, with `EngineLabels110.LMK_NOTICE` in the gallery). `NativeWatch`
+acts as CRITICAL every 2 s while `availMem < threshold + 256 MiB`. The crash log adds the level,
+R, the ledger and the layer count. F1: `ExitInfoSource`, `EngineNotice` and the gallery's notice
+slot; A10: the watches and the notices' cards.
+
+**Test modes.** `-PengineMode=classic|tiles|full` and `-PparkChaos` reach the test JVM as
+`brushwork.engineMode` and `brushwork.parkChaos`, read only by `EngineConfig.testMode()` and
+`parkChaos()`; `EngineRule` installs a level, probes, budgets and a swap store per test and puts
+them back ("Testing and CI (v1.10)" below). The `unit-full` job runs the suite at FULL with
+`ChaosResidency`, and the nightly chaos job parks again at every idle of the main looper ("CI:
+shards, `unit-full` and the two floors" above).
 
 ## v1.10 areas
 
@@ -4894,6 +5108,7 @@ masks, folders, adjustments, blank, sparse and hidden layers, at most 512 x 512)
 `FakeObjectColorEditor.kt` and `FakeCornerEditor.kt` (the F0 editor interfaces with their
 contracts, recording every call).
 
+## UI (`ui/`)
 `MainActivity` → gallery or editor. `ui/common/Components.kt` holds shared controls (sheets,
 nudge pad, chips, swatches) and `ui/common/NumberControls.kt` (v1.6) the number controls (typeable
 sliders, numeric/length fields with units + automatic sliders / drag-to-scrub, with increment
