@@ -190,7 +190,8 @@ class EngineResolveTest {
         assertEquals(EngineLevel.FULL, idle(LayerStorageMode.FULL, check(EngineLevel.TILES)))
         assertEquals(EngineLevel.CLASSIC, idle(LayerStorageMode.CLASSIC, check(EngineLevel.FULL)))
         assertEquals(EngineLevel.TILES, idle(LayerStorageMode.AUTOMATIC, check(EngineLevel.TILES)))
-        // The gallery never reads free storage: a check made with little free space still gives FULL.
+        // The gallery has no free-storage reading: FULL with this phone's check stays FULL (openSession applies the 2 GiB rule at open).
+        assertEquals(EngineLevel.FULL, idle(LayerStorageMode.FULL, check(EngineLevel.FULL)))
         assertEquals(EngineLevel.FULL, idle(LayerStorageMode.AUTOMATIC, check(EngineLevel.FULL)))
         // Unknown memory (I32): CLASSIC whatever the choice.
         val unknown = Budgets.v19(512L shl 20)
