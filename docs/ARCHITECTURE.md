@@ -2651,16 +2651,28 @@ the one row).
   `MIXED_MAKES_SHARP`; the other faces' click label is their name).
 - The More rows lost their Sharp / Smooth items (regions `v110-A5 sharpItems` in
   `CurveStrips.kt` and `ShapeStrip.kt`). The code stays behind `CornerEditors.SHOW_IN_MORE`
-  (false), which only the lead may flip. The point sheets list Sharp before Smooth (region
-  `v110-A5 cornerChips` in `CurveToolOptions.kt`, and `ShapePointOptions.kt`), and Shape's
-  Mixed chip makes the points sharp.
+  (false), which only the lead may flip. In Curve and Path the removed item's place stays:
+  `sharpSlotItem` (key `curve.sharpSlot`, 40 dp, `shown = false`, so the host reserves the width
+  and draws nothing) takes it under the same condition (`f.sharp != NONE`). The host packs the
+  More lines greedily and "All points 100 %" comes and goes before the thickness slider with the
+  slider's own use: without the 40 dp, at 392 dp the slider ended line 1 while every point was at
+  100 % and jumped to line 2 at the drag's first change, away from the finger (and its
+  semantics, 10 dp past its layout, met the line's clip). `v110/a5/ThicknessKeepsItsLineTest`
+  (pure) and `ThicknessDragKeepsItsPlaceUiTest` (a drag in the editor) hold v1.9's place. The
+  slot goes when the thickness item comes before "All points 100 %" (Polyline's order, outside
+  the A5 regions: a LeadRequest). Shape's strip has no slot: no test showed a Shape control
+  that changes place without its Smooth item.
+- The point sheets list Sharp before Smooth (region `v110-A5 cornerChips` in
+  `CurveToolOptions.kt`, and `ShapePointOptions.kt`), and Shape's Mixed chip makes the points
+  sharp.
 
 Tests: `v110/a5/` (`GroupGizmoSnapReproTest`, `GroupPointSnapOtherPointTest`,
 `CurveSelfSnapExcludeTest`, `GroupSnapCandidateCapTest`, `GroupScaleEdgeSnapTest`,
 `GroupSnapPerfProbeTest`, `SharpMixedMakesSharpTest`, `SharpIgnoredDuringGroupEditTest`,
 `SharpEndsOnlyTest`, `SharpOneStepPerTapTest`, `SharpNeverUnderTrashTest`,
 `PolylineSharpCellDisabledTest`, `PillSharpPlacementTest`, `GroupSnapAndSharpRoundTripTest`:
-undo and redo of a snapped group move, save and reopen, a v1.9 artwork unchanged),
+undo and redo of a snapped group move, save and reopen, a v1.9 artwork unchanged;
+`ThicknessKeepsItsLineTest`, `ThicknessDragKeepsItsPlaceUiTest`: the slot above),
 `tools/points/PointGroupSnapTest`
 and `qa110/` (`Qa110SharpCellUiTest`, `Qa110GroupSnapUiTest`).
 
