@@ -2653,7 +2653,10 @@ the one row).
   `CurveStrips.kt` and `ShapeStrip.kt`). The code stays behind `CornerEditors.SHOW_IN_MORE`
   (false), which only the lead may flip. In Curve and Path the removed item's place stays:
   `sharpSlotItem` (key `curve.sharpSlot`, 40 dp, `shown = false`, so the host reserves the width
-  and draws nothing) takes it under the same condition (`f.sharp != NONE`). The host packs the
+  and draws nothing) takes it under the same condition (`f.sharp != NONE`). The user sees it as
+  an empty 40 dp place where an item comes before it on its More line (Path: between Endpoint
+  and Select all, where the Sharp item was); first on a line it reads as the line's slack (More
+  lines are end-aligned). The host packs the
   More lines greedily and "All points 100 %" comes and goes before the thickness slider with the
   slider's own use: without the 40 dp, at 392 dp the slider ended line 1 while every point was at
   100 % and jumped to line 2 at the drag's first change, away from the finger (and its
