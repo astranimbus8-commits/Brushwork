@@ -23,6 +23,7 @@ import com.brushwork.paint.ui.common.ArrayLabels
 import com.brushwork.paint.ui.common.LayerLabels19
 import com.brushwork.paint.ui.common.MenuLabels18
 import com.brushwork.paint.ui.common.MirrorLabels18
+import com.brushwork.paint.ui.common.ObjectBarLabels110
 import com.brushwork.paint.ui.common.PillLabels
 import com.brushwork.paint.ui.common.SavedSelectionLabels
 import com.brushwork.paint.ui.common.StripLabels18
@@ -64,6 +65,10 @@ import org.robolectric.shadows.ShadowLog
  * - the More menu's section headers are names, not controls: no tap reaches them, they are
  *   headings, and no control on screen goes by a header's name, so a lookup by label still finds
  *   the entry it found in v1.7.
+ *
+ * v1.10 (A6, R10, R11): the one selected path also shows [ObjectBarLabels110.EDIT] after Transform
+ * (row 1: eight buttons at 392 dp) and [ObjectBarLabels110.TO_SHAPE] after Detach on the More row;
+ * both keep their names, and their bubbles say them, like the v1.7 buttons.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = "w392dp-h873dp-xxhdpi", instrumentedPackages = ["com.brushwork.paint.qa18.chromelabelssandbox"])
@@ -88,13 +93,15 @@ class ChromeLabelsTest {
     private val objectRow1 = listOf(
         "Delete the selected objects" to "Delete", "Duplicate the selected objects" to "Duplicate",
         "Bring to front" to "Front", "Send to back" to "Back", "Recolor with the main color" to "Recolor",
-        "Transform the selected objects" to "Transform", "Deselect the objects" to "Deselect",
+        "Transform the selected objects" to "Transform", ObjectBarLabels110.EDIT_DESC to ObjectBarLabels110.EDIT,
+        "Deselect the objects" to "Deselect",
     )
 
-    /** Its More row, with a selected object that has mirror copies. */
+    /** Its More row, with a selected path that has mirror copies. */
     private val objectMore = listOf(
         "Bring forward" to "Forward", "Send backward" to "Backward",
         ArrayLabels.FROM_OBJECTS to ArrayLabels.BUTTON, MirrorLabels18.DETACH to MirrorLabels18.DETACH,
+        ObjectBarLabels110.TO_SHAPE to ObjectBarLabels110.TO_SHAPE,
     )
 
     private val sections = listOf(MenuLabels18.CLIPBOARD, MenuLabels18.BRING_IN, MenuLabels18.SEND_OUT, MenuLabels18.VIEW, MenuLabels18.THIS_ARTWORK)
