@@ -194,12 +194,16 @@ object EngineConfig {
     /**
      * The Document.activeLayerIndex setter: at the end of the current main-thread task (at once
      * where there is no main looper) [settle] tells the residency about the change, once per task
-     * however many times the index was set. Nothing in CLASSIC.
+     * however many times the index was set. Nothing in CLASSIC. F1c: a set off the main thread is
+     * no activation and is ignored: a document loaded or built on a worker (a gallery export, a
+     * duplicate, a save copy) is not the open session's, and parking it on main would race the
+     * worker that reads and then recycles its bitmaps.
      */
     internal fun activeIndexSet(doc: Document) {
         if (residency === ClassicResidency) return
-        if (!synchronized(pending) { pending.add(doc) }) return
         val main = Looper.getMainLooper()
+        if (main != null && !main.isCurrentThread) return
+        if (!synchronized(pending) { pending.add(doc) }) return
         if (main == null) settle(doc) else Handler(main).post { settle(doc) }
     }
 

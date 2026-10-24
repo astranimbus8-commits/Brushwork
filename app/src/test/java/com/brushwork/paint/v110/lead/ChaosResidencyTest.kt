@@ -29,7 +29,8 @@ import org.robolectric.Shadows.shadowOf
  * Installed as `EngineConfig.residency`, it keeps the active layer FLAT and every other layer
  * PARKED once the task that changed `activeLayerIndex` ends (once per task however often the
  * index is set); with `parkChaos` it parks again at every idle of the main looper until it is
- * replaced. A parked document composites bit-equal to the flat one without a materialization.
+ * replaced. An index set off the main thread (a document loaded or built on a worker) is no
+ * activation. A parked document composites bit-equal to the flat one without a materialization.
  * [ClassicResidency] changes nothing.
  */
 @RunWith(RobolectricTestRunner::class)
@@ -138,6 +139,24 @@ class ChaosResidencyTest {
         idle()
         assertEquals(ResidencyState.PARKED, d.layers[1].residency)
         assertEquals(ResidencyState.FLAT, d.layers[2].residency)
+        d.layers.forEach { it.recycleBitmaps() }
+    }
+
+    @Test
+    fun aSetOffTheMainThreadIsNoActivation() {
+        val d = doc(3)
+        EngineConfig.residency = ChaosResidency()
+        // ProjectRepository.load sets the index on Dispatchers.IO; an export then reads and recycles the bitmaps there.
+        val worker = Thread { d.activeLayerIndex = 2 }
+        worker.start()
+        worker.join()
+        idle()
+        assertTrue("a worker's set parks nothing", d.layers.all { it.residency == ResidencyState.FLAT })
+        d.activeLayerIndex = 1
+        idle()
+        for ((i, l) in d.layers.withIndex()) {
+            assertEquals("layer $i", if (i == 1) ResidencyState.FLAT else ResidencyState.PARKED, l.residency)
+        }
         d.layers.forEach { it.recycleBitmaps() }
     }
 
