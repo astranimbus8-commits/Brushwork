@@ -42,7 +42,10 @@ import kotlin.math.abs
  * bevel = bevel; radius 0, so the outline is unchanged) are copied; a line of other thickness
  * factors than 1 is drawn round-capped and round-joined (as the renderer draws it) with its width
  * times the common factor. A brush line keeps its tool, brush (sized by the factor) and grain. A
- * solid fill is copied. The id, opacity and live copies ([VPath.copies], S2 offsets included)
+ * solid fill is copied; a fill without a line also gives the shape its line color (not drawn), so
+ * the Shape tool opens it with the fill's color as the main color, and a fill of the line's color
+ * (or none) follows the main color ([ShapeObject.fillFollowsColor]) as a fill the Shape tool drew
+ * does. The id, opacity and live copies ([VPath.copies], S2 offsets included)
  * stay. Not kept, without a note: the path's miter limit (a shape's is fixed) and an open path's
  * miter or bevel joins (a line shape always joins round, `ShapeOutlines.join`).
  *
@@ -115,6 +118,12 @@ object PathToShape {
             fill != null -> ShapeStyle.FILL
             else -> ShapeStyle.STROKE
         }
+        // The Shape tool opens a shape with its line color as the main color: a fill alone gives
+        // its color to the line (not drawn: style FILL), so the main color is the visible one and
+        // the fill follows it, as a fill drawn by the Shape tool does. Transparent only without
+        // line and fill.
+        val strokeColor = stroke?.color ?: fill ?: TRANSPARENT
+        val shapeFill = fill ?: strokeColor
         val shape = ShapeObject(
             type = if (closed) ShapeType.RECTANGLE else ShapeType.LINE,
             cx = box.cx,
@@ -125,10 +134,10 @@ object PathToShape {
             style = style,
             strokeWidth = stroke?.let { it.width * factor } ?: DEFAULT_WIDTH,
             strokeWith = if (brush) ShapeStroke.BRUSH else ShapeStroke.PLAIN,
-            // No line: transparent (an open shape is always stroked; a closed one only fills).
-            strokeColor = stroke?.color ?: TRANSPARENT,
-            fillColor = fill ?: stroke?.color ?: TRANSPARENT,
-            fillFollowsColor = false,
+            strokeColor = strokeColor,
+            fillColor = shapeFill,
+            // A fill of another color than the line keeps its own; otherwise it follows the main color.
+            fillFollowsColor = shapeFill == strokeColor,
             lineCap = if (roundOutline) LineCapStyle.ROUND else stroke?.cap ?: LineCapStyle.ROUND,
             corner = if (roundOutline) CornerStyle.ROUND else cornerOf(stroke?.join),
             cornerRadius = 0f,

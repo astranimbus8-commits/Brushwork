@@ -2762,6 +2762,10 @@ pair ("Array", then "Behind" while passed) comes before Save, Duplicate and Hide
 - Copied: stroke color, width (times the anchors' common width, or their mean when they differ),
   cap, join (MITER to SHARP, BEVEL to BEVEL, otherwise ROUND), brush tool and preset (with the
   brush seed), a closed path's solid fill, and the opacity.
+- The Shape tool opens a shape with its line color as the main color. So a fill without a line
+  also gives the shape its line color (not drawn, style FILL): the main color is the fill's while
+  it is open, never transparent. A fill of the line's color (or none) follows the main color
+  (`fillFollowsColor`), as a fill the Shape tool drew does; a fill of another color keeps its own.
 - A path whose widths vary is drawn by the renderer as a filled outline with round ends and
   joins, so its shape gets ROUND cap and corners. A gradient fill becomes its first stop's color.
 - Notes, in this order: `NOTE_GRADIENT`, `NOTE_WIDTH` (widths vary, or a taper), `NOTE_GENERATED`

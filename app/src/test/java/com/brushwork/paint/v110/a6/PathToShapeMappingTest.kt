@@ -166,6 +166,17 @@ class PathToShapeMappingTest {
         // A fill alone fills; a line alone strokes.
         assertEquals(ShapeStyle.FILL, shapeOf(p.copy(stroke = null)).style)
         assertEquals(ShapeStyle.STROKE, shapeOf(p.copy(fill = null)).style)
+        // A fill alone gives the (undrawn) line its color, so the Shape tool opens it with the
+        // fill's color as the main color, and the fill follows that color (as the Shape tool's own).
+        val fillOnly = shapeOf(p.copy(stroke = null))
+        assertEquals("the main color the Shape tool opens with", RED, fillOnly.strokeColor)
+        assertEquals(RED, fillOnly.fillColor)
+        assertTrue("the fill follows the main color", fillOnly.fillFollowsColor)
+        // A line alone: its color, and the (undrawn) fill follows it.
+        val lineOnly = shapeOf(p.copy(fill = null))
+        assertEquals(BLUE, lineOnly.strokeColor)
+        assertEquals(BLUE, lineOnly.fillColor)
+        assertTrue(lineOnly.fillFollowsColor)
         // Thickness factors of 2 at every anchor: twice the width, drawn round (no note).
         val doubled = p.copy(subpaths = listOf(p.subpaths[0].copy(anchors = p.subpaths[0].anchors.map { it.copy(width = 2f) })))
         val d = PathToShape.convert(doubled)
