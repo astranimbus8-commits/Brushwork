@@ -9,7 +9,9 @@ import com.brushwork.paint.engine.budget.LedgerCategory
  * bitmap per color, shared by every uniform tile of that color ([Tile.solid]). An entry is
  * refcounted (one count per tile sharing it), counted under TILES in the ledger, and freed when
  * its last tile goes. At most [MAX_COLORS] colors are shared at once; beyond that [of] says null
- * and a uniform tile is an ordinary tile. Thread-safe; [release] runs on main (it recycles).
+ * and a uniform tile is an ordinary tile. Thread-safe; [release] runs on main (it recycles). A
+ * shared bitmap carries no density, as every tile's ([TileOps]): it outlives the default density
+ * it was made under.
  */
 internal object SolidTiles {
     /** The most colors shared at once. */
@@ -27,6 +29,7 @@ internal object SolidTiles {
         val e = entries[color] ?: run {
             if (entries.size >= MAX_COLORS) return null
             val b = Bitmap.createBitmap(IntArray(TILE_SIZE * TILE_SIZE) { color }, TILE_SIZE, TILE_SIZE, Bitmap.Config.ARGB_8888)
+                .apply { density = Bitmap.DENSITY_NONE }
             EngineConfig.budget.ledger.add(LedgerCategory.TILES, TILE_BYTES)
             Entry(b).also { entries[color] = it }
         }

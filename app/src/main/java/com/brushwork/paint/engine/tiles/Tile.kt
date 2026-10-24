@@ -71,10 +71,11 @@ class Tile internal constructor(val w: Int, val h: Int) {
     /**
      * Off main, under a lease: the resident bitmap, or an inflated copy in the caller's scratch (the
      * tile stays PACKED or SWAPPED; it is never made resident by this call). Never called on main
-     * during a frame (P4).
+     * during a frame (P4). Like every tile bitmap, an inflated or read copy carries no density.
      */
     fun bitmapForRead(): Bitmap = synchronized(lock) {
-        bitmap ?: packed?.let { TileOps.inflate(it, w, h) } ?: slot?.let { EngineConfig.swapStore.read(this) }
+        bitmap ?: packed?.let { TileOps.inflate(it, w, h) }
+            ?: slot?.let { EngineConfig.swapStore.read(this).apply { density = Bitmap.DENSITY_NONE } }
             ?: error("tile ${w}x$h holds no pixels")
     }
 

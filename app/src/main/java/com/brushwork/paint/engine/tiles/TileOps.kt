@@ -23,7 +23,10 @@ import kotlin.math.min
 /**
  * v1.10 (F1 reference implementation, design 3.3; A8 owns and tunes): the bodies behind [Tile],
  * [TiledPixels] and [PixelPin], which only delegate here. Correct, not tuned: tiles are cut and
- * drawn on the calling thread, and every copy is exact (SRC at integer offsets).
+ * drawn on the calling thread, and every copy is exact (SRC at integer offsets). F1c: a tile's
+ * bitmap carries no density ([Bitmap.DENSITY_NONE]), and a tile is cut onto a canvas that carries
+ * none, so no draw scales a tile: a tile, and above all a shared [SolidTiles] bitmap, can outlive
+ * the default density it was made under, which `drawBitmap(b, x, y, paint)` scales by the ratio.
  *
  * References: a store or an undo map holding a tile counts one [Tile.refs]; [release] frees the
  * tile when the last holder lets go and no pin holds it. Main thread throughout (the `Tile`
@@ -45,6 +48,7 @@ internal object TileOps {
 
     fun tileOf(bitmap: Bitmap): Tile {
         require(bitmap.width in 1..TILE_SIZE && bitmap.height in 1..TILE_SIZE) { "a tile is at most $TILE_SIZE px (got ${bitmap.width}x${bitmap.height})" }
+        bitmap.density = Bitmap.DENSITY_NONE
         return Tile(bitmap.width, bitmap.height).also {
             it.bitmap = bitmap
             EngineConfig.budget.ledger.add(LedgerCategory.TILES, it.bytes.toLong())
@@ -150,7 +154,7 @@ internal object TileOps {
         }
     }
 
-    /** A new [w] x [h] bitmap from bytes [pack] made. Any thread. */
+    /** A new [w] x [h] bitmap (no density, as every tile's) from bytes [pack] made. Any thread. */
     fun inflate(packed: ByteArray, w: Int, h: Int): Bitmap {
         val raw = ByteArray(w * h * 4)
         val inf = Inflater(true)
@@ -167,7 +171,10 @@ internal object TileOps {
         } finally {
             inf.end()
         }
-        return BitmapUtils.createLayerBitmap(w, h).apply { copyPixelsFromBuffer(ByteBuffer.wrap(raw)) }
+        return BitmapUtils.createLayerBitmap(w, h).apply {
+            density = Bitmap.DENSITY_NONE
+            copyPixelsFromBuffer(ByteBuffer.wrap(raw))
+        }
     }
 
     // ---------------------------------------------------------------- stores
@@ -238,10 +245,11 @@ internal object TileOps {
         return if (uniform && first ushr 24 == 0xFF) UNIFORM_OPAQUE else OTHER
     }
 
-    /** An exact copy of [tw] x [th] pixels of [b] at ([x], [y]) as an ordinary tile. */
+    /** An exact copy of [tw] x [th] pixels of [b] at ([x], [y]) as an ordinary tile (its canvas carries no density, so [b]'s is never scaled). */
     private fun copyTile(b: Bitmap, x: Int, y: Int, tw: Int, th: Int): Tile {
         val out = BitmapUtils.createLayerBitmap(tw, th)
         try {
+            out.density = Bitmap.DENSITY_NONE
             Canvas(out).drawBitmap(b, -x.toFloat(), -y.toFloat(), copyPaint)
         } catch (e: Throwable) {
             out.recycle()

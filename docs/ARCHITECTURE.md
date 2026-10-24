@@ -2569,7 +2569,11 @@ Written at F1 (design 3.3 and 6.5). "Build APK" (`.github/workflows/android.yml`
   and the commit's store wins. An `activeLayerIndex` set off the main thread is no activation
   (`EngineConfig.activeIndexSet`): `ProjectRepository.load` sets it on `Dispatchers.IO`, and a
   gallery export or duplicate then reads and recycles that document's bitmaps there, which a park
-  on main would race. The switch and the backlog file are task inputs, like the shard.
+  on main would race. A tile's bitmap carries no density (`Bitmap.DENSITY_NONE`, set by `TileOps`
+  and `SolidTiles`), and a tile is cut onto a canvas that carries none: a shared `SolidTiles`
+  bitmap outlives the default density it was made under (an xxhdpi UI test earlier in the fork),
+  and `drawBitmap(b, x, y, paint)` drew it at a third of its size (`TileDensityTest`). The switch
+  and the backlog file are task inputs, like the shard.
 - `test-count` (after `unit` and `unit-full`): the summed `tests` of the `unit` shards against
   `app/src/test/test-count.txt`, and of the `unit-full` shards against
   `app/src/test/test-count-full.txt`. A shard without XML or log, or a log with
