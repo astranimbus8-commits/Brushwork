@@ -149,14 +149,15 @@ object EngineConfig {
         synchronized(announced) { announced.clear() }
     }
 
-    /** Gallery: LayerBudget.current for new canvases and imports (A10 calls it at start and after a check). */
+    /**
+     * Gallery: LayerBudget.current for new canvases and imports (A10 calls it at start and after a check).
+     * The gallery's level is [resolve]'s (J15: CLASSIC or FULL without a check act as AUTOMATIC, so
+     * a choice restored from a backup never makes the gallery FULL before this phone's check ran).
+     * The stored [check] is this phone's (it lives in `noBackupFilesDir`), and the gallery has no
+     * free-storage reading, so FULL is never TILES here: [openSession] decides that at open.
+     */
     fun applyIdle(mode: LayerStorageMode, check: EngineCheckResult?, budgets: Budgets) {
-        val lv = when {
-            !budgets.known -> EngineLevel.CLASSIC
-            mode == LayerStorageMode.CLASSIC -> EngineLevel.CLASSIC
-            mode == LayerStorageMode.FULL -> EngineLevel.FULL
-            else -> check?.level ?: EngineLevel.CLASSIC
-        }
+        val lv = resolve(mode, check, check?.deviceKey ?: "", Long.MAX_VALUE, budgets.known)
         idleBudgets = budgets
         idleLayerBudget = LayerBudgetV110(MemoryBudget(budgets, budget.ledger), lv)
         if (!sessionOpen) {

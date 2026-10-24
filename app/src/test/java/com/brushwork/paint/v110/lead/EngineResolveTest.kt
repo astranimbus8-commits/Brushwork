@@ -29,7 +29,8 @@ import org.robolectric.RobolectricTestRunner
  * [EngineConfig.openSession] fixes the level, flags, budgets, `LayerBudget.current` and residency
  * for the session (F1: [ClassicResidency] at every level outside test mode), [EngineConfig.closeSession]
  * puts the gallery's back (twice is once), and [EngineConfig.applyIdle] sets the gallery's
- * budgets, applying them at once only between sessions.
+ * budgets, applying them at once only between sessions, at [EngineConfig.resolve]'s level (J15:
+ * FULL or CLASSIC without a check act as AUTOMATIC).
  */
 @RunWith(RobolectricTestRunner::class)
 class EngineResolveTest {
@@ -167,6 +168,33 @@ class EngineResolveTest {
         assertEquals("the gallery's latest budgets", later, EngineConfig.budget.budgets)
         assertTrue(LayerBudget.current is LayerBudgetV110)
         assertFalse(LayerBudget.current === idle)
+    }
+
+    /** The level a [LayerBudgetV110] was made for (private; read as `EngineRule` reads its budget). */
+    private fun levelOf(b: LayerBudget): EngineLevel =
+        LayerBudgetV110::class.java.getDeclaredField("level").apply { isAccessible = true }.get(b as LayerBudgetV110) as EngineLevel
+
+    @Test
+    fun applyIdleTreatsAChoiceWithoutACheckAsAutomatic() {
+        assumeTrue("outside test mode", EngineConfig.testMode() == null)
+        val known = Budgets(512L shl 20, 1L shl 30, known = true, stepDown = 0)
+        fun idle(mode: LayerStorageMode, check: EngineCheckResult?, budgets: Budgets = known): EngineLevel {
+            EngineConfig.applyIdle(mode, check, budgets)
+            return levelOf(LayerBudget.current)
+        }
+        // J15: FULL or CLASSIC restored from a backup, before this phone's check ran, act as AUTOMATIC.
+        assertEquals("FULL without a check", EngineLevel.CLASSIC, idle(LayerStorageMode.FULL, null))
+        assertEquals("CLASSIC without a check", EngineLevel.CLASSIC, idle(LayerStorageMode.CLASSIC, null))
+        assertEquals("AUTOMATIC without a check", EngineLevel.CLASSIC, idle(LayerStorageMode.AUTOMATIC, null))
+        // With the stored check (this phone's): the choice wins; AUTOMATIC takes the check's level.
+        assertEquals(EngineLevel.FULL, idle(LayerStorageMode.FULL, check(EngineLevel.TILES)))
+        assertEquals(EngineLevel.CLASSIC, idle(LayerStorageMode.CLASSIC, check(EngineLevel.FULL)))
+        assertEquals(EngineLevel.TILES, idle(LayerStorageMode.AUTOMATIC, check(EngineLevel.TILES)))
+        // The gallery never reads free storage: a check made with little free space still gives FULL.
+        assertEquals(EngineLevel.FULL, idle(LayerStorageMode.AUTOMATIC, check(EngineLevel.FULL)))
+        // Unknown memory (I32): CLASSIC whatever the choice.
+        val unknown = Budgets.v19(512L shl 20)
+        for (m in LayerStorageMode.entries) assertEquals("unknown memory, $m", EngineLevel.CLASSIC, idle(m, check(EngineLevel.FULL), unknown))
     }
 
     @Test
