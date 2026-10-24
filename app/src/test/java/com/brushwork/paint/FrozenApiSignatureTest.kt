@@ -698,7 +698,7 @@ class FrozenApiSignatureTest {
                     """
                     @Serializable
                     data class EngineCheckResult(
-                        val schema: Int = 1,
+                        @EncodeDefault(EncodeDefault.Mode.ALWAYS) val schema: Int = 1,
                         val appVersionCode: Int,
                         val deviceKey: String,
                         val ranAtMillis: Long,
@@ -719,13 +719,13 @@ class FrozenApiSignatureTest {
                         val readMBs: Float,
                         val freeBytes: Long,
                         val composite64Ms: Float,
-                        val belowCacheMinLayers: Int? = null,
-                        val aboveProjection: Boolean = false,
-                        val stepDown: Int = 0,
-                        val lmkDeathsAt: List<Long> = emptyList(),
-                        val provisional: Boolean = false,
-                        val m2Outcome: String = "",
-                        val inconclusiveRuns: Int = 0,
+                        @EncodeDefault(EncodeDefault.Mode.NEVER) val belowCacheMinLayers: Int? = null,
+                        @EncodeDefault(EncodeDefault.Mode.NEVER) val aboveProjection: Boolean = false,
+                        @EncodeDefault(EncodeDefault.Mode.NEVER) val stepDown: Int = 0,
+                        @EncodeDefault(EncodeDefault.Mode.NEVER) val lmkDeathsAt: List<Long> = emptyList(),
+                        @EncodeDefault(EncodeDefault.Mode.NEVER) val provisional: Boolean = false,
+                        @EncodeDefault(EncodeDefault.Mode.NEVER) val m2Outcome: String = "",
+                        @EncodeDefault(EncodeDefault.Mode.NEVER) val inconclusiveRuns: Int = 0,
                     )
                     """,
                 ),
