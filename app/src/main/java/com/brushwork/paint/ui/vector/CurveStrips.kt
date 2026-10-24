@@ -337,7 +337,10 @@ internal fun curveSpec(tool: CurveTool, f: CurveStripFacts, ui: CurveStripUi): S
             if (cell != null) items += cell
             if (f.generated != null) items += generatorItem(tool, f.generated, ui, if (cell != null) StripRow.MORE else StripRow.ROW1, if (cell != null) 0 else 1)
             // region v110-A5 sharpItems
-            if (f.sharp != SharpState.NONE) items += sharpItem(tool, f)
+            // v1.10 (R12): the X / Y pill's Sharp / Smooth cell replaces the More item (kept for the lead's fallback).
+            if (com.brushwork.paint.tools.points.CornerEditors.SHOW_IN_MORE && f.sharp != SharpState.NONE) items += sharpItem(tool, f)
+            // Its place stays (drawn empty), so the thickness slider keeps v1.9's More line ([sharpSlotItem]).
+            if (!com.brushwork.paint.tools.points.CornerEditors.SHOW_IN_MORE && f.sharp != SharpState.NONE) items += sharpSlotItem()
             // endregion
             // The host composes items by position: an item that a control's use brings in comes
             // after that control, so the control (an open Handles popup, a slider being dragged)
@@ -400,7 +403,10 @@ internal fun curveSpec(tool: CurveTool, f: CurveStripFacts, ui: CurveStripUi): S
             if (cell != null) items += cell
             items += endpointItem(tool)
             // region v110-A5 sharpItems
-            if (f.sharp != SharpState.NONE) items += sharpItem(tool, f)
+            // v1.10 (R12): the X / Y pill's Sharp / Smooth cell replaces the More item (kept for the lead's fallback).
+            if (com.brushwork.paint.tools.points.CornerEditors.SHOW_IN_MORE && f.sharp != SharpState.NONE) items += sharpItem(tool, f)
+            // Its place stays (drawn empty), so the thickness slider keeps v1.9's More line ([sharpSlotItem]).
+            if (!com.brushwork.paint.tools.points.CornerEditors.SHOW_IN_MORE && f.sharp != SharpState.NONE) items += sharpSlotItem()
             // endregion
             if (f.anyThickness) items += all100Item(tool)
             items += selectAllItem(tool, f)
@@ -719,6 +725,26 @@ private fun sharpItem(tool: CurveTool, f: CurveStripFacts): StripItem {
         }
     }
 }
+
+/**
+ * v1.10 (R12): the place of the More row's removed sharp item, kept and drawn empty
+ * ([StripItem.shown] false: the host reserves its width and draws nothing). The host packs the
+ * More lines greedily, and "All points 100 %" comes and goes before the thickness slider with
+ * the slider's own use; without this 40 dp the slider ended a More line at 392 dp when every
+ * point is at 100 %, and the drag's first change moved it to the next line, away from the finger
+ * (and its semantics met the line's clip at the strip's end). With it the slider starts its line
+ * as in v1.9, whether or not "All points 100 %" shows (v110/a5 ThicknessKeepsItsLineTest).
+ * It goes when the lead places the thickness item before "All points 100 %" (Polyline's order).
+ */
+private fun sharpSlotItem() = StripItem(
+    key = SHARP_SLOT_KEY, label = SHARP_SLOT_NAME, width = CURVE_ICON_DP.dp, row = StripRow.MORE, shown = false, content = {},
+)
+
+/** [sharpSlotItem]'s key, its own (not [CurveKeys.SHARP], which stays the sharp item's). */
+private const val SHARP_SLOT_KEY = "curve.sharpSlot"
+
+/** [sharpSlotItem]'s handle for the inventory and the tests; never drawn, never read out. */
+private const val SHARP_SLOT_NAME = "Kept place of the corner item"
 // endregion
 
 private fun autoTangentItem(tool: CurveTool, index: Int) = item(CurveKeys.AUTO_TANGENT, "Auto tangent", CURVE_ICON_DP, StripRow.MORE) {

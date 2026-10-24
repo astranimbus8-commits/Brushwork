@@ -2595,7 +2595,89 @@ One block per area, in area order. Each area writes its section only inside its 
 
 <!-- v110-A5 -->
 
-(A5 writes this section.)
+`tools/points/PointGroupSnap.kt` (R8) snaps a set of moving points as one object. Shape's
+Points mode and the Curve, Polyline and Path tools call it from their regions `v110-A5 snap`
+(two in each of `ShapeTool.kt` and `CurveTool.kt`) for a drag of selected points and for the
+point gizmo.
+
+- Per axis the candidates are the moving box's min, centre and max, then the moving points
+  themselves (the grabbed one first). The smallest correction within the snap tolerance wins
+  (`SnapSession.snapValue`, the session's object lines); without one, the grid (the grabbed point,
+  or the box min), then the length step. Every point moves by the same correction.
+- The moving points are never targets: the tool begins its `SnapSession` with only the other
+  points as `extra` point lines (Curve: `beginSnapWithout { it in moving }`; Shape: the
+  non-selected vertices, also in the new `Mode.GIZMO` case of `beginSnap`), so a group never
+  snaps to itself.
+- Cause E: a reopened Curve, Polyline or Path that is its layer's only object begins the session
+  with that layer in `exclude` (`CurveTool.ownLayerExclude`): until ✓ the layer's pixels still hold
+  the path as it was, so its content bounds were the path's own old extent. With other objects
+  on the layer, the layer stays a target.
+- Above `PointGroupSnap.MAX_POINT_CANDIDATES` (256) moving points only the three box lines are
+  candidates: a drag stays one linear scan per candidate (`GroupSnapPerfProbeTest`, PC budget
+  4 ms, device 24 ms).
+- Gizmo scale handles snap the edge they drag, objects only (as `TransformTool`):
+  `PointGroupSnap.scale(m, part, box, pivot, keepProportions)` rebuilds the factor about the
+  pivot so that edge lands on the target; a corner keeping proportions lets the closer edge decide
+  both axes. Rotate is unchanged.
+- The guides show for the snapped lines (`SnapSession.showGuidesFor`); `SnapSession.draw` gets
+  the moving box (Shape: the shape's box; Curve: the grabbed point, or the group box's centre) to
+  keep its labels off it. Undo is unchanged: a group drag is still the drag's one in-tool step,
+  and ✓ commits the edit as one step (`GroupSnapAndSharpRoundTripTest`).
+- The box is measured once per group edit (`groupSnapMeasure` in Shape, `beginGroupSnap` in
+  Curve), not per move.
+
+The Sharp / Smooth cell (R12) is the pill's `PillCell.SHARP`, at the end of row 2 under
+"Select several" (F0's `pillRow1` and `pillRow2`; never under the trash, folded the last cell of
+the one row).
+
+- `tools/points/CornerEditors.kt`: `CurveCornerEditor` (Curve, Polyline, Path) and
+  `ShapeCornerEditor` (Shape's Points mode) implement `PointCornerEditor`; the tools return them
+  from `pointCorners` in their regions `v110-A5 corners`.
+- `corner` is a `derivedStateOf` over the selection and the corner flags (`VAnchor.sharp`,
+  `VSplinePoint.sharp` for a Path, `ShapeAnchor.smooth`), so a point drag does not recompose the
+  pill. Null (no selected point, or Shape outside Points mode) hides the cell. `SMOOTH`,
+  `SHARP`, `MIXED` (a tap makes every selected point sharp: Mixed means Sharp, UQ9, in every
+  tool), `ENDS_ONLY` (only the ends of an open Path, which are always sharp) and `ALWAYS_SHARP`
+  (Polyline, UQ18).
+- `setSelectedSharp` is one in-tool step (`CurveTool.setSharpPoints`,
+  `ShapeTool.setSelectedSmooth`) and returns false, with no step, when it changes nothing, for a
+  greyed state, or while a group edit runs (`cornerLocked`, C10).
+- `ui/tools/PillSharpCell.kt` draws the face of the state (the glyph shows what a tap does):
+  "Sharp corner", "Smooth", `PointLabels110.MIXED_MAKES_SHARP`, and greyed
+  `PointLabels.ENDS_SHARP` or `PointLabels110.POLYLINE_ALWAYS_SHARP`. Tag `V110Tags.PILL_SHARP`;
+  a long press shows the name; a greyed cell is disabled for accessibility and a tap shows its
+  name in the long-press bubble. Every face's click-action label is its name (v1.7's
+  `qa17/Qa17PointsGroupPropsUiTest` presses the Mixed face by `MIXED_MAKES_SHARP`).
+- The More rows lost their Sharp / Smooth items (regions `v110-A5 sharpItems` in
+  `CurveStrips.kt` and `ShapeStrip.kt`). The code stays behind `CornerEditors.SHOW_IN_MORE`
+  (false), which only the lead may flip; while it is false `ui/vector/CurveStripRulesTest` finds
+  none of the item's names on the Curve and Path More rows in any state. In Curve and Path the removed item's place stays:
+  `sharpSlotItem` (key `curve.sharpSlot`, 40 dp, `shown = false`, so the host reserves the width
+  and draws nothing) takes it under the same condition (`f.sharp != NONE`). The user sees it as
+  an empty 40 dp place where an item comes before it on its More line (Path: between Endpoint
+  and Select all, where the Sharp item was); first on a line it reads as the line's slack (More
+  lines are end-aligned). The host packs the
+  More lines greedily and "All points 100 %" comes and goes before the thickness slider with the
+  slider's own use: without the 40 dp, at 392 dp the slider ended line 1 while every point was at
+  100 % and jumped to line 2 at the drag's first change, away from the finger (and its
+  semantics, 10 dp past its layout, met the line's clip). `v110/a5/ThicknessKeepsItsLineTest`
+  (pure) and `ThicknessDragKeepsItsPlaceUiTest` (a drag in the editor) hold v1.9's place. The
+  slot goes when the thickness item comes before "All points 100 %" (Polyline's order, outside
+  the A5 regions: a LeadRequest). Shape's strip has no slot: no test showed a Shape control
+  that changes place without its Smooth item.
+- The point sheets list Sharp before Smooth (region `v110-A5 cornerChips` in
+  `CurveToolOptions.kt`, and `ShapePointOptions.kt`), and Shape's Mixed chip makes the points
+  sharp.
+
+Tests: `v110/a5/` (`GroupGizmoSnapReproTest`, `GroupPointSnapOtherPointTest`,
+`CurveSelfSnapExcludeTest`, `GroupSnapCandidateCapTest`, `GroupScaleEdgeSnapTest`,
+`GroupSnapPerfProbeTest`, `SharpMixedMakesSharpTest`, `SharpIgnoredDuringGroupEditTest`,
+`SharpEndsOnlyTest`, `SharpOneStepPerTapTest`, `SharpNeverUnderTrashTest`,
+`PolylineSharpCellDisabledTest`, `PillSharpPlacementTest`, `GroupSnapAndSharpRoundTripTest`:
+undo and redo of a snapped group move, save and reopen, a v1.9 artwork unchanged;
+`ThicknessKeepsItsLineTest`, `ThicknessDragKeepsItsPlaceUiTest`: the slot above),
+`tools/points/PointGroupSnapTest`
+and `qa110/` (`Qa110SharpCellUiTest`, `Qa110GroupSnapUiTest`).
 
 <!-- /v110-A5 -->
 

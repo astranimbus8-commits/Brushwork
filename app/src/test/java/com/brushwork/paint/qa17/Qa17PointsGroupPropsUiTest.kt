@@ -18,9 +18,9 @@ import com.brushwork.paint.tools.vector.CurveTool
 import com.brushwork.paint.tools.vector.spline.SplineBezier
 import com.brushwork.paint.ui.common.PillLabels
 import com.brushwork.paint.ui.common.PointLabels
+import com.brushwork.paint.ui.common.PointLabels110
 import com.brushwork.paint.ui.editor.chrome.ChromeHarness
 import com.brushwork.paint.ui.vector.POINT_WEIGHT_LABEL
-import com.brushwork.paint.ui.vector.SHARP_MIXED
 import com.brushwork.paint.ui.vector.TYPE_POINT_WEIGHT
 import com.brushwork.paint.vector.VPath
 import org.junit.Assert.assertEquals
@@ -136,9 +136,10 @@ class Qa17PointsGroupPropsUiTest {
         assertFalse(tool.spline!!.points[2].sharp)
         press(PointLabels.SELECT_ALL, 44f)
         assertEquals(5, tool.pointSelection.count)
-        assertTrue("the chip says the corners differ", has(SHARP_MIXED, exact = true))
+        // v1.10 (R12): the pill's Sharp / Smooth cell, named PointLabels110.MIXED_MAKES_SHARP for a mix.
+        assertTrue("the chip says the corners differ", has(PointLabels110.MIXED_MAKES_SHARP, exact = true))
         val n2 = steps(tool)
-        press(SHARP_MIXED)
+        press(PointLabels110.MIXED_MAKES_SHARP)
         assertEquals("a tap on Mixed makes all of them corners; the ends stay", listOf(false, true, true, true, false), tool.spline!!.points.map { it.sharp })
         assertEquals(n2 + 1, steps(tool))
         assertEquals("the selection stays", 5, tool.pointSelection.count)

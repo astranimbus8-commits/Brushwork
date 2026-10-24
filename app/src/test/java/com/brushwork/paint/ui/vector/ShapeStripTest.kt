@@ -115,9 +115,11 @@ class ShapeStripTest {
                 assertTrue(StripTestKit.openMoreRow())
                 val pointsMore = moreHandles()
                 for (h in listOf(
-                    PointLabels.SELECT_ALL, "Smooth", "Auto tangent", "Delete point", "Deselect point", PointLabels.ROUNDNESS,
+                    PointLabels.SELECT_ALL, "Auto tangent", "Delete point", "Deselect point", PointLabels.ROUNDNESS,
                     PointLabels.RESET_ROUNDNESS, "Handles", "Reset shape", PointLabels.TO_PATH, MirrorLabels18.REMOVE,
                 )) assertTrue("$k at $dp dp, Points mode: \"$h\" on the More row: $pointsMore", h in pointsMore)
+                // v1.10 (R12): Sharp / Smooth is the X / Y pill's cell, no longer a More item.
+                for (h in listOf(ShapeStripItems.SMOOTH_LABEL, ShapeStripItems.SHARP_LABEL)) assertFalse("$k at $dp dp, Points mode: no \"$h\" on the More row: $pointsMore", h in pointsMore)
                 assertTrue("$k at $dp dp, Points mode: the bevel last: $pointsMore", pointsMore.last() == PointLabels19.BEVEL)
                 for (h in listOf("Center", "Proportional")) assertFalse("$k at $dp dp, Points mode: no \"$h\": $pointsMore", h in pointsMore)
                 assertEquals("$k at $dp dp: Points mode texts fit", emptyList<String>(), clippedTexts())

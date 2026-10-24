@@ -1931,8 +1931,11 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
     }
 
     // region v110-A5 corners
-    /** v1.10 (R12): the pill's Sharp / Smooth cell. F0: none, so the cell stays hidden (A5 body). */
-    override val pointCorners: PointCornerEditor? = null
+    /**
+     * v1.10 (A5, R12): the pill's Sharp / Smooth cell, one editor for the tool's life (the editor
+     * screen remembers the cell by it); its state hides the cell without a selected point.
+     */
+    override val pointCorners: PointCornerEditor? by lazy(LazyThreadSafetyMode.NONE) { com.brushwork.paint.tools.points.CurveCornerEditor(this) }
     // endregion
 
     /**
@@ -2450,6 +2453,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         }
         val sel = pointSelection
         val several = severalState
+        groupSnapBox = null
         if (!several && sel.count < 2) return false
         val t = controller.viewTransform
         val idx = nearestPointIndex(pt, grabRadius())
@@ -2463,6 +2467,9 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
                 drag = Drag.GIZMO
                 gizmoPart = part
                 gizmoLayout = layout
+                // v1.10 (A5, R8 cause A): a drag inside the box moves the group, snapped; a scale
+                // handle snaps the edges it drags. The rotate knob keeps its angle steps only.
+                if (part != PointGizmo.Part.ROTATE) beginGroupSnap(sel, -1)
                 return true
             }
         }
@@ -2472,8 +2479,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
             dragIndex = idx
             dragStartPos = pointAt(idx)
             // The other points are snap targets (the group moves together, so not its own points).
-            val moving = if (several) sel.plus(idx) else sel
-            beginSnapWithout { it in moving }
+            beginGroupSnap(if (several) sel.plus(idx) else sel, idx)
             return true
         }
         if (!several) return false
@@ -2499,7 +2505,8 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
                     beginGroupEdit(GROUP_MOVE_LABEL)
                     setDragging(true)
                 }
-                val d = dragTarget(pt) - dragStartPos
+                // v1.10 (A5, R8 cause B): the group snaps (in 1.9 only the finger's point did).
+                val d = groupSnapMove(pt - downPoint)
                 setGroupTransform(Affine2.translate(d.x, d.y))
             }
             Drag.GIZMO -> {
@@ -2508,7 +2515,15 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
                     beginGroupEdit(GROUP_MOVE_LABEL)
                     setDragging(true)
                 }
-                setGroupTransform(gizmo.dragMap(layout, gizmoPart, downPoint, pt, keepProportions(), controller.increments.state))
+                if (gizmoPart == PointGizmo.Part.MOVE) {
+                    val d = groupSnapMove(pt - downPoint)
+                    setGroupTransform(Affine2.translate(d.x, d.y))
+                } else {
+                    var m = gizmo.dragMap(layout, gizmoPart, downPoint, pt, keepProportions(), controller.increments.state)
+                    val box = groupSnapBox
+                    if (box != null) m = com.brushwork.paint.tools.points.PointGroupSnap.of(snap, controller).scale(m, gizmoPart, box, layout.pivotDoc, keepProportions())
+                    setGroupTransform(m)
+                }
             }
             else -> {}
         }
@@ -2542,6 +2557,43 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         }
         gizmoLayout = null
         gizmoPart = PointGizmo.Part.NONE
+        groupSnapBox = null
+    }
+
+    /** v1.10 (A5, R8): the points a group move snaps, where the touch began, as x, y pairs. */
+    private var groupSnapPoints = FloatArray(0)
+    /** Their bounds then; null when no group move is snapped. */
+    private var groupSnapBox: com.brushwork.paint.tools.transform.DocBox? = null
+    /** The grabbed point's index in [groupSnapPoints], or -1 (the gizmo's box). */
+    private var groupSnapGrabbed = -1
+
+    /**
+     * v1.10 (A5, R8): a group move of the points [moving] begins, [grabbed] (a point index, or -1)
+     * under the finger: their positions now are what [groupSnapMove] snaps, and the other points
+     * are the snap targets (the group moves together, so never its own points).
+     */
+    private fun beginGroupSnap(moving: PointSelection, grabbed: Int) {
+        val idx = moving.indices.filter { it < pointCount }
+        groupSnapPoints = com.brushwork.paint.tools.points.PointGroupSnap.pairs(idx.map { pointAt(it) })
+        groupSnapBox = com.brushwork.paint.tools.points.PointGroupSnap.bounds(groupSnapPoints)
+        groupSnapGrabbed = idx.indexOf(grabbed)
+        beginSnapWithout { it in moving }
+    }
+
+    /**
+     * v1.10 (A5, R8): the snapped delta of the group move for the finger's raw delta [d]: the
+     * group's box and points snap, then the grid, then the step (`PointGroupSnap`). Guide labels
+     * keep off the grabbed point (or the box's centre); while increments are on the readout shows
+     * the move, as a dragged point's does.
+     */
+    private fun groupSnapMove(d: Vec2): Vec2 {
+        val box = groupSnapBox ?: return d
+        val move = com.brushwork.paint.tools.points.PointGroupSnap.of(snap, controller).snap(groupSnapPoints, box, groupSnapGrabbed, d)
+        val g = groupSnapGrabbed
+        snapMoving = if (g >= 0) Vec2(groupSnapPoints[g * 2] + move.x, groupSnapPoints[g * 2 + 1] + move.y)
+        else Vec2((box.left + box.right) / 2f + move.x, (box.top + box.bottom) / 2f + move.y)
+        if (controller.increments.state.enabled) controller.increments.readout = "${signed(move.x)}, ${signed(move.y)} px"
+        return move
     }
     // endregion
 
@@ -3028,7 +3080,19 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         val others = ArrayList<Vec2>(anchors.size)
         if (isPath) spline?.points?.forEachIndexed { i, p -> if (!skip(i)) others += Vec2(p.x, p.y) }
         else anchors.forEachIndexed { i, a -> if (!skip(i)) others += a.pos }
-        snap.begin(includeSelection = true) { pointLines(others, POINT_LABEL) }
+        snap.begin(exclude = ownLayerExclude(), includeSelection = true) { pointLines(others, POINT_LABEL) }
+    }
+
+    /**
+     * v1.10 (A5, R8 cause E): the reopened path's layer when the path is its only object. Until the
+     * edit is committed the layer's pixels still hold the path as it was (the edit session only hides it on screen),
+     * so its content bounds are the path's own old extent: in 1.9 the points snapped back onto it.
+     * With other objects the layer stays a target (their bounds are what it offers).
+     */
+    private fun ownLayerExclude(): List<Layer> {
+        val r = reopened ?: return emptyList()
+        val objects = r.layer.vector?.objects ?: return emptyList()
+        return if (objects.size == 1 && objects[0].id == r.original.id) listOf(r.layer) else emptyList()
     }
     // endregion
 
