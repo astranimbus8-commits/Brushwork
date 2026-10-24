@@ -3142,11 +3142,13 @@ image") and the CDC consumer of R7 (the canvas previews a color while it is bein
   (3) `Rule.ALL`. `map(data, f)` maps the targets through `ObjectColorSlots` (`map`, `mapText`,
   `mapShape`; I35) and returns `data` itself when nothing changes. An array is kept as it is: its
   copies are drawn from the mapped source and keep their tint stops (D1).
-- **Preview (C12).** `ObjectColorTargets.exactByPixels`: with `Rule.ALL`, no text and no array
-  tint, the CDC mapping of the layer's pixels equals the re-render of the mapped data (CDC is
-  affine per channel; within 2 per premultiplied channel, `CdcObjectModeNoRasterizeTest`), so the
-  v1.9 pixel preview is kept (`holdsPixelCopy`). Otherwise (selected objects, a pixel selection,
-  a tint, any text: Skia antialiases a glyph's edge by its paint's luminance) `renderObjectsOnce`
+- **Preview (C12).** `ObjectColorTargets.exactByPixels`: when every object is a target (`Rule.ALL`,
+  or every object selected or touched by the pixel selection: the selection then masks nothing,
+  the objects change whole), no text and no array tint, the CDC mapping of the layer's pixels
+  equals the re-render of the mapped data (CDC is affine per channel; within 2 per premultiplied
+  channel, `CdcObjectModeNoRasterizeTest`), so the v1.9 pixel preview is kept (`holdsPixelCopy`).
+  Otherwise (some objects selected or touched, a tint, any text: Skia antialiases a glyph's edge
+  by its paint's luminance) `renderObjectsOnce`
   re-renders the mapped data into the preview bitmap, a live array through `ArrayDraw`, and the
   session holds no copy of the layer's pixels (no untiled whole-image CDC buffer). A selection
   made or dropped during the session moves it between the two.
@@ -3175,10 +3177,16 @@ image") and the CDC consumer of R7 (the canvas previews a color while it is bein
   first, as any update does) and the canvas re-previews; Cancel's `onPreview(start)` restores
   the opening color the same way; OK updates and calls `onChangeFinished`, one panel step. The
   same control in an adjustment layer's Adjust sheet previews through `AdjustmentEdit.preview`.
-- **Budget.** `CdcObjectPreviewTimingTest` (Timing): a whole-layer frame of 200 objects with 8
-  copies each (1,800 drawn) is PC 5.5 ms / device 33 ms; a re-rendered frame of 200 selected
-  objects is PC 42 ms / device 250 ms (C12). Frames are `PerfTrace.FILTER_PREVIEW` medians of
-  15 after 3 warm-ups, waited for with a busy loop (`idleUntil`'s 5 ms sleeps would count).
+- **Budget.** `CdcObjectPreviewTimingTest` (Timing), on a 1280 x 1280 layer (the preview's
+  size) of 200 paths and shapes spread over it: a whole-layer frame with 8 copies each (1,800
+  drawn) is PC 5.5 ms / device 33 ms; a re-rendered frame of 199 selected objects is PC 42 ms /
+  device 250 ms (C12). Frames are `PerfTrace.FILTER_PREVIEW` medians of 15 after 3 warm-ups,
+  waited for with a busy loop (`idleUntil`'s 5 ms sleeps would count). A re-rendered frame costs
+  a render of the whole layer, the renderer's cost: brush strokes are far dearer than paths
+  (review probe at 1280 px: 200 strokes 272 ms on the PC against 20 ms for 200 paths and
+  shapes), so on a stroke-heavy layer a partial recolor previews in about a second and a half on
+  the phone; the whole layer stays on the pixel preview. The apply re-renders too (500 strokes:
+  PC 560 to 670 ms against the 250 ms proxy of contracts C12), the case for cut item P4.
 
 <!-- /v110-A4 -->
 

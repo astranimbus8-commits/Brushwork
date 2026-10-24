@@ -76,19 +76,34 @@ internal class ObjectColorTargets private constructor(
     /**
      * C12: an affine mapper (CDC's: per channel, unpremultiplied, alpha kept) applied to the
      * layer's pixels gives what [map] re-rendered gives, within 1 per channel. It holds when
-     * every object of [data] is a target ([Rule.ALL]) and every color the layer paints comes from
-     * a slot `ObjectColorSlots` maps; it maps them all (a stroke's color, a path's line and fill
-     * with gradient stops, a shape's two colors, a text's color, outline, box fill and border),
-     * and an affine map commutes with antialiasing and source-over. An array tint breaks it (the
-     * copies keep their tint, and recolor then tint is not tint then recolor); an array opacity
-     * does not (alpha only). The tint test is `ArrayInstances.of`'s. Texts break it too: Skia
-     * antialiases a glyph's edge by its paint's luminance, so a recolored text covers its edge
-     * pixels differently (alpha 12 for 24 measured, `CdcObjectModeNoRasterizeTest`).
+     * every object of [data] is a target ([coversAll]: [Rule.ALL], or every object selected or
+     * touched by the pixel selection; the selection then masks nothing, as the objects change
+     * whole) and every color the layer paints comes from a slot `ObjectColorSlots` maps; it maps
+     * them all (a stroke's color, a path's line and fill with gradient stops, a shape's two
+     * colors, a text's color, outline, box fill and border), and an affine map commutes with
+     * antialiasing and source-over. An array tint breaks it (the copies keep their tint, and
+     * recolor then tint is not tint then recolor); an array opacity does not (alpha only). The
+     * tint test is `ArrayInstances.of`'s. Texts break it too: Skia antialiases a glyph's edge by
+     * its paint's luminance, so a recolored text covers its edge pixels differently (alpha 12 for
+     * 24 measured, `CdcObjectModeNoRasterizeTest`).
      */
     fun exactByPixels(data: LayerData): Boolean {
-        if (rule != Rule.ALL || data.text != null) return false
+        if (data.text != null || !coversAll(data)) return false
         val look = data.array?.spec?.sanitized()?.look ?: return true
         return !(look.tint.size >= 2 && look.tintStrength > 0f)
+    }
+
+    /**
+     * Every object of [data] is a target, so [map] maps what [Rule.ALL] maps: always under
+     * [Rule.ALL]; under the other rules when every vector object is in [vectorIds] (a pixel
+     * selection over the whole canvas touches every object) and a legacy shape is recolored.
+     */
+    private fun coversAll(data: LayerData): Boolean {
+        if (rule == Rule.ALL) return true
+        val ids = vectorIds
+        val v = data.vector
+        if (v != null && ids != null && v.objects.any { it.id !in ids }) return false
+        return data.shape == null || shape
     }
 
     companion object {

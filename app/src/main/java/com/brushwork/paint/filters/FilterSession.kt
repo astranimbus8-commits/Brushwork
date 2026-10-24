@@ -145,12 +145,12 @@ class FilterSession(
 
     /**
      * v1.10 (R6, A4): the filter recolors the objects of a vector, text or shape layer through its
-     * [Filter.colorMapper] instead of filtering pixels (decided at the start). Preview (C12): for
-     * a whole vector or shape layer without an array tint the v1.9 pixel preview is exact and is
-     * kept ([ObjectColorTargets.exactByPixels]); otherwise the preview re-renders the layer's
-     * data with mapped colors (a live array's copies through `ArrayDraw`) and holds no copy of
-     * the layer's pixels. Apply changes the data as one step, re-rendered: nothing is
-     * rasterized. Which objects: [ObjectColorTargets].
+     * [Filter.colorMapper] instead of filtering pixels (decided at the start). Preview (C12): when
+     * every object of a vector or shape layer without an array tint is a target the v1.9 pixel
+     * preview is exact and is kept ([ObjectColorTargets.exactByPixels]); otherwise the preview
+     * re-renders the layer's data with mapped colors (a live array's copies through `ArrayDraw`)
+     * and holds no copy of the layer's pixels. Apply changes the data as one step, re-rendered:
+     * nothing is rasterized. Which objects: [ObjectColorTargets].
      */
     val objectMode: Boolean = target == EditTarget.CONTENT && filter.colorMapper(filter.defaultValues()) != null &&
         ObjectColorTargets.hasObjects(layer.dataSnapshot())
@@ -200,8 +200,10 @@ class FilterSession(
     private val scratchLock = Any()
     /** The render whose pixels [scratchBitmap] holds (a stopped render may have drawn after it). */
     private var scratchOwner: Job? = null
-    private val objectTips by lazy { TipCache(OBJECT_TIP_BYTES) }
-    private val objectCache by lazy { RenderCache() }
+    private val objectTipsLazy = lazy { TipCache(OBJECT_TIP_BYTES) }
+    private val objectTips by objectTipsLazy
+    private val objectCacheLazy = lazy { RenderCache() }
+    private val objectCache by objectCacheLazy
 
     private var previewJob: Job? = null
     private var analysisJob: Job? = null
@@ -394,6 +396,10 @@ class FilterSession(
             scratchBitmap?.recycle()
             scratchBitmap = null
             scratchOwner = null
+            // The render caches go too: the tips' bitmaps (up to OBJECT_TIP_BYTES) now, not at a
+            // later GC. Never created here when no object render ran.
+            if (objectTipsLazy.isInitialized()) objectTips.clear()
+            if (objectCacheLazy.isInitialized()) objectCache.clear()
         }
         objectSource = null
     }
@@ -790,6 +796,10 @@ class FilterSession(
                 scratchOwner = null
             }
             buildPreviewSource()
+            // Every object is a target and changes whole: a pixel selection (that touched them
+            // all, or beside selected objects) masks nothing and bounds no region.
+            previewSel = null
+            previewSelSource = null
             return
         }
         previewSrc = null

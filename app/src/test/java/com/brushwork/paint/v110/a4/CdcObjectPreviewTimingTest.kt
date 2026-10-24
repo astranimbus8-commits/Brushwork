@@ -28,17 +28,19 @@ import java.util.Locale
 
 /**
  * v1.10 (R6, A4; design (c), contracts C12): object-mode preview frames of Change Drawing Color
- * on a 512 x 512 vector layer of 200 objects (paths with fill and line, shapes), each the median
- * of 15 frames after 3 warm-ups as `PerfTrace.FILTER_PREVIEW` records them.
+ * on a 1280 x 1280 vector layer (the preview's size, contracts C12) of 200 objects spread over it
+ * (paths with fill and line, shapes), each the median of 15 frames after 3 warm-ups as
+ * `PerfTrace.FILTER_PREVIEW` records them.
  * - The whole layer with an array of 8 copies each (1,800 objects drawn): the exact pixel preview
  *   C12 keeps. Budget 5.5 ms on the PC (33 ms on the x6 device proxy).
- * - The 200 objects selected (rule 1): the layer's data mapped and re-rendered. Budget 42 ms on
- *   the PC (the x6 proxy of 250 ms on the device).
+ * - 199 of the 200 objects selected (rule 1; all 200 would map the whole layer, which keeps the
+ *   pixel preview): the layer's data mapped and re-rendered. Budget 42 ms on the PC (the x6
+ *   proxy of 250 ms on the device).
  */
 @Category(Timing::class)
 @RunWith(RobolectricTestRunner::class)
 class CdcObjectPreviewTimingTest {
-    private val kit = ObjectTestKit(512, 512)
+    private val kit = ObjectTestKit(1280, 1280)
 
     @Before
     fun setUp() { PerfTrace.clear(); PerfTrace.enabled = true }
@@ -50,9 +52,9 @@ class CdcObjectPreviewTimingTest {
         val c = kit.controller()
         val objects = ArrayList<VObject>(200)
         for (k in 0 until 200) {
-            val x = 12f + (k % 20) * 24f
-            val y = 12f + (k / 20) * 24f
-            objects += if (k % 2 == 0) kit.box(x, y, x + 16f, y + 16f) else kit.ellipse(x + 8f, y + 8f, 18f, 14f)
+            val x = 30f + (k % 20) * 60f
+            val y = 30f + (k / 20) * 120f
+            objects += if (k % 2 == 0) kit.box(x, y, x + 40f, y + 80f) else kit.ellipse(x + 20f, y + 40f, 45f, 90f)
         }
         c.vectors.addObjects(c.vec, objects, "Add")
         return c
@@ -111,12 +113,12 @@ class CdcObjectPreviewTimingTest {
     }
 
     @Test
-    fun aRenderedFrameOf200SelectedObjectsStaysWithinBudget() {
+    fun aRenderedFrameOf199SelectedObjectsStaysWithinBudget() {
         val c = layer()
-        c.vectors.setSelection(c.vec, c.vec.vector!!.objects.mapTo(HashSet()) { it.id })
+        c.vectors.setSelection(c.vec, c.vec.vector!!.objects.drop(1).mapTo(HashSet()) { it.id })
         val s = session(c)
         assertFalse("re-rendered", s.holdsPixelCopy)
-        medianFrame(s, 42.0, "200 selected objects")
+        medianFrame(s, 42.0, "199 of 200 objects selected")
         s.cancel()
     }
 }

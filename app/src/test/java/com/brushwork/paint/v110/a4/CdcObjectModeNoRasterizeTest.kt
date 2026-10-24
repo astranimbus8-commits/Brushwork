@@ -49,10 +49,11 @@ import kotlin.math.max
 /**
  * v1.10 (R6, A4 step 3): Change Drawing Color on a vector, text or shape layer runs in object
  * mode and its preview shows the recolored objects while the layer's data, pixels, kind and
- * history stay as they were. Preview (C12): a whole vector or shape layer without an array tint
- * keeps the v1.9 pixel preview, exact up to rounding (CDC is affine); selected objects, a pixel
- * selection, an array tint or texts re-render the data with mapped colors and hold no copy of
- * the layer's pixels, and the session moves between the two when the selection changes. An edit of the layer during the
+ * history stay as they were. Preview (C12): a vector or shape layer without an array tint whose
+ * every object is a target keeps the v1.9 pixel preview, exact up to rounding (CDC is affine);
+ * some objects selected or touched by a pixel selection, an array tint or texts re-render the
+ * data with mapped colors and hold no copy of the layer's pixels, and the session moves between
+ * the two when the selection changes. An edit of the layer during the
  * session refreshes the preview; a raster layer keeps the pixel path; a mask added during the
  * session still ends it.
  */
@@ -185,6 +186,43 @@ class CdcObjectModeNoRasterizeTest {
         s.cancel()
     }
 
+    /**
+     * Review: every object selected, or a pixel selection touching every object, maps what the
+     * whole layer maps, so the exact pixel preview is kept (C12), and the selection masks
+     * nothing: the box's far corner, outside the selection, previews recolored too.
+     */
+    @Test
+    fun everyObjectSelectedOrTouchedKeepsThePixelPreviewOverWholeObjects() {
+        val c = withObjects()
+        val before = c.vec.vector!!
+        c.vectors.setSelection(c.vec, before.objects.mapTo(HashSet()) { it.id })
+        val s = start(c)
+        assertEquals(ObjectColorTargets.Rule.OBJECTS, s.objectRule)
+        assertTrue("every object selected: the pixel preview", s.holdsPixelCopy)
+        set(s, "color", 0xFF00A040.toInt())
+        assertWithinRounding(kit.render(mapped(s, before)), shown(c))
+        s.cancel()
+
+        val d = withObjects()
+        val all = d.vec.vector!!
+        // Over a corner of the box, the ellipse's left side and the stroke's start.
+        d.setSelection(kit.rectSelection(100, 80, 300, 260), recordUndo = false)
+        val t = start(d)
+        assertEquals(ObjectColorTargets.Rule.SELECTION, t.objectRule)
+        assertTrue("every object touched: the pixel preview", t.holdsPixelCopy)
+        set(t, "color", 0xFF00A040.toInt())
+        val expected = kit.render(mapped(t, all))
+        val far = 50 * kit.w + 50
+        assertNotEquals("the box's corner outside the selection changes", kit.render(all)[far], expected[far])
+        assertWithinRounding(expected, shown(d))
+        val f = cdc.colorMapper(t.values)!!
+        t.apply()
+        assertTrue(kit.idleUntil { t.isClosed })
+        val after = ObjectColorSlots.map(all, null, f)
+        assertEquals(after, d.vec.vector)
+        assertArrayEquals(kit.render(after), kit.pixels(d.vec.bitmap))
+    }
+
     @Test
     fun anArrayTintRendersTheCopiesWithTheirTintKept() {
         val c = withObjects()
@@ -277,5 +315,60 @@ class CdcObjectModeNoRasterizeTest {
         assertNull(c.filterSession)
         assertNull(c.renderOverride)
         assertSame(before, c.vec.vector)
+    }
+
+    /**
+     * On a document larger than the preview (2560 x 1920, so the preview is scaled) the rendered
+     * preview lands in place: the selected box shows its mapped color, the other box and a big
+     * text glyph's ink theirs, and nothing paints between them.
+     */
+    @Test
+    fun aScaledPreviewRendersTheMappedObjectsInPlace() {
+        val big = ObjectTestKit(2560, 1920)
+        try {
+            fun shownBig(c: EditorController): IntArray {
+                val b = BitmapUtils.createLayerBitmap(big.w, big.h)
+                assertTrue(c.renderOverride!!.drawContent(Canvas(b)))
+                return big.pixels(b).also { b.recycle() }
+            }
+            fun assertNear(what: String, expected: Int, actual: Int) {
+                var worst = 0
+                for (shift in intArrayOf(24, 16, 8, 0)) worst = max(worst, abs(((expected shr shift) and 0xFF) - ((actual shr shift) and 0xFF)))
+                assertTrue("$what: expected %08X, shown %08X".format(expected, actual), worst <= 2)
+            }
+            val c = big.controller()
+            c.vectors.addObjects(c.vec, listOf(big.box(100f, 100f, 600f, 500f), big.box(1900f, 1300f, 2400f, 1800f)), "Add")
+            c.vectors.setSelection(c.vec, setOf(2L))
+            val s = start(c)
+            set(s, "color", 0xFF00A040.toInt())
+            assertTrue(s.previewScale < 1f)
+            assertFalse(s.holdsPixelCopy)
+            val f = cdc.colorMapper(s.values)!!
+            assertNotEquals(0xFFE04020.toInt(), f(0xFFE04020.toInt()))
+            val px = shownBig(c)
+            assertNear("selected box", f(0xFFE04020.toInt()), px[1550 * big.w + 2150])
+            assertNear("other box", 0xFFE04020.toInt(), px[300 * big.w + 350])
+            assertEquals(0, px[900 * big.w + 1200] ushr 24)
+            s.cancel()
+
+            val t = big.controller()
+            val ink = 0xFF202020.toInt()
+            val text = TextCodec.encodeAll(listOf(TextItem("III", TextSpec(sizePx = 200f, color = ink), cx = 2000f, cy = 1500f, id = 1)))
+            assertTrue(DataRender.apply(t, t.vec, LayerData(text = text), "Text", Rect(0, 0, big.w, big.h), allowHidden = false))
+            val layer = big.pixels(t.vec.bitmap)
+            // A pixel deep inside a stroke of the glyphs: ink in every direction for 4 px.
+            val at = layer.indices.first { i ->
+                val x = i % big.w
+                val y = i / big.w
+                x in 4 until big.w - 4 && y in 4 until big.h - 4 && (-4..4).all { dy -> (-4..4).all { dx -> layer[(y + dy) * big.w + x + dx] == ink } }
+            }
+            val s2 = start(t)
+            set(s2, "color", 0xFF00A040.toInt())
+            assertTrue(s2.previewScale < 1f)
+            assertNear("text ink", cdc.colorMapper(s2.values)!!(ink), shownBig(t)[at])
+            s2.cancel()
+        } finally {
+            big.close()
+        }
     }
 }
