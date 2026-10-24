@@ -72,7 +72,7 @@ fun PillSharpCell(editor: PointCornerEditor) {
                 if (face == null) Modifier else Modifier
                     .onGloballyPositioned { bounds[0] = it.boundsInRoot() }
                     .longPressLabel(face.name)
-                    .clickable(onClickLabel = face.clickLabel, role = Role.Button) {
+                    .clickable(onClickLabel = face.name, role = Role.Button) {
                         when (val sharp = face.makesSharp) {
                             null -> bubbles?.show(face.name, bounds[0])
                             else -> editor.setSelectedSharp(sharp)
@@ -99,18 +99,16 @@ fun PillSharpCell(editor: PointCornerEditor) {
 }
 
 /**
- * A face: its glyph, its name (long press, content description), what a tap does (null: greyed)
- * and the click action's label. The Mixed face's click label is v1.9's More item name
- * [com.brushwork.paint.ui.vector.SHARP_MIXED], so v1.9 tests that press that name still reach the
- * cell (a LeadRequest asks to move them to [PointLabels110.MIXED_MAKES_SHARP]).
+ * A face: its glyph, its name (long press, content description and the click action's label) and
+ * what a tap does (null: greyed).
  */
-internal class SharpFace(val icon: ImageVector, val name: String, val makesSharp: Boolean?, val clickLabel: String = name)
+internal class SharpFace(val icon: ImageVector, val name: String, val makesSharp: Boolean?)
 
 /** The face of [state] (design R12 (a)). */
 internal fun faceOf(state: CornerState): SharpFace = when (state) {
     CornerState.SMOOTH -> SharpFace(Icons.Filled.ChangeHistory, ShapeStripItems.SHARP_LABEL, makesSharp = true)
     CornerState.SHARP -> SharpFace(Icons.Filled.Gesture, ShapeStripItems.SMOOTH_LABEL, makesSharp = false)
-    CornerState.MIXED -> SharpFace(Icons.Outlined.ChangeHistory, PointLabels110.MIXED_MAKES_SHARP, makesSharp = true, clickLabel = com.brushwork.paint.ui.vector.SHARP_MIXED)
+    CornerState.MIXED -> SharpFace(Icons.Outlined.ChangeHistory, PointLabels110.MIXED_MAKES_SHARP, makesSharp = true)
     CornerState.ENDS_ONLY -> SharpFace(Icons.Filled.ChangeHistory, PointLabels.ENDS_SHARP, makesSharp = null)
     CornerState.ALWAYS_SHARP -> SharpFace(Icons.Filled.ChangeHistory, PointLabels110.POLYLINE_ALWAYS_SHARP, makesSharp = null)
 }

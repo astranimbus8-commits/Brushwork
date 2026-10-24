@@ -2646,9 +2646,8 @@ the one row).
   "Sharp corner", "Smooth", `PointLabels110.MIXED_MAKES_SHARP`, and greyed
   `PointLabels.ENDS_SHARP` or `PointLabels110.POLYLINE_ALWAYS_SHARP`. Tag `V110Tags.PILL_SHARP`;
   a long press shows the name; a greyed cell is disabled for accessibility and a tap shows its
-  name in the long-press bubble. The Mixed face's click-action label is v1.9's More item name
-  `SHARP_MIXED`, so v1.9 tests that press that name reach the cell (until the lead moves them to
-  `MIXED_MAKES_SHARP`; the other faces' click label is their name).
+  name in the long-press bubble. Every face's click-action label is its name (v1.7's
+  `qa17/Qa17PointsGroupPropsUiTest` presses the Mixed face by `MIXED_MAKES_SHARP`).
 - The More rows lost their Sharp / Smooth items (regions `v110-A5 sharpItems` in
   `CurveStrips.kt` and `ShapeStrip.kt`). The code stays behind `CornerEditors.SHOW_IN_MORE`
   (false), which only the lead may flip; while it is false `ui/vector/CurveStripRulesTest` finds
