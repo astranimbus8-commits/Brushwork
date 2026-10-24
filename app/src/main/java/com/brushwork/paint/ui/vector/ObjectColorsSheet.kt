@@ -16,12 +16,14 @@ import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -38,6 +40,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.brushwork.paint.EditorController
+import com.brushwork.paint.tools.InToolHistoryOwner
 import com.brushwork.paint.tools.ObjectColorEditor
 import com.brushwork.paint.tools.ObjectColorFace
 import com.brushwork.paint.tools.ObjectColorTarget
@@ -54,6 +58,10 @@ import com.brushwork.paint.ui.common.V110Tags
 import com.brushwork.paint.ui.common.checkerboard
 import com.brushwork.paint.ui.common.iconLongPressLabel
 import com.brushwork.paint.ui.theme.BrushworkColors
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 
 /**
  * v1.10 (R2, R3, R7; design 4.4 A2): the [ObjectColorLabels110.CELL] sheet the pill's COLOR cell opens on the
@@ -84,14 +92,17 @@ import com.brushwork.paint.ui.theme.BrushworkColors
  * sheet opened with ([ObjectColorEditor.cancel], every tab at once). Inside the editor a swipe or a
  * touch outside the sheet only minimizes it (SheetHost) and keeps the preview. When the object's
  * session ends, the caller drops this call: the tool's ✓ keeps the colors inside its one step, ✕
- * restores them with everything else.
+ * restores them with everything else. Undo while the sheet is open or minimized first closes it
+ * with Cancel, then undoes as usual ([ObjectColorSheetState]).
  */
 @Composable
 internal fun ObjectColorsSheet(editor: ObjectColorEditor, onClose: () -> Unit) {
     val targets = editor.targets
     if (targets.isEmpty()) return
     // The start values (and the restore point of the main color) are taken once per opening,
-    // before any preview (previews are delivered from the next frame on).
+    // before any preview (previews are delivered from the next frame on). An opening that went
+    // away unanswered (the pill folded, the interface hidden) left them in place: A2's editors
+    // keep them for the rest of the object's session, so Cancel restores what it found.
     DisposableEffect(editor) {
         editor.begin()
         onDispose { }
@@ -277,6 +288,112 @@ internal interface ObjectColorExtras {
 
     /** Shows [text] the way the tool shows its messages (the reason a target is refused). */
     fun toast(text: String)
+
+    /** Whether the pill's sheet is open on this editor's object (the pill's `PillColorCell`). */
+    val sheet: ObjectColorSheetState
+}
+
+/**
+ * v1.10 (design 4.4 A2 step 6): whether the pill's [ObjectColorLabels110.CELL] sheet is open, kept
+ * by the editor rather than by the pill's cell. The pill composes the cell in another place when
+ * it folds and drops it while the interface is hidden or the eraser is on; the sheet outlives that
+ * (it shows again with its preview, and its Cancel still restores what its first opening found:
+ * the editors keep their start values for the object's session).
+ *
+ * It is open for one object: [session] is the editor's object session (Compose state reads, null
+ * while no object is open; another value is another object). It is never open on another object,
+ * and the end of its object's session forgets it (a frame later), so an object opened again (the
+ * same text) starts with the sheet closed.
+ *
+ * Undo (R2, J21): while the sheet is open or minimized, the app's Undo first closes it with Cancel
+ * ([cancel], the editor's: the colors it opened with), then undoes as usual. For that the state is
+ * [controller]'s `inToolHistory` while open ([UndoFirst]), handing every call on to the owner it
+ * found there (a session that owns Undo keeps it); a session that takes `inToolHistory` over later
+ * (a filter, a text path's nodes) simply goes first. Without [controller] (a stand-in editor) there
+ * is no such hook.
+ */
+@Stable
+internal class ObjectColorSheetState(
+    private val scope: CoroutineScope,
+    private val controller: EditorController? = null,
+    private val cancel: () -> Unit = {},
+    private val session: () -> Any?,
+) {
+    private var openFor: Any? by mutableStateOf(null)
+    private var watch: Job? = null
+    private var undoFirst: UndoFirst? = null
+
+    /** The object open now (Compose state reads), or null. */
+    val current: Any? get() = session()
+
+    /** The sheet is open on the object open now (Compose state). */
+    val isOpen: Boolean
+        get() {
+            val s = openFor ?: return false
+            return s == session()
+        }
+
+    /** Opens the sheet on the object open now (nothing while none is). */
+    fun open() {
+        val s = session() ?: return
+        openFor = s
+        takeUndo()
+        watch?.cancel()
+        watch = scope.launch {
+            snapshotFlow { session() }.first { it != s }
+            if (openFor == s) {
+                openFor = null
+                giveUndoBack()
+            }
+        }
+    }
+
+    /** Closes the sheet (its OK, Cancel or Back). */
+    fun close() {
+        openFor = null
+        watch?.cancel()
+        watch = null
+        giveUndoBack()
+    }
+
+    private fun takeUndo() {
+        val c = controller ?: return
+        if (undoFirst != null && c.inToolHistory === undoFirst) return
+        undoFirst = UndoFirst(c.inToolHistory).also { c.inToolHistory = it }
+    }
+
+    /** Puts back the owner found at the opening, unless another one took over meanwhile. */
+    private fun giveUndoBack() {
+        val c = controller ?: return
+        val u = undoFirst ?: return
+        undoFirst = null
+        if (c.inToolHistory === u) {
+            c.inToolHistory = u.next
+            // (The owner found may be the wait guard of renders that landed meanwhile.)
+            c.refreshDeferredWaitGuard()
+        }
+    }
+
+    /** Undo's first stop while the sheet is open: its Cancel, then [next] (or the usual Undo). */
+    private inner class UndoFirst(val next: InToolHistoryOwner?) : InToolHistoryOwner {
+        override val canUndo: Boolean get() = next?.canUndo == true
+        override val canRedo: Boolean get() = next?.canRedo == true
+        override val undoLabel: String? get() = next?.undoLabel
+        override val redoLabel: String? get() = next?.redoLabel
+
+        override fun undoStep(): Boolean {
+            val n = next
+            if (isOpen) {
+                cancel()
+                close()
+            } else {
+                giveUndoBack()
+            }
+            return n?.undoStep() == true
+        }
+
+        override fun redoStep(): Boolean = next?.redoStep() == true
+    }
 }
 
 /** The name of [t]: its tab's long-press name and content description. */
@@ -319,7 +436,13 @@ private class SheetSession {
 internal val OBJECT_COLORS_ROW: Dp = 48.dp
 
 private val tabShape = RoundedCornerShape(8.dp)
-private val FRAME_LIGHT = Color(0xFFE8EAED)
-private val FRAME_DARK = Color(0xFF202124)
-private val SLASH = Color(0xFFD93025)
+
+/** The swatches' 1 dp light outer frame ring (the sheet's tabs, the pill's COLOR cell). */
+internal val FRAME_LIGHT = Color(0xFFE8EAED)
+
+/** The swatches' 1 dp dark inner frame ring. */
+internal val FRAME_DARK = Color(0xFF202124)
+
+/** The slash across a "none" swatch (no fill, no outline). */
+internal val SLASH = Color(0xFFD93025)
 private const val OPAQUE_BLACK = 0xFF000000.toInt()

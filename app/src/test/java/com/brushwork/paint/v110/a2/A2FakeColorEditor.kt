@@ -9,6 +9,10 @@ import com.brushwork.paint.tools.ObjectColorFace
 import com.brushwork.paint.tools.ObjectColorTarget
 import com.brushwork.paint.ui.common.PaintMode
 import com.brushwork.paint.ui.vector.ObjectColorExtras
+import com.brushwork.paint.ui.vector.ObjectColorSheetState
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 
 /**
  * A2 test kit: an [ObjectColorEditor] over a fake open object (a fill, a stroke and a paint mode,
@@ -45,6 +49,11 @@ internal class A2FakeColorEditor(fill: Int, stroke: Int, mode: PaintMode = Paint
 
     override fun toast(text: String) {
         toasts += text
+    }
+
+    /** The pill's sheet on the fake object (open while its session is). */
+    override val sheet = ObjectColorSheetState(CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)) {
+        if (sessionOpen) this@A2FakeColorEditor else null
     }
 
     override fun setPaintMode(m: PaintMode) {

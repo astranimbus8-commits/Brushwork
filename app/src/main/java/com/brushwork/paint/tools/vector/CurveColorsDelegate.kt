@@ -9,6 +9,7 @@ import com.brushwork.paint.ui.common.CurveLabels17
 import com.brushwork.paint.ui.common.ObjectColorLabels110
 import com.brushwork.paint.ui.common.PaintMode
 import com.brushwork.paint.ui.vector.ObjectColorExtras
+import com.brushwork.paint.ui.vector.ObjectColorSheetState
 import com.brushwork.paint.ui.vector.curvePaint
 import com.brushwork.paint.ui.vector.paintMode
 import com.brushwork.paint.vector.ColorSlot
@@ -32,6 +33,12 @@ internal interface CurveColorsHost {
 
     /** A path is open, new or reopened (Compose state). */
     val open: Boolean
+
+    /**
+     * Which path is open (Compose state reads), null when none: another value is another path's
+     * session (a placed path and the next one opened in the same call too).
+     */
+    val session: Any?
 
     /** The open path can be filled (3 points; `CurveTool.fillPossible`). */
     val fillPossible: Boolean
@@ -101,7 +108,7 @@ internal interface CurveColorsHost {
  */
 internal class CurveColorsDelegate(private val host: CurveColorsHost) : ObjectColorEditor, ObjectColorExtras {
 
-    /** The values [begin] found (Cancel restores them). */
+    /** The values [begin] found (Cancel restores them) in the path's [session]. */
     private data class Start(
         val fill: Boolean,
         val fillColor: Int?,
@@ -110,6 +117,7 @@ internal class CurveColorsDelegate(private val host: CurveColorsHost) : ObjectCo
         val color: Int,
         val openedColor: Int,
         val userColor: Int,
+        val session: Any?,
     )
 
     /** The options of the open path this editor sets: the paint mode (fill, stroke kind, kept kind) and the fill color. */
@@ -159,10 +167,15 @@ internal class CurveColorsDelegate(private val host: CurveColorsHost) : ObjectCo
 
     private fun look(): Look = host.settings.let { Look(it.fill, it.fillColor, it.stroke, it.lastStroke) }
 
+    override val sheet = ObjectColorSheetState(host.controller.scope, host.controller, ::cancel) { host.session }
+
     override fun begin() {
-        if (!host.open) return
+        val session = host.session ?: return
+        // An earlier opening on this path, neither kept nor cancelled (the sheet went away with
+        // the pill's cell), keeps its start values: Cancel restores what it found.
+        if (start?.session == session) return
         val s = host.settings
-        start = Start(s.fill, s.fillColor, s.stroke, s.lastStroke, controller.color, host.openedColor, host.userColor)
+        start = Start(s.fill, s.fillColor, s.stroke, s.lastStroke, controller.color, host.openedColor, host.userColor, session)
         gradientSaid = false
     }
 
@@ -225,7 +238,8 @@ internal class CurveColorsDelegate(private val host: CurveColorsHost) : ObjectCo
     override fun cancel() {
         val st = start ?: return
         start = null
-        if (!host.open) return
+        // (Another path is open: the start values were another path's.)
+        if (!host.open || host.session != st.session) return
         if (host.reopened) {
             host.openedColor = st.openedColor
             host.userColor = st.userColor

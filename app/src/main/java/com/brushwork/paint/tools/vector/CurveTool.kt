@@ -1933,6 +1933,9 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         override val controller: EditorController get() = this@CurveTool.controller
         override val settings: CurveSettings get() = this@CurveTool.settings
         override val open: Boolean get() = pointCount > 0
+
+        /** The in-tool history's epoch: every path that ends or opens starts a new one (`clearHistory`). */
+        override val session: Any? get() = if (pointCount > 0) historyEpoch else null
         override val fillPossible: Boolean get() = this@CurveTool.fillPossible
         override val paintMode: CurvePaint? get() = this@CurveTool.paintMode
         override val reopened: Boolean get() = this@CurveTool.reopened != null

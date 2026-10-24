@@ -7,6 +7,7 @@ import com.brushwork.paint.tools.ObjectColorFace
 import com.brushwork.paint.tools.ObjectColorTarget
 import com.brushwork.paint.ui.common.PaintMode
 import com.brushwork.paint.ui.vector.ObjectColorExtras
+import com.brushwork.paint.ui.vector.ObjectColorSheetState
 import com.brushwork.paint.ui.vector.paintMode
 import com.brushwork.paint.ui.vector.shapeStyle
 import com.brushwork.paint.vector.ColorSlot
@@ -119,9 +120,16 @@ internal class ShapeColorsDelegate(private val host: ShapeColorsHost) : ObjectCo
 
     private fun look() = Look(host.settings.style, host.settings.fillColor, controller.color)
 
+    override val sheet = ObjectColorSheetState(host.controller.scope, host.controller, ::cancel) { if (host.open) host.session else null }
+
     override fun begin() {
         if (host.current() == null) return
-        start = Start(look(), host.session, host.openedColor, host.userColor)
+        val session = host.session
+        // An earlier opening on this shape, neither kept nor cancelled (the sheet went away with
+        // the pill's cell), keeps its start values: Cancel restores what it found. The session
+        // (`openCount`) never comes back, so a start of an ended shape never matches.
+        if (start?.session == session) return
+        start = Start(look(), session, host.openedColor, host.userColor)
     }
 
     override fun setPaintMode(m: PaintMode) {

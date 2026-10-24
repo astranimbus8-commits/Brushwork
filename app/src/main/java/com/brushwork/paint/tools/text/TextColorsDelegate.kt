@@ -7,6 +7,7 @@ import com.brushwork.paint.tools.ObjectColorFace
 import com.brushwork.paint.tools.ObjectColorTarget
 import com.brushwork.paint.ui.common.PaintMode
 import com.brushwork.paint.ui.vector.ObjectColorExtras
+import com.brushwork.paint.ui.vector.ObjectColorSheetState
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -85,9 +86,15 @@ internal class TextColorsDelegate(private val host: TextColorsHost) : ObjectColo
 
     override fun setPaintMode(m: PaintMode) = Unit
 
+    override val sheet = ObjectColorSheetState(host.controller.scope, host.controller, ::cancel) { host.session }
+
     override fun begin() {
         val s = host.spec ?: return
         val session = host.session
+        // An earlier opening on this text, neither kept nor cancelled (the sheet went away with
+        // the pill's cell), keeps its start values: Cancel restores what it found. (The watch
+        // drops them when the session ends.)
+        if (start != null && start?.session == session) return
         start = Start(s.color, s.strokeColor, s.strokeWidthPx, session)
         watch?.cancel()
         watch = host.controller.scope.launch {
