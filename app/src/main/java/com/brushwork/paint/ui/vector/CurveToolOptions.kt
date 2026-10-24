@@ -709,7 +709,10 @@ internal fun CurveSettingsSheet(tool: CurveTool, onDismiss: () -> Unit) {
             SectionHeader("Fill")
             Hint(if (if (tool.isPath) tool.pathCyclic else s.closed) "Fills the inside of the closed path" else "An open path is filled as if it were closed")
             // A reopened path with a gradient fill (an imported SVG) keeps it until a color is picked.
-            FillColorRow(s.fillColor, controller.color, keptLabel = if (tool.reopenedGradientFill) GRADIENT_KEPT else null) { col -> set { it.copy(fillColor = col) } }
+            // v1.10 (R7): the picker previews the fill on the open path (its Object colors editor).
+            FillColorRow(
+                s.fillColor, controller.color, keptLabel = if (tool.reopenedGradientFill) GRADIENT_KEPT else null, editor = tool.objectColors,
+            ) { col -> set { it.copy(fillColor = col) } }
         }
         // endregion
 

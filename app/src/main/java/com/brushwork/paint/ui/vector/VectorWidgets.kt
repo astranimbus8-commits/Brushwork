@@ -38,6 +38,7 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -64,6 +65,8 @@ import com.brushwork.paint.core.LengthUnit
 import com.brushwork.paint.core.Units
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.model.IncrementKind
+import com.brushwork.paint.tools.ObjectColorEditor
+import com.brushwork.paint.tools.ObjectColorTarget
 import com.brushwork.paint.tools.vector.CurvePaint
 import com.brushwork.paint.tools.vector.ShapeGeometry
 import com.brushwork.paint.tools.vector.ShapeSettings
@@ -450,9 +453,23 @@ internal const val GRADIENT_KEPT = "Gradient (kept)"
 /**
  * Fill color row: swatch (opens the color picker with alpha) and a way back to following the
  * main drawing color. [custom] is null when the fill follows the main color.
+ *
+ * v1.10 (R7; design 4.4 A2 step 7): with [editor], the open object's Object colors editor (the
+ * Shape or curve tool's `objectColors`), the picker previews the fill on that object live
+ * (`ObjectColorEditor.preview` of [ObjectColorTarget.FILL], no step). Cancel, Back and a picker
+ * closed any other way give back what the object showed when it opened (`cancel`). OK first gives
+ * that back too, then [onPick] sets the fill as in v1.9 (the tool's option, saved as the user's),
+ * so the tool's ✓ step keeps it and the end of the object's session does not take it back.
+ * Without [editor] (no object open) the picker only sets the option, as in v1.9.
  */
 @Composable
-internal fun FillColorRow(custom: Int?, mainColor: Int, keptLabel: String? = null, onPick: (Int?) -> Unit) {
+internal fun FillColorRow(
+    custom: Int?,
+    mainColor: Int,
+    keptLabel: String? = null,
+    editor: ObjectColorEditor? = null,
+    onPick: (Int?) -> Unit,
+) {
     var picking by rememberSaveable { mutableStateOf(false) }
     val shown = custom ?: mainColor
     Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -476,14 +493,49 @@ internal fun FillColorRow(custom: Int?, mainColor: Int, keptLabel: String? = nul
         TextButton(onClick = { picking = true }) { Text("Pick") }
     }
     if (picking) {
+        val live = editor
+        // Whether OK kept the color (read when the picker goes away, not by the composition).
+        val pick = remember(live) { FillPick() }
+        if (live != null) {
+            DisposableEffect(live) {
+                live.begin()
+                onDispose { if (!pick.kept) live.cancel() }
+            }
+        }
         ColorPickerDialog(
             initial = shown,
-            onPick = { onPick(it) },
+            onPick = { c ->
+                if (live != null) {
+                    pick.kept = true
+                    live.cancel()
+                }
+                onPick(c)
+            },
             onDismiss = { picking = false },
             title = "Fill color",
             showAlpha = true,
+            // The picker sends its unchanged start color only on Cancel, whose closing restores
+            // the object anyway: the start color is not previewed before a change (a kept
+            // gradient would otherwise say it is replaced).
+            onPreview = live?.let { e ->
+                { c ->
+                    if (pick.previewed || c != shown) {
+                        pick.previewed = true
+                        e.preview(ObjectColorTarget.FILL, c)
+                    }
+                }
+            },
         )
     }
+}
+
+/**
+ * One opening of [FillColorRow]'s picker on an open object: OK kept the color ([kept]), so its
+ * closing cancels nothing; a color was previewed ([previewed]).
+ */
+private class FillPick {
+    var kept = false
+    var previewed = false
 }
 
 // ====================================================================== shared by the shape and curve options (moved from VectorOptions.kt, v1.5)

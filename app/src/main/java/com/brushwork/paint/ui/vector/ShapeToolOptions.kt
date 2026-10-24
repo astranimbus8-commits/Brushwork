@@ -248,7 +248,8 @@ internal fun ShapeSettingsSheet(tool: ShapeTool, onDismiss: () -> Unit) {
 
         if (!s.type.isLineLike && s.style.fill) {
             SectionHeader("Fill")
-            FillColorRow(s.fillColor, controller.color) { col -> set { it.copy(fillColor = col) } }
+            // v1.10 (R7): the picker previews the fill on the open shape (its Object colors editor).
+            FillColorRow(s.fillColor, controller.color, editor = tool.objectColors) { col -> set { it.copy(fillColor = col) } }
         }
 
         ShapeParamFields(tool)
