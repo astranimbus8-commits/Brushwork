@@ -2996,11 +2996,11 @@ state stays private.
   geometry-less `VPath` built from the tool's colors. Fill needs 3 points (`unavailable`:
   `CurveLabels17.FILL_NEEDS_3`); a stroke color while Fill turns the mode to Both with the stroke
   kind kept; a reopened gradient fill is kept until a fill color is picked (one
-  `GRADIENT_REPLACED` note per opening). A new path's main color comes back by the same
-  one-frame watch, on `pointCount > 0` going false; known gap: a caller that commits the new
-  path and opens another in the same call (`openPath`, later A6's `openObject`) skips that
-  frame, so `open()` takes the new path's color as the user's (lead request: an end-of-path
-  hook in `CurveTool`).
+  `GRADIENT_REPLACED` note per opening). A new path's main color and options come back by the
+  same one-frame watch, on `pointCount > 0` going false; known gap: a caller that commits the
+  new path and opens another in the same call (`openPath`, later A6's `openObject`) skips that
+  frame, so `open()` takes the new path's color, and the fill and paint mode the sheet showed,
+  as the user's (untested; lead request: an end-of-path hook in `CurveTool`).
 - `tools/text/TextColorsDelegate.kt` (Text; targets Text and Outline, no paint mode): previews
   are `updateSpec` changes of the open text (`color`, `strokeColor`); the drawing color is never
   touched. An outline color at width 0 brings `defaultOutlineWidth(sizePx)` = max(1, 6 % of the
