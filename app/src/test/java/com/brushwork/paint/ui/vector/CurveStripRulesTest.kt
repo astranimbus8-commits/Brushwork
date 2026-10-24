@@ -2,6 +2,7 @@ package com.brushwork.paint.ui.vector
 
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.tools.ToolId
+import com.brushwork.paint.tools.points.CornerEditors
 import com.brushwork.paint.tools.vector.CurveKind
 import com.brushwork.paint.tools.vector.CurveStroke
 import com.brushwork.paint.tools.vector.CurveTool
@@ -33,7 +34,8 @@ import org.robolectric.RobolectricTestRunner
  * - The AUTO items are the table's own; no measured width made another item AUTO (rule 4 asks to
  *   list such changes here: there are none).
  * - The splits at 360 and 392 dp, with and without the VECTOR cell (rule 3).
- * - The duplicates §3.9 removes never come back; the v1.7 handles keep their names.
+ * - The duplicates §3.9 removes never come back; the v1.7 handles keep their names, except the
+ *   corner item ("Sharp corner" / "Smooth"), which v1.10 (R12) moves to the X / Y pill's cell.
  */
 @RunWith(RobolectricTestRunner::class)
 class CurveStripRulesTest {
@@ -207,9 +209,18 @@ class CurveStripRulesTest {
         fun labels(kind: CurveKind) = states(kind).filter { it.second.points > 0 }.flatMap { (_, f) -> spec(f).items.map { it.label } }.toSet()
         val curve = labels(CurveKind.CURVE)
         for (h in listOf(
-            "Curve settings", "Sharp corner", "Smooth", "Auto tangent", POINT_THICKNESS_LABEL, "Handles", PointLabels.SELECT_ALL, PointLabels.DESELECT_ALL,
+            "Curve settings", "Auto tangent", POINT_THICKNESS_LABEL, "Handles", PointLabels.SELECT_ALL, PointLabels.DESELECT_ALL,
             "Previous point", "Next point", "Use brush size", "Taper ends", "Numbers", MirrorLabels18.REMOVE, CurveGenLabels18.CHANGE,
         )) assertTrue("Curve: \"$h\"", h in curve)
+        // v1.10 (R12, lead's choice): the X / Y pill's Sharp / Smooth cell replaces the More-row
+        // corner item of Curve and Path; the item stays in code behind CornerEditors.SHOW_IN_MORE.
+        if (!CornerEditors.SHOW_IN_MORE) {
+            val pathItems = labels(CurveKind.PATH)
+            for (h in listOf(ShapeStripItems.SHARP_LABEL, ShapeStripItems.SMOOTH_LABEL, SHARP_MIXED, PointLabels.ENDS_SHARP)) {
+                assertTrue("Curve: no More-row \"$h\" (the pill's cell)", h !in curve)
+                assertTrue("Path: no More-row \"$h\" (the pill's cell)", h !in pathItems)
+            }
+        }
         val polyline = labels(CurveKind.POLYLINE)
         for (h in listOf("Polyline settings", POINT_THICKNESS_LABEL, PointLabels.SELECT_ALL, PointLabels.DESELECT_ALL, "Use brush size", "Numbers", MirrorLabels18.REMOVE)) {
             assertTrue("Polyline: \"$h\"", h in polyline)

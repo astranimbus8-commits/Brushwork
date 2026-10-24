@@ -2651,7 +2651,8 @@ the one row).
   `MIXED_MAKES_SHARP`; the other faces' click label is their name).
 - The More rows lost their Sharp / Smooth items (regions `v110-A5 sharpItems` in
   `CurveStrips.kt` and `ShapeStrip.kt`). The code stays behind `CornerEditors.SHOW_IN_MORE`
-  (false), which only the lead may flip. In Curve and Path the removed item's place stays:
+  (false), which only the lead may flip; while it is false `ui/vector/CurveStripRulesTest` finds
+  none of the item's names on the Curve and Path More rows in any state. In Curve and Path the removed item's place stays:
   `sharpSlotItem` (key `curve.sharpSlot`, 40 dp, `shown = false`, so the host reserves the width
   and draws nothing) takes it under the same condition (`f.sharp != NONE`). The user sees it as
   an empty 40 dp place where an item comes before it on its More line (Path: between Endpoint
