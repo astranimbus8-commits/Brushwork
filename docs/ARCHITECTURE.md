@@ -2570,7 +2570,8 @@ R1. Files: `vector/copies/CopyPick.kt` and `vector/copies/CopyEdit.kt` (new),
 regions `v110-A1 copies` (`vector/VectorLayers.kt`: `hitTest`, `beginEdit`, `planEdit`,
 `renderEdit`) and `v110-A1 overlay` (`vector/select/VectorObjectSelection.kt`: `drawOverlay`).
 Labels: `MirrorLabels110` (`SIDE_HINT`, `SIDE_RESIZE_BLOCKED`, `SIDE_REFUSED`, `DELETE_SIDE`;
-`PERSPECTIVE_SEPARATE` is for the Array sheet, a foreign file: a lead request). Undo labels:
+`PERSPECTIVE_SEPARATE` ends the Perspective array's subtitle in the Symmetry rulers section,
+`ui/symmetry/SymmetryRulerSection.kt`, placed by the lead at the merge). Undo labels:
 `TransformTool.TRANSFORM_OBJECTS_LABEL` and `MirrorLabels110.DELETE_SIDE`. No field, no codec
 change, no new preference beyond F0's `UiPrefs.hintSidePicks`.
 
@@ -2634,7 +2635,7 @@ has no trash). k ≥ 1 drops the map; k = 0 rebases (`src' = C_1 · src`, `C_j' 
 a Mirror of two maps becomes a plain object where the other side was. One step `DELETE_SIDE`;
 the object stays selected and the pick is forgotten (`VectorLift.sideDeleted`). The strip's More
 row Delete calls the same `deleteContent`, so it too deletes only the picked side; its label
-still reads "Delete" (`TransformStripItems` is foreign: a lead request to name it `DELETE_SIDE`).
+stays "Delete", as F0's rule in `LabelsV110Test` keeps it (renaming it is left to Gate 2).
 
 **Undo (I2).** ✓ is one step `TRANSFORM_OBJECTS_LABEL` however many moves, turns and flips came
 before it (`TransformTool.applyPending` → `VectorObjectLift.commit` → one `VectorLayers.update`);
@@ -2667,8 +2668,8 @@ Tests: `v110/a1/**` (`CopyPickTest`, `StrokeStaysWholeTest`, `SideTapCycleTest`,
 `OneCheckOneStepTest`, `LegacyConvertOneStepTest`, `OneSideCompat19Test`,
 `MovedSideFollowsLaterEditsTest` (a moved side takes later point, color and size edits where it
 is), `SelectShapesPicksWholeTest`, `CopyEditIsometryTest`, `SideSaveReopenTest` (each side edit
-is one step that undo and redo restore bit for bit; a save and a reopen keep every map), the two
-timing tests)
+is one step that undo and redo restore bit for bit; a save and a reopen keep every map),
+`PerspectiveSeparateSubtitleTest`, the two timing tests)
 and `qa110/Qa110OneSideUiTest` (392 and 360 dp, font scales 1, 1.3 and 2.0).
 
 <!-- /v110-A1 -->
