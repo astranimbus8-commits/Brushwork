@@ -24,6 +24,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -35,7 +36,8 @@ import java.io.File
  * heap, or above 100) and otherwise the v1.9 one-argument version (3 folders, 2 adjustment
  * layers, 1); it depends only on its arguments (not on the stores, the engine level or the
  * session); the one-argument form is unchanged; and the save writes it. The documents' stores are
- * tiny: the count, not the pixels, decides the format.
+ * tiny: the count, not the pixels, decides the format. A format-4 save is deterministic (J11, X6):
+ * saved twice it writes the same bytes, and the same pixels in tiled stores write them too.
  */
 @RunWith(RobolectricTestRunner::class)
 class WrittenVersionTest {
@@ -147,5 +149,56 @@ class WrittenVersionTest {
         }
         assertEquals("100 layers on 64 x 48: v1.9's format", 1, versionOf(100))
         assertEquals("101 layers: format 4", 4, versionOf(101))
+    }
+
+    /** Every file of the project folder of [id], by name. */
+    private fun files(context: android.content.Context, id: String): Map<String, List<Byte>> =
+        File(context.filesDir, "projects/$id").listFiles().orEmpty().filter { it.isFile }.associate { it.name to it.readBytes().toList() }
+
+    /**
+     * J11, I30, X6: a format-4 artwork saved twice (each time into a fresh folder, so both are
+     * revision 1) writes the same bytes, and the same pixels in tiled stores (as a FULL session's
+     * parked layers) write the same bytes as the flat ones.
+     */
+    @Test
+    fun aFormatFourSaveIsTheSameBytesTwiceAndFromTiledStores() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val dir = File(context.filesDir, "projects/wv4")
+        dir.deleteRecursively()
+        val repo = ProjectRepository(context)
+        val doc = Document("wv4", "Format four", 64, 48)
+        repeat(101) {
+            doc.layers += Layer(doc.newLayerId(), "Layer $it", F1Pixels.noise(64, 48, 400L + it).also { b -> made += b }).apply {
+                if (it % 10 == 0) mask = F1Pixels.grayNoise(64, 48, 600L + it).also { b -> made += b }
+            }
+        }
+        doc.layers += Layer(doc.newLayerId(), "Folder", FolderPixels).apply { folder = FolderSpec() }
+        doc.activeLayerIndex = 0
+
+        repo.save(doc, null)
+        val first = files(context, doc.id)
+        val json = File(dir, ProjectFormat.PROJECT_FILE).readText()
+        assertEquals("format 4", 4, ProjectFormat.json.parseToJsonElement(json).jsonObject.getValue("formatVersion").jsonPrimitive.int)
+        assertEquals("project.json, 101 layer files and 11 mask files", 1 + 101 + 11, first.size)
+
+        dir.deleteRecursively()
+        repo.save(doc, null)
+        assertEquals("saved again: the same names", first.keys, files(context, doc.id).keys)
+        assertEquals("saved again: the same bytes", first, files(context, doc.id))
+
+        // The same pixels in tiled stores, as parked layers.
+        for (l in doc.layers) if (!l.isFolder) {
+            val content = l.bitmap
+            val mask = l.mask
+            l.pixels = TiledPixels.fromBitmap(content)
+            if (mask != null) l.maskPixels = TiledPixels.fromBitmap(mask)
+        }
+        // (Under -PengineMode a settle may have made the active layer flat again: the bytes are the same either way.)
+        assertTrue("the layers tiled", doc.layers.count { it.pixels is TiledPixels } >= 100)
+        dir.deleteRecursively()
+        repo.save(doc, null)
+        assertEquals("from tiled stores: the same bytes", first, files(context, doc.id))
+        dir.deleteRecursively()
+        doc.layers.forEach { if (!it.isFolder) it.recycleBitmaps() }
     }
 }
