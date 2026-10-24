@@ -2566,7 +2566,10 @@ Written at F1 (design 3.3 and 6.5). "Build APK" (`.github/workflows/android.yml`
   park or unpark puts its new stores in only when the layer still holds the ones it read, checked
   under the layer's monitor, which the store setters and `Layer.rehouse` hold too: a test scope
   on `Dispatchers.Unconfined` resumes a canvas commit on a worker while the main looper parks,
-  and the commit's store wins. The switch and the backlog file are task inputs, like the shard.
+  and the commit's store wins. An `activeLayerIndex` set off the main thread is no activation
+  (`EngineConfig.activeIndexSet`): `ProjectRepository.load` sets it on `Dispatchers.IO`, and a
+  gallery export or duplicate then reads and recycles that document's bitmaps there, which a park
+  on main would race. The switch and the backlog file are task inputs, like the shard.
 - `test-count` (after `unit` and `unit-full`): the summed `tests` of the `unit` shards against
   `app/src/test/test-count.txt`, and of the `unit-full` shards against
   `app/src/test/test-count-full.txt`. A shard without XML or log, or a log with
