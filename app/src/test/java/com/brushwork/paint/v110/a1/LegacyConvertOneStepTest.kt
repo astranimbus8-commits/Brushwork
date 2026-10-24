@@ -125,6 +125,52 @@ class LegacyConvertOneStepTest {
         assertEquals(180f, CopyPick.boundsOf(layer.vector!!.objects.single(), 1).centerY(), 1f)
     }
 
+    /**
+     * Review fix: with the copy picked, a tap on the source picks the source (the conversion stays
+     * held, no step), not the shape layer's data lift of all sides; ✕ then leaves the shape layer;
+     * a re-pick, a move and ✓ are ONE step that moves the source while the copy stays.
+     */
+    @Test
+    fun tappingTheOtherSideOfALegacyShapeLayerPicksThatSide() {
+        val (c, layer) = setUp()
+        val shapeData = layer.shapeData
+        val steps = c.undoManager.undoCount
+
+        var tool = pickCopy(c)
+        c.tap(90f, 120f)
+        assertTrue("the source picked", kit.idleUntil { VectorLift.activeLift(c)?.side == 0 })
+        assertTrue("still held as a vector layer", layer.isVectorLayer)
+        assertTrue(tool.sidePicked)
+        assertEquals("no step", steps, c.undoManager.undoCount)
+
+        // ✕: the shape layer as it was, nothing recorded.
+        tool.discard()
+        assertTrue(kit.idleUntil { !c.vectors.isRendering })
+        assertTrue("✕: a shape layer again", layer.isShapeLayer)
+        assertEquals(shapeData, layer.shapeData)
+        assertEquals(steps, c.undoManager.undoCount)
+
+        // Picked again, the source moved, ✓: one step; the copy stays where it is drawn.
+        tool = pickCopy(c)
+        c.tap(90f, 120f)
+        assertTrue(kit.idleUntil { VectorLift.activeLift(c)?.side == 0 })
+        tool.moveBy(0f, 60f)
+        tool.commit()
+        assertTrue(kit.idleUntil { !c.vectors.isRendering })
+        assertEquals("one step", steps + 1, c.undoManager.undoCount)
+        assertEquals(TransformTool.TRANSFORM_OBJECTS_LABEL, c.undoManager.undoLabel)
+        assertTrue(layer.isVectorLayer)
+        val o = layer.vector!!.objects.single()
+        assertEquals("still linked", 2, ObjectCopies.of(o).maps.size)
+        assertEquals("the source moved", 180f, CopyPick.boundsOf(o, 0).centerY(), 1f)
+        assertEquals("the copy stayed", 120f, CopyPick.boundsOf(o, 1).centerY(), 1f)
+        assertEquals("the copy stayed", 422f, CopyPick.boundsOf(o, 1).centerX(), 1f)
+        c.undo()
+        assertTrue(kit.idleUntil { !c.vectors.isRendering })
+        assertTrue("undo: a shape layer", layer.isShapeLayer)
+        assertEquals(shapeData, layer.shapeData)
+    }
+
     @Test
     fun deleteOneSideOfALegacyShapeLayerIsOneStep() {
         val (c, layer) = setUp()

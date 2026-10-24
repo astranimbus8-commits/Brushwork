@@ -2633,7 +2633,8 @@ a side is picked, so the pill's trash cell shows then, named `DELETE_SIDE` (a wh
 has no trash). k ≥ 1 drops the map; k = 0 rebases (`src' = C_1 · src`, `C_j' = C_j · C_1⁻¹`);
 a Mirror of two maps becomes a plain object where the other side was. One step `DELETE_SIDE`;
 the object stays selected and the pick is forgotten (`VectorLift.sideDeleted`). The strip's More
-row Delete still deletes the whole lift (`TransformStripItems` is foreign: a lead request).
+row Delete calls the same `deleteContent`, so it too deletes only the picked side; its label
+still reads "Delete" (`TransformStripItems` is foreign: a lead request to name it `DELETE_SIDE`).
 
 **Undo (I2).** ✓ is one step `TRANSFORM_OBJECTS_LABEL` however many moves, turns and flips came
 before it (`TransformTool.applyPending` → `VectorObjectLift.commit` → one `VectorLayers.update`);
@@ -2645,8 +2646,9 @@ step, holds the conversion (one per editor) and hands the tap to the vector lift
 move, or Delete one side, runs inside `LegacyShapes.fold`: one `groupUndo` holding the
 conversion and the edit, rendered at once (`Policy.SYNC`); undo gives the shape layer back. ✕, an
 unchanged ✓, a same-spot tap on an unchanged side, another layer or leaving the tool
-(`release`) put the shape data back with no step. A shape layer without copies keeps v1.9's
-`DataLift`. (The design's in-memory conversion became this convert-in-place-and-hold: the
+(`release`) put the shape data back with no step. A tap on another side of the held layer
+picks that side and keeps the conversion held for it (`TransformTool.keepHeldFor` while the
+session ends). A shape layer without copies keeps v1.9's `DataLift`. (The design's in-memory conversion became this convert-in-place-and-hold: the
 transform lift needs a real vector layer; a save while the side is lifted stores the vector
 layer.)
 
@@ -2664,7 +2666,9 @@ Tests: `v110/a1/**` (`CopyPickTest`, `StrokeStaysWholeTest`, `SideTapCycleTest`,
 `SideEditPlanTest`, `SideRefusedTest`, `DeleteOneSideTest`, `CoincidingMapsMergeTest`,
 `OneCheckOneStepTest`, `LegacyConvertOneStepTest`, `OneSideCompat19Test`,
 `MovedSideFollowsLaterEditsTest` (a moved side takes later point, color and size edits where it
-is), `SelectShapesPicksWholeTest`, `CopyEditIsometryTest`, the two timing tests)
+is), `SelectShapesPicksWholeTest`, `CopyEditIsometryTest`, `SideSaveReopenTest` (each side edit
+is one step that undo and redo restore bit for bit; a save and a reopen keep every map), the two
+timing tests)
 and `qa110/Qa110OneSideUiTest` (392 and 360 dp, font scales 1, 1.3 and 2.0).
 
 <!-- /v110-A1 -->

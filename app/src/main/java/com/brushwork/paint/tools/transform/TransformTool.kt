@@ -980,8 +980,18 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
             // never moves them, and the pending transform is applied as it was before the tap.
             if (transformState != g.start) applyState(g.start)
             if (taken) {
-                applyPending(s0, moveSelection = false)
+                // v1.10 (R1): the tap picked another side of a legacy shape layer whose conversion
+                // is held: the conversion stays held for that side's lift (not the shape layer's
+                // data lift of all sides), and is given back when no lift follows.
+                val repick = (provider as? VectorLiftProvider)?.sidePick?.layer === s0.layer && LegacyShapes.isHeld(controller, s0.layer)
+                keepHeldFor = if (repick) s0.layer else null
+                try {
+                    applyPending(s0, moveSelection = false)
+                } finally {
+                    keepHeldFor = null
+                }
                 if (session == null) beginLift()
+                if (repick && session == null && !objectLiftPending && liftJob == null) LegacyShapes.release(controller, s0.layer)
             }
             controller.invalidateOverlay()
             return
@@ -2877,9 +2887,13 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
         if (s.ownsFloating) s.floating.recycle()
         // After its commit / delete: a lift that applies its result later keeps what it needs.
         s.objectLift?.release()
-        // v1.10 (R1): a legacy shape layer converted for this lift and not committed is a shape layer again.
-        if (s.objectLift is VectorObjectLift) LegacyShapes.release(controller, s.layer)
+        // v1.10 (R1): a legacy shape layer converted for this lift and not committed is a shape layer
+        // again (unless a tap just picked another side of it: see onUp).
+        if (s.objectLift is VectorObjectLift && keepHeldFor !== s.layer) LegacyShapes.release(controller, s.layer)
     }
+
+    /** v1.10 (R1): the layer whose held legacy conversion outlives the session ending now (a tap picked another side of it). */
+    private var keepHeldFor: Layer? = null
 
     private fun cancelJobs() {
         activationJob?.cancel(); activationJob = null
