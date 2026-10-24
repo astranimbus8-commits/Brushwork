@@ -25,6 +25,7 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -33,7 +34,8 @@ import org.robolectric.RobolectricTestRunner
  * v1.10 F1 (design 2.1, 2.5, X1; lead, frozen): the reference [TiledPixels]. A cut and a
  * materialization give back every pixel (aligned, non-aligned and 1 px stores, with and without
  * blank detection); a cut makes null tiles of transparent ones and shared [SolidTiles] of one
- * opaque color; the reads ([TiledPixels.copyRegion], [PixelReads]) are exact across tile seams and
+ * opaque color, refcounted, counted once and freed with their last tile (a plain tile beyond
+ * [SolidTiles.MAX_COLORS]); the reads ([TiledPixels.copyRegion], [PixelReads]) are exact across tile seams and
  * transparent outside the store; packing round trips; snapshots and edits keep their references.
  * X1: the compositor draws a tiled layer bit-equal to the flat one on an integer-translate canvas,
  * for the 17 blend modes, plain and masked, on a 256² canvas and on a 512² one of mixed tiles, at
@@ -104,6 +106,56 @@ class TiledPixelsReferenceTest {
         assertEquals(0, empty.occupied())
         assertTrue(empty.isEmpty())
         assertFalse(empty.occupiedBounds(bounds))
+    }
+
+    /**
+     * SolidTiles (section 3.3): one immutable bitmap per color, shared by every uniform tile of that
+     * color, counted once under TILES, freed (recycled and uncounted) with its last tile; at
+     * [SolidTiles.MAX_COLORS] shared colors a uniform tile of a new color is an ordinary tile.
+     */
+    @Test
+    fun solidTilesAreSharedCountedOnceAndFreedWithTheLastTile() {
+        val color = 0xFF13579B.toInt()
+        assumeTrue("the color is not shared yet", SolidTiles.refs(color) == 0)
+        assumeTrue("room for one more color", SolidTiles.colors() < SolidTiles.MAX_COLORS)
+        val colors = SolidTiles.colors()
+        val before = tiles()
+        val a = Tile.solid(color, TILE_SIZE, TILE_SIZE).apply { refs = 1 }
+        val b = Tile.solid(color, 40, 200).apply { refs = 1 }
+        assertSame("one bitmap for the color", a.bitmap, b.bitmap)
+        val shared = a.bitmap!!
+        assertEquals(color, a.solidColor)
+        assertEquals(color, b.solidColor)
+        assertEquals(2, SolidTiles.refs(color))
+        assertEquals(colors + 1, SolidTiles.colors())
+        assertEquals("counted once", before + TILE_SIZE.toLong() * TILE_SIZE * 4, tiles())
+        assertFalse("immutable", shared.isMutable)
+        TileOps.release(a)
+        assertEquals(1, SolidTiles.refs(color))
+        assertFalse("still shared by the other tile", shared.isRecycled)
+        TileOps.release(b)
+        assertEquals(0, SolidTiles.refs(color))
+        assertEquals(colors, SolidTiles.colors())
+        assertTrue("freed with the last tile", shared.isRecycled)
+        assertEquals("uncounted", before, tiles())
+
+        // At MAX_COLORS shared colors, a new color makes an ordinary tile with its own bytes.
+        val filler = ArrayList<Tile>()
+        var c = 0xFF000001.toInt()
+        while (SolidTiles.colors() < SolidTiles.MAX_COLORS) {
+            if (SolidTiles.refs(c) == 0) filler += Tile.solid(c, TILE_SIZE, TILE_SIZE).apply { refs = 1 }
+            c++
+        }
+        val full = tiles()
+        val own = Tile.solid(color, TILE_SIZE, TILE_SIZE).apply { refs = 1 }
+        assertNull("not shared beyond MAX_COLORS", own.solidColor)
+        assertEquals(SolidTiles.MAX_COLORS, SolidTiles.colors())
+        assertEquals("its own bytes", full + own.bytes, tiles())
+        assertEquals("every pixel the color", color, own.bitmap!!.getPixel(TILE_SIZE - 1, TILE_SIZE - 1))
+        TileOps.release(own)
+        filler.forEach { TileOps.release(it) }
+        assertEquals("every filler color let go", colors, SolidTiles.colors())
+        assertEquals("every tile let go", before, tiles())
     }
 
     @Test
