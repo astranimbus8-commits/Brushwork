@@ -176,6 +176,21 @@ internal object ArraySources {
         return out
     }
 
-    /** True for a text layer that is a frame of linked text frames (refused, §3.3 a); v1.9 (F2): any of its texts. */
-    fun isLinkedText(layer: Layer): Boolean = layer.textData?.let { d -> TextCodec.decodeAll(d).any { it.threaded } } == true
+    /**
+     * True for a text layer that is a frame of linked text frames (refused, §3.3 a); v1.9 (F2): any of its texts.
+     * v1.10 (R4): the last answer is kept with the text data it was read from ([linkedMemo]), because
+     * `ArrayBehind.available` asks again on every edit while a text layer is active (a linked frame's
+     * data holds its whole story); the same data gives the same answer.
+     */
+    fun isLinkedText(layer: Layer): Boolean {
+        val d = layer.textData ?: return false
+        linkedMemo?.let { (text, answer) -> if (text == d) return answer }
+        val linked = TextCodec.decodeAll(d).any { it.threaded }
+        linkedMemo = d to linked
+        return linked
+    }
+
+    /** v1.10 (R4): [isLinkedText]'s last text data and answer (one reference: a race only reads the text again). */
+    @Volatile
+    private var linkedMemo: Pair<String, Boolean>? = null
 }

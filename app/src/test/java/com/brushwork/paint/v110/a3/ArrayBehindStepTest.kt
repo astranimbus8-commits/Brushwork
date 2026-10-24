@@ -5,10 +5,17 @@ import com.brushwork.paint.array.ArrayBehind
 import com.brushwork.paint.array.ArrayLookKit
 import com.brushwork.paint.array.ArrayLookKit.GRAY
 import com.brushwork.paint.array.ArrayOps
+import com.brushwork.paint.array.ArraySources
 import com.brushwork.paint.engine.ArrayDraw
+import com.brushwork.paint.masks.AdjustmentEffects
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.LayerTree
 import com.brushwork.paint.tools.ToolId
+import com.brushwork.paint.tools.text.TextBoxSpec
+import com.brushwork.paint.tools.text.TextCodec
+import com.brushwork.paint.tools.text.TextItem
+import com.brushwork.paint.tools.text.TextSpec
+import com.brushwork.paint.tools.text.TextThreadSpec
 import com.brushwork.paint.ui.common.ArrayLabels
 import com.brushwork.paint.ui.common.ArrayLabels110
 import com.brushwork.paint.v110.a3.BehindKit.oneStep
@@ -33,7 +40,7 @@ import org.robolectric.RuntimeEnvironment
  * new copies-only layer "Array N" directly below the source (same folder) and opens the Array
  * tool on it; undo removes it and selects the source again, redo brings it back. For a raster
  * selection, selected objects, and a whole text, shape or vector layer (also from a row that is
- * not the active one).
+ * not the active one). Folders, adjustment layers and linked text frames are refused.
  */
 @RunWith(RobolectricTestRunner::class)
 class ArrayBehindStepTest {
@@ -146,5 +153,45 @@ class ArrayBehindStepTest {
         assertEquals(steps, c.undoManager.undoCount)
         assertEquals(ToolId.ARRAY, c.activeToolId)
         assertSame(arrayed, c.activeLayer)
+    }
+
+    /**
+     * R4 (a): a frame of linked text stays refused ([ArrayLabels.LINKED_REFUSAL]) from the layer menu
+     * and the bar, and is not offered, also after its text changes; an adjustment layer likewise
+     * ([ArrayOps.ADJUSTMENT_REFUSAL]). Nothing is recorded and no layer is added.
+     */
+    @Test
+    fun linkedTextAndAdjustmentLayersAreRefused() {
+        val c = ArrayLookKit.controller(app)
+        val frame = TextItem(
+            "Hello",
+            // A frame is a box: a thread without one is dropped (`TextItem.sanitized`).
+            spec = TextSpec(sizePx = 40f, box = TextBoxSpec(width = 160f, minHeight = 60f)),
+            cx = 100f,
+            cy = 60f,
+            thread =TextThreadSpec(storyId = 7, index = 0, story = "Hello world", start = 0, end = 5, overset = true, rev = 1),
+        )
+        val linked = c.addLayerWithContent("Text", "Add text", textData = TextCodec.encode(frame), draw = ArrayLookKit.textDraw(frame))!!
+        assertTrue("the fixture is a linked frame", ArraySources.isLinkedText(linked))
+        assertSame(linked, c.activeLayer)
+        assertFalse("a linked frame is not offered", ArrayBehind.available(c))
+        refused(c, ArrayLabels.LINKED_REFUSAL) { ArrayBehind.fromLayerBelow(c, linked) }
+        refused(c, ArrayLabels.LINKED_REFUSAL) { ArrayBehind.fromSelectionBelow(c) }
+        // The same layer unlinked (its data replaced): offered again, the kept answer follows the data.
+        val plain = BehindKit.textLayer(c)
+        linked.textData = plain.textData
+        c.selectLayer(linked)
+        assertFalse(ArraySources.isLinkedText(linked))
+        assertTrue("a plain text layer is offered", ArrayBehind.available(c))
+        linked.textData = TextCodec.encode(frame)
+        assertTrue(ArraySources.isLinkedText(linked))
+        assertFalse(ArraySources.isLinkedText(plain))
+        assertTrue(ArraySources.isLinkedText(linked))
+
+        val adjustment = c.addAdjustmentLayer(AdjustmentEffects.defaultSpec(), null)!!
+        c.selectLayer(adjustment)
+        assertFalse("an adjustment layer is not offered", ArrayBehind.available(c))
+        refused(c, ArrayOps.ADJUSTMENT_REFUSAL) { ArrayBehind.fromLayerBelow(c, adjustment) }
+        refused(c, ArrayOps.ADJUSTMENT_REFUSAL) { ArrayBehind.fromSelectionBelow(c) }
     }
 }

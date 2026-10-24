@@ -4,6 +4,7 @@ import com.brushwork.paint.array.ArrayBehind
 import com.brushwork.paint.array.ArrayLookKit
 import com.brushwork.paint.engine.ArrayDraw
 import com.brushwork.paint.model.LayerBlendMode
+import com.brushwork.paint.model.LayerTree
 import com.brushwork.paint.ui.common.ArrayLabels110
 import com.brushwork.paint.v110.a3.BehindKit.oneStep
 import com.brushwork.paint.v110.a3.BehindKit.redo
@@ -11,6 +12,7 @@ import com.brushwork.paint.v110.a3.BehindKit.undo
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -21,8 +23,8 @@ import org.robolectric.RuntimeEnvironment
 /**
  * v1.10 (R4, A3 step 2): "array behind" COPIES: the main layer's pixels and data stay
  * byte-identical (after the step, its undo and its redo), the selection stays on it, and an
- * alpha-locked source is allowed (nothing is cut). The new layer takes the source's opacity and
- * blend mode.
+ * alpha-locked source is allowed (nothing is cut). The new layer takes the source's opacity,
+ * blend mode and clipping (a clipped source's copies clip onto the same base).
  */
 @RunWith(RobolectricTestRunner::class)
 class MainLayerUntouchedTest {
@@ -38,6 +40,8 @@ class MainLayerUntouchedTest {
         src.alphaLocked = true
         src.opacity = 0.5f
         src.blendMode = LayerBlendMode.MULTIPLY
+        // Layer 1 clips onto layer 0: the copies clip onto the same base (R4 (a): clipping copied).
+        src.clipping = true
         val pixels = ArrayLookKit.pixels(src.bitmap)
         val data = src.dataSnapshot()
         val sel = c.selection
@@ -46,6 +50,7 @@ class MainLayerUntouchedTest {
         assertTrue(ArrayBehind.isCopiesOnly(made))
         assertEquals(0.5f, made.opacity)
         assertEquals(LayerBlendMode.MULTIPLY, made.blendMode)
+        assertTrue("the clipping is copied", made.clipping)
         for (step in listOf("made", "undone", "redone")) {
             when (step) {
                 "undone" -> undo(c)
@@ -53,7 +58,11 @@ class MainLayerUntouchedTest {
             }
             assertArrayEquals("$step: the source pixels", pixels, ArrayLookKit.pixels(src.bitmap))
             assertEquals("$step: the source data", data, src.dataSnapshot())
+            assertTrue("$step: the source still clips", src.clipping)
+            assertNull("$step: a valid tree", LayerTree.check(c.doc.layers))
         }
+        assertTrue("redone: the copies still clip", made.clipping)
+        assertEquals("redone: directly below the source", c.doc.indexOf(src) - 1, c.doc.indexOf(made))
         assertSame("the selection stays on the main layer", sel, c.selection)
         assertTrue(src.alphaLocked)
     }
