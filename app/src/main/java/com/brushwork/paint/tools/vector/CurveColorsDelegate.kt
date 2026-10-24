@@ -42,6 +42,12 @@ internal interface CurveColorsHost {
     /** A path object is open again: its options and the user's main color come back when it closes. */
     val reopened: Boolean
 
+    /**
+     * A new path shows a look of its own (a quick start's, a path handed over by To Bézier:
+     * `CurveTool.showLook`): the user's options come back as a whole when it ends.
+     */
+    val ownLook: Boolean
+
     /** A reopened path's main color: while the main color still equals it, the user's own comes back at the close. */
     var openedColor: Int
 
@@ -51,17 +57,11 @@ internal interface CurveColorsHost {
     /** The colors of the reopened path's gradient fill while it is kept (no fill color of its own), else null. */
     fun keptGradient(): List<Int>?
 
-    /**
-     * A new path shows its own look from now on (`CurveTool.showLook`): the tool's settings stay
-     * the user's and come back when the path ends. Nothing for a reopened path (it already does).
-     */
-    fun ownLook()
+    /** Shows [s] on the open path and redraws it; not saved as the user's options. */
+    fun show(s: CurveSettings)
 
-    /** `CurveTool.update`: the open path's options (only the user's own are saved), redrawn. */
+    /** `CurveTool.update`: the options, saved as the user's (only their own while a path shows its look), redrawn. */
     fun update(transform: (CurveSettings) -> CurveSettings)
-
-    /** `CurveTool.setPaintMode` (Fill keeps the stroke kind in `lastStroke`; Stroke and Both bring it back). */
-    fun setPaintMode(m: CurvePaint)
 
     /** Redraws the open path's preview. */
     fun redraw()
@@ -73,24 +73,28 @@ internal interface CurveColorsHost {
  * [ObjectColorTarget.STROKE], and the paint mode.
  *
  * Every edit is a pending one, shown live on the canvas (R7): the fill and the paint mode are the
- * open path's options (`CurveSettings.fillColor`, `fill`, `stroke`), the stroke is the main color
- * the path is drawn with. The colors go through [ObjectColorSlots.set] (C4): a stroke color leaves
- * the fill at its current color, and the fill follows the main color (no fill color of its own)
- * only while the two are equal. A fill color while the mode is Stroke turns it to Both; a stroke
- * color while it is Fill turns it to Both with the stroke kind the path had (`lastStroke`). Fill
- * needs 3 points ([unavailable]: [CurveLabels17.FILL_NEEDS_3]). A reopened path's gradient fill
- * is kept until a fill color is picked, which says [ObjectColorLabels110.GRADIENT_REPLACED] once
- * per opening of the sheet; Cancel brings the gradient back. No edit is an undo step of its own:
- * the path's ✓ step carries the colors.
+ * options the open path shows (`CurveSettings.fillColor`, `fill`, `stroke`; [CurveColorsHost.show],
+ * not saved as the user's), the stroke is the main color the path is drawn with. The colors go
+ * through [ObjectColorSlots.set] (C4): a stroke color leaves the fill at its current color, and the
+ * fill follows the main color (no fill color of its own) only while the two are equal. A fill color
+ * while the mode is Stroke turns it to Both; a stroke color while it is Fill turns it to Both with
+ * the stroke kind the path had (`lastStroke`, as `CurveTool.setPaintMode`). Fill needs 3 points
+ * ([unavailable]: [CurveLabels17.FILL_NEEDS_3]). A reopened path's gradient fill is kept until a
+ * fill color is picked, which says [ObjectColorLabels110.GRADIENT_REPLACED] once per opening of
+ * the sheet; Cancel brings the gradient back. No edit is an undo step of its own: the path's ✓
+ * step carries the colors.
  *
- * Object-only (the lead's choice): the user's drawing color and options come back.
- * - Options: a new path shows its own look from the first edit here, so the tool's settings stay
- *   the user's and come back when it ends ([CurveColorsHost.ownLook]); a reopened path already
- *   brings them back.
- * - Main color: a reopened path gives back the user's own when it closes; a stroke edit moves the
- *   path's opened color with it, so that still happens (and a color the user picked meanwhile is
- *   the one that comes back). A new path takes a restore point at its first stroke edit; when it
- *   ends, the main color gets it back while it still holds what this editor set.
+ * Object-only (the lead's choice): the user's drawing color and options come back, and only what
+ * this editor set does.
+ * - A reopened path (and a new path that shows a look of its own) already brings back the user's
+ *   options when it ends. A stroke edit moves a reopened path's opened color with it, so its close
+ *   still gives back the user's main color (and a color the user picked meanwhile is the one that
+ *   comes back).
+ * - A new path takes a restore point of the options at its first edit of them here, and one of
+ *   the main color at its first stroke edit; when it ends (✓, ✕ or discard), each value that still
+ *   holds what this editor set gets the user's back (the paint mode as one value: fill, stroke kind
+ *   and the kept kind). An edit on the strip meanwhile stays the tool's setting, saved as usual, as
+ *   in the Shape tool ([ShapeColorsDelegate]).
  *
  * Cancel (and Back) restores the values the sheet opened with ([begin]). Once no path is open,
  * [preview], [setPaintMode] and [cancel] do nothing (C13).
@@ -108,6 +112,9 @@ internal class CurveColorsDelegate(private val host: CurveColorsHost) : ObjectCo
         val userColor: Int,
     )
 
+    /** The options of the open path this editor sets: the paint mode (fill, stroke kind, kept kind) and the fill color. */
+    private data class Look(val fill: Boolean, val fillColor: Int?, val stroke: CurveStroke, val lastStroke: CurveStroke)
+
     private val controller get() = host.controller
 
     private var start: Start? = null
@@ -115,7 +122,13 @@ internal class CurveColorsDelegate(private val host: CurveColorsHost) : ObjectCo
     /** [ObjectColorLabels110.GRADIENT_REPLACED] was said in this opening of the sheet. */
     private var gradientSaid = false
 
-    /** A new path: the user's main color at the first stroke edit, what this editor set last, and the watch. */
+    /**
+     * A new path: the user's options at the first edit of them here and what this editor showed
+     * last; the user's main color at the first stroke edit and what this editor set last; the
+     * watch that gives them back when the path ends.
+     */
+    private var restoreLook: Look? = null
+    private var lastLook: Look? = null
     private var restoreColor: Int? = null
     private var lastColor: Int? = null
     private var watch: Job? = null
@@ -144,6 +157,8 @@ internal class CurveColorsDelegate(private val host: CurveColorsHost) : ObjectCo
     /** The fill the open path has, painted or not (it follows the main color while it has none of its own). */
     private fun fillColor(): Int = host.settings.fillColor ?: controller.color
 
+    private fun look(): Look = host.settings.let { Look(it.fill, it.fillColor, it.stroke, it.lastStroke) }
+
     override fun begin() {
         if (!host.open) return
         val s = host.settings
@@ -155,8 +170,7 @@ internal class CurveColorsDelegate(private val host: CurveColorsHost) : ObjectCo
         if (!host.open) return
         if (m != PaintMode.STROKE && !host.fillPossible) return
         if (host.paintMode == m.curvePaint()) return
-        host.ownLook()
-        host.setPaintMode(m.curvePaint())
+        show(painted(host.settings, m.curvePaint()))
     }
 
     override fun preview(t: ObjectColorTarget, argb: Int) {
@@ -170,7 +184,6 @@ internal class CurveColorsDelegate(private val host: CurveColorsHost) : ObjectCo
 
     private fun previewFill(argb: Int) {
         if (!host.fillPossible) return
-        host.ownLook()
         val gradient = host.keptGradient() != null
         if (gradient && !gradientSaid) {
             gradientSaid = true
@@ -178,8 +191,8 @@ internal class CurveColorsDelegate(private val host: CurveColorsHost) : ObjectCo
         }
         // A kept gradient goes for a solid fill of its own (no fill color would keep the gradient).
         val fill = if (gradient) argb else fillOf(pinned(ColorSlot.FILL, argb))
-        if (!host.settings.fill) host.setPaintMode(CurvePaint.BOTH)
-        host.update { it.copy(fillColor = fill) }
+        val s = host.settings
+        show((if (s.fill) s else painted(s, CurvePaint.BOTH)).copy(fillColor = fill))
     }
 
     private fun previewStroke(argb: Int) {
@@ -189,17 +202,16 @@ internal class CurveColorsDelegate(private val host: CurveColorsHost) : ObjectCo
             if (controller.color != host.openedColor) host.userColor = controller.color
             host.openedColor = argb
         } else {
-            takeRestorePoint()
+            takeColorPoint()
         }
-        host.ownLook()
         val s = host.settings
-        if (s.stroke == CurveStroke.NONE) host.setPaintMode(if (s.fill) CurvePaint.BOTH else CurvePaint.STROKE)
         // C4: the fill keeps its color and follows only while it equals the stroke (a kept
         // gradient is not a fill color: it stays).
-        val fill = if (host.keptGradient() != null) host.settings.fillColor else fillOf(pinned(ColorSlot.STROKE, argb))
+        val fill = if (host.keptGradient() != null) s.fillColor else fillOf(pinned(ColorSlot.STROKE, argb))
+        val next = (if (s.stroke == CurveStroke.NONE) painted(s, if (s.fill) CurvePaint.BOTH else CurvePaint.STROKE) else s).copy(fillColor = fill)
         controller.color = argb
         if (!host.reopened) lastColor = argb
-        if (fill != host.settings.fillColor) host.update { it.copy(fillColor = fill) } else host.redraw()
+        if (next != s) show(next) else host.redraw()
     }
 
     override fun setNone(t: ObjectColorTarget) {
@@ -225,7 +237,44 @@ internal class CurveColorsDelegate(private val host: CurveColorsHost) : ObjectCo
             controller.color = st.color
             if (!host.reopened) lastColor = st.color
         }
-        if (back != s) host.update { back } else if (colorBack) host.redraw()
+        when {
+            back == s -> if (colorBack) host.redraw()
+            // This editor showed the options: they go back the same way (no restore point taken now).
+            restoreLook != null || host.reopened || host.ownLook -> {
+                host.show(back)
+                noteShown()
+            }
+            // Changed on the strip while the sheet was open (saved as the user's): back, saved too.
+            else -> host.update { back }
+        }
+    }
+
+    /**
+     * Shows [s] on the open path: the path's own options, not the user's (a new path takes the
+     * restore point of the user's at the first one).
+     */
+    private fun show(s: CurveSettings) {
+        takeLookPoint()
+        host.show(s)
+        noteShown()
+    }
+
+    /** A new path: what this editor showed last (its end compares the options with it). */
+    private fun noteShown() {
+        if (restoreLook != null && !host.reopened && !host.ownLook) lastLook = look()
+    }
+
+    /**
+     * [s] painted as [m], as `CurveTool.setPaintMode` paints it: Fill sets the stroke kind to
+     * [CurveStroke.NONE] and keeps the kind it had in `lastStroke`; Stroke and Both bring it back.
+     */
+    private fun painted(s: CurveSettings, m: CurvePaint): CurveSettings {
+        val kind = if (s.stroke != CurveStroke.NONE) s.stroke else s.lastStroke.takeIf { it != CurveStroke.NONE } ?: CurveStroke.BRUSH
+        return when (m) {
+            CurvePaint.STROKE -> s.copy(stroke = kind, fill = false, lastStroke = kind)
+            CurvePaint.FILL -> s.copy(stroke = CurveStroke.NONE, fill = true, lastStroke = kind)
+            CurvePaint.BOTH -> s.copy(stroke = kind, fill = true, lastStroke = kind)
+        }
     }
 
     /**
@@ -243,23 +292,56 @@ internal class CurveColorsDelegate(private val host: CurveColorsHost) : ObjectCo
         return if (fill == null || fill == ObjectColorSlots.colorOf(p, ColorSlot.STROKE)) null else fill
     }
 
+    /** A new path's first edit of its options here: the user's, given back when the path ends. */
+    private fun takeLookPoint() {
+        if (host.reopened || host.ownLook || restoreLook != null) return
+        restoreLook = look()
+        lastLook = null
+        watchEnd()
+    }
+
     /** A new path's first stroke edit here: the user's main color, given back when the path ends. */
-    private fun takeRestorePoint() {
+    private fun takeColorPoint() {
         if (restoreColor != null) return
         restoreColor = controller.color
-        watch?.cancel()
+        lastColor = null
+        watchEnd()
+    }
+
+    /** Gives the restore points back once the open path ends. */
+    private fun watchEnd() {
+        if (watch?.isActive == true) return
         watch = controller.scope.launch {
             snapshotFlow { host.open }.first { !it }
             endOfNewPath()
         }
     }
 
-    /** A new path ended: the main color gets the user's back while it still holds what this editor set. */
+    /**
+     * A new path ended: each value that still holds what this editor set gets the user's back,
+     * the options saved as the user's again (a strip edit meanwhile saved the path's).
+     */
     private fun endOfNewPath() {
-        val r = restoreColor ?: return
+        val r = restoreLook
+        val l = lastLook
+        restoreLook = null
+        lastLook = null
+        if (r != null && l != null) {
+            val s = host.settings
+            val modeBack = s.fill == l.fill && s.stroke == l.stroke && s.lastStroke == l.lastStroke
+            val fillBack = s.fillColor == l.fillColor
+            val back = s.copy(
+                fill = if (modeBack) r.fill else s.fill,
+                stroke = if (modeBack) r.stroke else s.stroke,
+                lastStroke = if (modeBack) r.lastStroke else s.lastStroke,
+                fillColor = if (fillBack) r.fillColor else s.fillColor,
+            )
+            if (back != s) host.update { back }
+        }
+        val rc = restoreColor
+        val lc = lastColor
         restoreColor = null
-        val last = lastColor
         lastColor = null
-        if (last != null && controller.color == last) controller.color = r
+        if (rc != null && lc != null && controller.color == lc) controller.color = rc
     }
 }

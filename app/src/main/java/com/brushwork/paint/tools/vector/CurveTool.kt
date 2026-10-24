@@ -1961,12 +1961,17 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
             }
         }
 
-        override fun ownLook() {
-            if (this@CurveTool.reopened == null && ownSettings == null) showLook(this@CurveTool.settings)
+        override val ownLook: Boolean get() = ownSettings != null
+
+        /** The open path's own options (a preview): shown and redrawn, not saved ([update] saves). */
+        override fun show(s: CurveSettings) {
+            val n = s.sanitized(fallback = this@CurveTool.settings)
+            if (n == this@CurveTool.settings) return
+            this@CurveTool.settings = n
+            changed()
         }
 
         override fun update(transform: (CurveSettings) -> CurveSettings) = this@CurveTool.update(transform)
-        override fun setPaintMode(m: CurvePaint) = this@CurveTool.setPaintMode(m)
         override fun redraw() = changed()
     }
     // endregion

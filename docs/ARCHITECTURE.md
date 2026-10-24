@@ -2984,9 +2984,15 @@ state stays private.
   style, fill and color while they still hold what the editor set (a `snapshotFlow` watch on
   `controller.scope`, so one frame after the session ends).
 - `tools/vector/CurveColorsDelegate.kt` (Curve, Polyline, Path; Fill and Stroke): fill and mode
-  are the open path's `CurveSettings` (`fill`, `fillColor`, `stroke`/`lastStroke`); a new path
-  switches to its own look (`showLook`) at the first edit, so the user's settings come back at
-  `endLook`; a reopened path already does. C4 goes through `ObjectColorSlots.set` on a
+  are the options the open path shows (`CurveSettings` `fill`, `fillColor`, `stroke`/`lastStroke`),
+  set through `CurveColorsHost.show` (shown and redrawn, never saved, so no settings write per
+  preview frame). A reopened path, or a new one that shows a look of its own (`ownLook`: a quick
+  start, To Bézier), gets the user's options back as a whole when it ends; any other new path
+  takes a restore point at its first edit here and, when it ends, each value that still holds
+  what the sheet showed comes back through `update` (the paint mode as one value: `fill`,
+  `stroke`, `lastStroke`; then `fillColor`), as in Shape. A strip edit meanwhile (a width, the
+  stroke kind, Stroke/Fill/Both on the strip) stays the tool's setting and is saved for the next
+  path (review fix 5/8; v1.6-v1.9 behaviour). C4 goes through `ObjectColorSlots.set` on a
   geometry-less `VPath` built from the tool's colors. Fill needs 3 points (`unavailable`:
   `CurveLabels17.FILL_NEEDS_3`); a stroke color while Fill turns the mode to Both with the stroke
   kind kept; a reopened gradient fill is kept until a fill color is picked (one
@@ -3021,7 +3027,10 @@ Tests (`app/src/test/java/com/brushwork/paint/v110/a2/`): `ObjectColorSheetFitsA
 `FillFollowsPinTest`, `ShapeFillLivePreviewTest`, `CurveFillLivePreviewTest`,
 `TextColorLivePreviewTest`, `TextOutlineDefaultWidthTest`, `ObjectColorSheetTabSwitchTest` (360 dp
 at font scale 1.3 and 2.0; a tab shown again sends nothing), `ObjectColorsRedoAndReloadTest`
-(✓, Undo, Redo, save and load of a shape, a path and a text); kits `A2ToolRig`, `A2FakeColorEditor`.
+(✓, Undo, Redo, save and load of a shape, a path and a text), `CurveStripEditAfterColorsTest` (a
+strip edit after the sheet stays the tool's; the sheet's fill, mode and line color come back),
+`ObjectColorSheetOnToolsTest` (the sheet on the real Shape, Polyline and Text editors at 360 dp,
+font scale 2.0: live, Cancel, OK then ✓ as one step, Undo, Redo); kits `A2ToolRig`, `A2FakeColorEditor`.
 
 <!-- /v110-A2 -->
 
