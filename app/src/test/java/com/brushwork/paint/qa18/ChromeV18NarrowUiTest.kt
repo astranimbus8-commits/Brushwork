@@ -16,6 +16,7 @@ import com.brushwork.paint.testing.StripTestKit
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.ui.common.ArrayLabels
 import com.brushwork.paint.ui.common.MirrorLabels18
+import com.brushwork.paint.ui.common.ObjectBarLabels110
 import com.brushwork.paint.ui.common.StripLabels18
 import com.brushwork.paint.ui.common.V18Tags
 import com.brushwork.paint.ui.editor.chrome.ChromeHarness
@@ -55,6 +56,10 @@ import org.robolectric.shadows.ShadowLog
  *   options" (the three dots) last;
  * - long-press bubbles at the screen's right edge (the More circle, the strip and object
  *   toggles) stay whole on screen.
+ *
+ * v1.10 (A6, R10, J26): the one selected path also shows [ObjectBarLabels110.EDIT] after
+ * Transform, so row 1 keeps six buttons at 46 dp and Front and Back join the More row, beside
+ * Forward, Backward, Array, Detach and [ObjectBarLabels110.TO_SHAPE].
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = "w360dp-h640dp-xxhdpi", instrumentedPackages = ["com.brushwork.paint.qa18.chromenarrowsandbox"])
@@ -219,10 +224,12 @@ class ChromeV18NarrowUiTest {
         SmokeUi.settle()
         val bar = s.tagged(ChromeTags.SELECTION_BAR) ?: throw AssertionError("no object bar")
         onScreen(s, "the object bar", bar)
+        // v1.10 (R10): with Edit, Front and Back wait on the More row (checked there below).
         val row1 = listOf(
-            "Delete the selected objects", "Duplicate the selected objects", "Bring to front", "Send to back",
-            "Recolor with the main color", "Transform the selected objects", "Deselect the objects",
+            "Delete the selected objects", "Duplicate the selected objects",
+            "Recolor with the main color", "Transform the selected objects", ObjectBarLabels110.EDIT_DESC, "Deselect the objects",
         ).map { label -> label to (Finger.control(s, label) ?: throw AssertionError("\"$label\" not on row 1")) }
+        for (label in listOf("Bring to front", "Send to back")) assertNull("\"$label\" waits on the More row", Finger.control(s, label))
         for ((label, r) in row1) {
             onScreen(s, "\"$label\"", r)
             assertTrue("\"$label\" finger-sized: $r", r.width >= 40f - 0.5f && r.height >= 40f - 0.5f)
@@ -238,7 +245,7 @@ class ChromeV18NarrowUiTest {
         assertEquals(StripLabels18.EXPANDED, Fingers18.state(s, StripLabels18.MORE_OBJECT))
         val more = s.tagged(V18Tags.STRIP_MORE_ROW) ?: throw AssertionError("no object More row")
         onScreen(s, "the object More row", more)
-        for (label in listOf("Bring forward", "Send backward", ArrayLabels.FROM_OBJECTS, MirrorLabels18.DETACH)) {
+        for (label in listOf("Bring forward", "Send backward", "Bring to front", "Send to back", ArrayLabels.FROM_OBJECTS, MirrorLabels18.DETACH, ObjectBarLabels110.TO_SHAPE)) {
             val r = Finger.control(s, label) ?: throw AssertionError("\"$label\" not on the More row")
             onScreen(s, "\"$label\"", r)
             assertTrue("\"$label\" on the More row", more.contains(r.center))

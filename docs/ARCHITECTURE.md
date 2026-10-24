@@ -2685,7 +2685,105 @@ and `qa110/` (`Qa110SharpCellUiTest`, `Qa110GroupSnapUiTest`).
 
 <!-- v110-A6 -->
 
-(A6 writes this section.)
+R10 (Edit), R11 (Turn into shape), R3 row 6 (the Recolor icon) and the bar items of R4 (Behind).
+Code: `ui/vector/VectorObjectBar.kt` (the object bar), `ui/editor/SelectionBar.kt` (the
+selection bar), `vector/select/ObjectActions.kt` (what the buttons do),
+`vector/convert/PathToShape.kt` (the mapping), the regions `ShapeTool.kt` `v110-A6 open` and
+`CurveTool.kt` `v110-A6 openObject`. No document change: a converted path is an ordinary
+`VShape`, so v1.8 and v1.9 read it.
+
+**Ranks and rows (J26).** `ObjectBarSlot` holds each button's width in units and its rank: Array 1,
+Behind 1, Detach 2 (2 units), Turn into shape 2 (2 units), Forward and Backward 3, Front and Back
+4, Duplicate 5, Recolor 6, Transform 7, Edit 8, Deselect 9, Delete 10. `ObjectBarSlot.shown` gives
+the row order (Edit right after Transform, Behind right after Array, Turn into shape after
+Detach); `ObjectBarSlot.split` empties row 1 a whole rank at a time, lowest first, into the More
+row's lines (`ObjectBarLayout.split`).
+- At 392 dp one selected object with an editor keeps eight buttons on row 1 at 40.5 dp (324 dp
+  beside the 44 dp toggle). At 360 dp Front and Back move to the More row (six at 46 dp), so
+  "Turn into shape" starts the More row's second line there.
+- Without Edit (several objects, or a brush stroke) the bar is v1.9's seven at 46 dp.
+- Recolor's icon is `Icons.Outlined.Palette` (`ObjectBarRecolorIcon`). Behind
+  (`ArrayLabels110.BEHIND`, `EditorIcons.arrayBehind`) shows only while the editor passes
+  `onArrayBehind`, that is while `EditorController.arrayBehindAvailable` (false until A3 merges,
+  UQ4).
+
+**Edit on the object bar (R10).** `ObjectBarLabels110.EDIT`, tag `V110Tags.OBJECTS_EDIT`.
+- Shown when exactly one object is selected and it is not a `VStroke` (`ObjectActions.editShown`).
+  Dimmed while `ObjectActions.editRefusal` names a reason the user can act on: a path of several
+  parts, or of fewer than 2 anchors. A tap on a dimmed Edit shows that reason as a toast.
+- `ObjectActions.openInEditor` commits the current tool's pending work, then waits for the renders
+  in flight (`PendingRenders.whenIdle`, key `EditOpening`; a second tap while it waits is
+  ignored). It then clears the object selection and opens the object in its own tool: a `VShape`
+  through `ShapeTool.editShapeObject`, a `VPath` through `CurveTool.openObject(layerId, id, kind)`
+  with `kind = CurveTool.kindOf(path)` (Curve, Polyline or Path).
+- A locked or hidden layer refuses Edit with the layer's message (`EditorController.checkEditable`)
+  before the selection or the tool changes.
+- Both tools ignore a second open of the object they are opening or already have open. The Shape
+  tool keeps `openingObject` with its `reopenToken`; the Curve tool keeps `openingObject` and
+  `isOpening`, and an open it refuses (another path still opening) leaves that guard as it was.
+  So a double tap never applies the open edit and opens it again.
+- The button records no step: the editor's ✓ records its own ("Edit shape", "Edit path"), and ✕
+  records none. The user stays in that tool afterwards (UQ10).
+
+**Edit on the selection bar (R10, finding 27).** `SelectionBarEdit.target` finds what to open:
+- a legacy shape layer (opened with `LayerOps.editShape`);
+- or the one text of a text layer that the selection meets (opened with
+  `TextTool.editLayer(layer, openEditor = true, index)`; a frame of a linked story opens through
+  `LayerOps.editText`). Two texts met means no Edit.
+
+While Edit shows (tag `V110Tags.SEL_EDIT`) it is the bar's first item, before Copy. The Array
+pair ("Array", then "Behind" while passed) comes before Save, Duplicate and Hide.
+
+**Turn into shape (R11).** `ObjectBarLabels110.TO_SHAPE` on the More row, as wide as Detach (tag
+`V110Tags.OBJECTS_TO_SHAPE`), shown when exactly one `VPath` is selected
+(`ObjectActions.toShapeShown`).
+- `ObjectActions.turnIntoShape` commits pending work and waits for renders (`edit`).
+- A refused path shows `PathToShape.refusal`'s reason and changes nothing. Refused: several
+  pieces; fewer than 2 anchors, non-finite or all on one spot; more than
+  `PointBevel.MAX_POINTS_SHAPE` anchors.
+- Otherwise the path is replaced in place by `VectorContent.replaced`: same id, same z-position,
+  its `CopyMaps` (S2 offsets included) as they were. This is ONE step labelled `TO_SHAPE`.
+- It then clears the object selection, selects the Shape tool and opens the shape
+  (`editShapeObject`).
+- Only after that it calls `EditorController.showNote(notes joined by "; ", undoable = true)`, so
+  the tool's own opening message never hides the note.
+- The note waits through later messages. Its "Undo" (`undoNote`) drops the open shape and takes the
+  step back, and only while that step is still the newest.
+
+**The mapping (`PathToShape.convert`).**
+- Anchors are read as the renderer reads them (`VectorOps.curveAnchors`, so a NURBS path uses its
+  Bézier form). Handles come from `CurveGeometry.handles`.
+- A segment whose control points lie on its chord gets zero handles, and so do an open path's
+  outer ends. Polyline points are all sharp. A sharp point without handles becomes a plain
+  `ShapeAnchor`.
+- `ShapePoints.fit(0, anchors, closed)` gives the box and the shape's own points. A closed path of
+  3 or more points becomes a custom closed outline (type RECTANGLE with points); anything else a
+  LINE with points.
+- Copied: stroke color, width (times the anchors' common width, or their mean when they differ),
+  cap, join (MITER to SHARP, BEVEL to BEVEL, otherwise ROUND), brush tool and preset (with the
+  brush seed), a closed path's solid fill, and the opacity.
+- The Shape tool opens a shape with its line color as the main color. So a fill without a line
+  also gives the shape its line color (not drawn, style FILL): the main color is the fill's while
+  it is open, never transparent. A fill of the line's color (or none) follows the main color
+  (`fillFollowsColor`), as a fill the Shape tool drew does; a fill of another color keeps its own.
+- A path whose widths vary is drawn by the renderer as a filled outline with round ends and
+  joins, so its shape gets ROUND cap and corners. A gradient fill becomes its first stop's color.
+- Notes, in this order: `NOTE_GRADIENT`, `NOTE_WIDTH` (widths vary, or a taper), `NOTE_GENERATED`
+  (a generator path), `NOTE_OPEN_FILL` (an open path loses its fill).
+- Lost without a note: the path's miter limit (the shape uses its own, 10). An open path's miter or
+  bevel joins also become round, because line-like shapes always join round.
+- The result passes `ShapeObject.sanitized`. The cost is O(anchors): about 0.6 ms for 1,000
+  anchors on the PC (`PathToShapeSpeedTest`).
+
+**Not built.** The optional second entry, in the Curve tool's settings sheet (region
+`CurveToolOptions.kt` `v110-A6 turnIntoShape`, cut 7), was not built. Two reasons:
+- The open path's layer and id are private to `CurveTool`.
+- A path changed in the tool would convert as two steps (the edit's own, then "Turn into shape").
+
+Tests: `test:v110/a6/` (the layout, Edit, PathToShape and TurnIntoShape classes; a converted
+path saved and reopened through the project repository: `TurnIntoShapeSaveReopenTest`) and
+`test:qa110/Qa110EditUiTest`, `test:qa110/Qa110ConvertUiTest` (392 and 360 dp, font scale 1, 1.3
+and 2.0).
 
 <!-- /v110-A6 -->
 

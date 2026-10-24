@@ -3291,8 +3291,47 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
     /**
      * v1.10 (R10): opens path object [id] of layer [layerId] in the tool of [kind] ([kindOf]), for
      * the bars' Edit. True when it opened. F0 stub: false (A6 body and its guard).
+     *
+     * A6: called on any kind's instance, the tool of [kind] does it, as [openPath] does for the
+     * Path tool: the layer is selected, that tool becomes current, its own pending path is applied
+     * and it reopens the path ([reopen]); true also while the edit session is still being
+     * prepared (the path opens when it is ready). False, opening nothing, without such a layer or
+     * path, or for a path of another kind. The guard: a second call while that tool is opening
+     * this path, or has it open, changes nothing (true): the open path is never applied and
+     * opened again.
      */
-    fun openObject(layerId: Long, id: Long, kind: CurveKind): Boolean = false
+    fun openObject(layerId: Long, id: Long, kind: CurveKind): Boolean {
+        val toolId = when (kind) {
+            CurveKind.CURVE -> ToolId.CURVE
+            CurveKind.POLYLINE -> ToolId.POLYLINE
+            CurveKind.PATH -> ToolId.PATH
+        }
+        val tool = controller.tools[toolId] as? CurveTool ?: return false
+        val layer = controller.doc.layerById(layerId) ?: return false
+        val path = layer.vector?.byId(id) as? VPath ?: return false
+        if (kindOf(path) != kind) return false
+        if (controller.currentTool === tool && controller.doc.activeLayer === layer && tool.isOpening(layer, id)) return true
+        controller.selectLayer(layer)
+        controller.selectTool(toolId)
+        if (controller.currentTool !== tool || controller.doc.activeLayer !== layer) return false
+        if (tool.hasPendingWork) tool.commit()
+        val current = layer.vector?.byId(id) as? VPath ?: return false
+        val started = tool.reopenSelecting(current, null)
+        // (A refused open, e.g. while another path is still opening, leaves that path's guard.)
+        if (started) tool.openingObject = if (tool.opening) layer to id else null
+        return started
+    }
+
+    /** v1.10 (A6): the path object (its layer and id) an [openObject] waits to open; read only while [opening]. */
+    private var openingObject: Pair<Layer, Long>? = null
+
+    /** v1.10 (A6): true while path [id] of [layer] is opening in this tool or open in it. */
+    private fun isOpening(layer: Layer, id: Long): Boolean {
+        val waiting = openingObject
+        if (opening && waiting != null && waiting.first === layer && waiting.second == id) return true
+        val open = reopened ?: return false
+        return open.layer === layer && open.original.id == id && anchors.isNotEmpty()
+    }
     // endregion
 
     private fun open(session: VectorEditSession, layer: Layer, path: VPath, select: IntArray? = null) {

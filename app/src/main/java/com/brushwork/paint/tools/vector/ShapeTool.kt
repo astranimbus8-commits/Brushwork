@@ -3577,10 +3577,15 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
      * shape drawn over it), the options and the main color show the shape's own, and ✓ replaces
      * it as ONE undo step "Edit shape" (same id and place); ✕ leaves the layer untouched. Returns
      * false when it can't be opened (the session may also arrive later).
+     *
+     * v1.10 (R10, A6; the bars' Edit opens shapes here): a second call while this very object is
+     * opening (its edit session not ready yet) changes nothing (true), as one while it is open does.
      */
     fun editShapeObject(layer: Layer, id: Long): Boolean {
         val open = vectorSession
         if (open != null && open.layer === layer && vectorEditId == id && box != null) return true
+        val waiting = openingObject
+        if (waiting != null && waiting.first === layer && waiting.second == id && waiting.third == reopenToken && controller.currentTool === this) return true
         val doc = controller.doc
         if (doc.indexOf(layer) < 0 || !isVectorTarget(layer)) return false
         if (layer.vector?.byId(id) !is VShape) return false
@@ -3597,8 +3602,10 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         val token = ++reopenToken
         var answered = false
         var opened = false
+        openingObject = Triple(layer, id, token)
         controller.vectors.beginEdit(layer, setOf(id)) { session ->
             answered = true
+            if (openingObject?.third == token) openingObject = null
             if (session == null) return@beginEdit
             val current = layer.vector?.byId(id) as? VShape
             if (token != reopenToken || box != null || current == null || controller.currentTool !== this || controller.doc.activeLayer !== layer) {
@@ -3610,6 +3617,13 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         }
         return opened || !answered
     }
+
+    /**
+     * v1.10 (A6): the shape object [editShapeObject] waits to open (its layer, id and reopen token),
+     * until its edit session answers; it no longer counts once another open started or the tool
+     * paused (the token moved on).
+     */
+    private var openingObject: Triple<Layer, Long, Int>? = null
     // endregion
 
     private fun startObjectEdit(session: VectorEditSession, current: VShape) {

@@ -4,9 +4,18 @@ import com.brushwork.paint.EditorController
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.transform.TransformTool
+import com.brushwork.paint.tools.vector.CurveKind
+import com.brushwork.paint.tools.vector.CurveTool
+import com.brushwork.paint.tools.vector.ShapeTool
+import com.brushwork.paint.ui.common.ObjectBarLabels110
 import com.brushwork.paint.ui.editor.HistoryLabels
 import com.brushwork.paint.vector.ObjectCopies
+import com.brushwork.paint.vector.VObject
+import com.brushwork.paint.vector.VPath
+import com.brushwork.paint.vector.VShape
+import com.brushwork.paint.vector.VStroke
 import com.brushwork.paint.vector.VectorContent
+import com.brushwork.paint.vector.convert.PathToShape
 import com.brushwork.paint.vector.lift.VectorLift
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -184,25 +193,149 @@ object ObjectActions {
     // ------------------------------------------------------------------ v1.10 (F0 stubs, A6 bodies)
 
     /**
+     * v1.10 (A6): the one selected object of the selected layer; null when none or several are
+     * selected (or the layer no longer holds it).
+     */
+    fun selectedObject(c: EditorController): VObject? {
+        val ids = c.vectors.selectedIds
+        if (ids.size != 1) return null
+        val layer = c.vectors.selectedLayer ?: return null
+        return layer.vector?.byId(ids.first())
+    }
+
+    /**
+     * v1.10 (R10): whether the object bar shows Edit: exactly one object is selected and it has an
+     * editor (a brush stroke [VStroke] has none). [editRefusal] says when it shows but can't open.
+     */
+    fun editShown(c: EditorController): Boolean {
+        val o = selectedObject(c) ?: return false
+        return o !is VStroke
+    }
+
+    /** v1.10 (R11): whether the object bar offers [ObjectBarLabels110.TO_SHAPE]: exactly one path is selected. */
+    fun toShapeShown(c: EditorController): Boolean = selectedObject(c) is VPath
+
+    /**
      * v1.10 (R10): why the object bar's Edit is disabled for the selection (a path of several
      * parts, a path too small to edit), shown as its toast; null = Edit can open it. The signature
-     * is frozen (`FrozenApiSignatureTest`); F0 stub, A6 body.
+     * is frozen (`FrozenApiSignatureTest`); F0 stub, A6 body: only reasons the user can act on
+     * (Transform moves a path of several parts; a path of one point is deleted or redrawn).
      */
-    fun editRefusal(c: EditorController): String? = null
+    fun editRefusal(c: EditorController): String? {
+        val path = selectedObject(c) as? VPath ?: return null
+        if (path.subpaths.size > 1) return ObjectBarLabels110.NO_EDITOR_PARTS
+        if ((path.subpaths.firstOrNull()?.anchors?.size ?: 0) < 2) return ObjectBarLabels110.NO_EDITOR_SMALL
+        return null
+    }
 
     /**
      * v1.10 (R10): opens the one selected object in its own tool (a shape in the Shape tool, a path
      * in the Curve, Path or Polyline tool through `CurveTool.kindOf`). True when an editor opened.
      * The signature is frozen; F0 stub (opens nothing), A6 body.
+     *
+     * Pending tool work is committed first and the renders in flight are waited for (then true: it
+     * opens once they landed); the object selection is cleared, the object's tool becomes current
+     * and opens it ([ShapeTool.editShapeObject], [CurveTool.openObject]). A refused object
+     * ([editRefusal]) shows the reason and opens nothing; so does a locked or hidden layer (the
+     * layer's message, [EditorController.checkEditable]), before the selection or the tool
+     * changes. A second tap while the first still waits
+     * is ignored (false, no toast); the tools ignore one while their editor is opening. The button
+     * records no undo step (the editor's ✓ does); the user stays in that tool after ✓ or ✕.
      */
-    fun openInEditor(c: EditorController): Boolean = false
+    fun openInEditor(c: EditorController): Boolean {
+        if (PendingRenders.isWaiting(c, EditOpening)) return false
+        val o = selectedObject(c) ?: return false
+        if (o is VStroke) return false
+        editRefusal(c)?.let { reason ->
+            c.toast(reason)
+            return false
+        }
+        val tool = c.currentTool
+        if (tool.hasPendingWork) {
+            tool.commit()
+            c.invalidateOverlay()
+        }
+        var opened = false
+        val now = PendingRenders.whenIdle(c, key = EditOpening) { opened = openSelected(c) }
+        return if (now) opened else true
+    }
+
+    /** [openInEditor] once nothing is in flight: the selection may have changed meanwhile. */
+    private fun openSelected(c: EditorController): Boolean {
+        val (layer, _) = VectorObjectSelection.selected(c) ?: return false
+        // (Only the layer being worked on: the bar drops another layer's selection.)
+        if (layer !== c.activeLayer) return false
+        val o = selectedObject(c) ?: return false
+        if (o is VStroke) return false
+        editRefusal(c)?.let { reason ->
+            c.toast(reason)
+            return false
+        }
+        // A locked or hidden layer says so (the tools' own check) before anything changes.
+        if (!c.checkEditable(layer)) return false
+        c.vectors.setSelection(null, emptySet())
+        c.invalidateOverlay()
+        return when (o) {
+            is VShape -> {
+                c.selectTool(ToolId.SHAPE)
+                val shape = c.tools[ToolId.SHAPE] as? ShapeTool ?: return false
+                c.currentTool === shape && shape.editShapeObject(layer, o.id)
+            }
+            is VPath -> {
+                val kind = CurveTool.kindOf(o)
+                val id = curveToolId(kind)
+                c.selectTool(id)
+                val curve = c.tools[id] as? CurveTool ?: return false
+                c.currentTool === curve && curve.openObject(layer.id, o.id, kind)
+            }
+            else -> false
+        }
+    }
+
+    /** The tool that draws paths of [kind]. */
+    fun curveToolId(kind: CurveKind): ToolId = when (kind) {
+        CurveKind.CURVE -> ToolId.CURVE
+        CurveKind.POLYLINE -> ToolId.POLYLINE
+        CurveKind.PATH -> ToolId.PATH
+    }
+
+    /** [PendingRenders] key of an [openInEditor] waiting for the renders in flight. */
+    private object EditOpening
 
     /**
      * v1.10 (R11): turns the one selected path into a shape in place (one step
      * `ObjectBarLabels110.TO_SHAPE`), then opens the Shape tool on it. True when it was done. The
      * signature is frozen; F0 stub (changes nothing), A6 body.
+     *
+     * Pending tool work is committed first and the renders in flight are waited for (then true: it
+     * is on its way), as for the other actions. A path [PathToShape.refusal] refuses (several
+     * pieces, too small, too many points) shows the reason and changes nothing. Otherwise the
+     * shape ([PathToShape.convert]) replaces the path with its id, at its place in the stacking
+     * order and with its copies ([VectorContent.replaced]); once that step landed the object
+     * selection is cleared, the Shape tool opens the shape ([ShapeTool.editShapeObject]) and what
+     * changed on the way ([PathToShape.Result.notes]) shows as one long note, the notes joined by
+     * "; ", whose "Undo" takes the step back ([EditorController.showNote]).
      */
-    fun turnIntoShape(c: EditorController): Boolean = false
+    fun turnIntoShape(c: EditorController): Boolean = edit(c, relift = false) { layer, content, ids ->
+        val path = (if (ids.size == 1) content.byId(ids.first()) else null) as? VPath ?: return@edit false
+        PathToShape.refusal(path)?.let { reason ->
+            c.toast(reason)
+            return@edit false
+        }
+        val result = PathToShape.convert(path)
+        val after = content.replaced(mapOf(path.id to listOf<VObject>(result.shape)))
+        apply(c, layer, after, ObjectBarLabels110.TO_SHAPE) {
+            c.vectors.setSelection(null, emptySet())
+            c.selectTool(ToolId.SHAPE)
+            val shape = c.tools[ToolId.SHAPE] as? ShapeTool
+            if (shape != null && c.currentTool === shape) shape.editShapeObject(layer, path.id)
+            // (After the tool opened: its own opening message never hides the note.)
+            if (result.notes.isNotEmpty()) c.showNote(result.notes.joinToString(NOTE_SEPARATOR), undoable = true)
+        }
+    }
+
+    /** Between the notes of one [turnIntoShape] (design R11 (a)). */
+    private const val NOTE_SEPARATOR = "; "
 
     // ------------------------------------------------------------------ helpers
 
