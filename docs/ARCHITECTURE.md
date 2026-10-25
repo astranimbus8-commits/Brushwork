@@ -3234,9 +3234,17 @@ copies against v1.9's "Array" plus the same edit. Its budget is 1.1 x, and the e
 drawn inside the timed run. On the PC, 512 x 512: median 0.952 ms against 1.058 ms (x 6 = 5.7
 ms). On the phone's 1080 x 2408, locally only: 9.964 ms against 11.857 ms (x 6 = 59.8 ms).
 
-The v1.9 decode checks (`ArrayBehindCompat19Test`, `ArrayColorModeCompat19Test`)
-need the frozen `compat19` kit (v1.9's `ArraySpec` and `ArrayLook` DTOs). Neither F0 nor F1
-lands it, and `main` still has no `compat19` folder. They wait for the lead's kit (lead request).
+The v1.9 decode checks are JVM tests and need no Robolectric:
+- `ArrayBehindCompat19Test`: a copies-only array in each mode. v1.9 reads every other field and
+  drops `hideSource`. Its save is v1.10's bytes without the field.
+- `ArrayColorModeCompat19Test`: a Recolored look reads in v1.9 as its tint (same stops and
+  strength). A Tinted look is written byte for byte as v1.9 writes it. An unknown mode reads as
+  Tinted.
+
+Both decode with `v110/a3/ArraySpecV19.kt`. It is a frozen copy of v1.9.0's `ArraySpec`,
+`ArrayLook` and spec JSON, in test sources only, standing in for the lead's `compat19` kit. Neither
+F0 nor F1 lands that kit. When it lands, the tests decode with it and the copy is deleted (lead
+request).
 
 <!-- /v110-A3 -->
 
