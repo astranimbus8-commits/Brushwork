@@ -3682,7 +3682,8 @@ changed layers are written. A FLAT store writes as v1.9 (snapshot, banded write)
 `TiledPixels` writes from a `snapshot()` taken on main with a non-resident pin; on IO, 256-row
 bands are read with `TileOps.readRegion` into an admitted band bitmap and encoded by
 `LayerCodec.writeRows`; the snapshot and pin are let go of back on main. A `BlankPixels` store
-writes the canonical encoding (`writeBlank`). `fits()` checks the stores, never the facade. The
+writes the canonical encoding (`writeBlank`). The ms of each changed layer's pixel files go to
+`EngineStats` as `SAVE_LAYER`. `fits()` checks the stores, never the facade. The
 written format depends only on the document (I30): the same document saved from bitmaps, tiles or
 blank stores, at any level, writes the same `project.json`. `ImageExport` reserves the JPEG's
 white copy on R (TRANSIENT) as well as through `MemoryGovernor`.
