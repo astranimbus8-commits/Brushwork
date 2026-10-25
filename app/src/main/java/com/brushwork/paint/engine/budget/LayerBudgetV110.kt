@@ -33,7 +33,7 @@ import kotlin.math.sqrt
  *   is fixed for the session, so the limit never moves under the user's finger (I31).
  * - FULL with a swap store has no layer limit but the structural guard
  *   ([LayerBudget.MAX_LAYERS_GUARD]); adding stops when neither R nor the store has room for one
- *   more layer ("Not enough free storage for more layers").
+ *   more layer ([EngineLabels110.STORAGE_FULL]).
  *
  * The counts stay in v1.9's units ([used]: pixel layers, masks, array sources by their bytes);
  * blank layers count like any other, and cost 0 bytes (section 2.13). The editor's members key
@@ -175,8 +175,7 @@ class LayerBudgetV110(private val budget: MemoryBudget, private val level: Engin
 
     /**
      * The new-canvas dialog's check: the size rules, then the J12 ceiling for one painted layer,
-     * refused with "This canvas is too big for this phone's memory. The largest is about W × H."
-     * ([largestCanvas], at the asked aspect ratio).
+     * refused with [LayersLabels110.canvasTooBig] of [largestCanvas] at the asked aspect ratio.
      */
     override fun canvasCheck(width: Int, height: Int): CanvasCheck {
         if (!known) return LayerBudgetV19.canvasCheck(width, height)
@@ -318,9 +317,9 @@ class LayerBudgetV110(private val budget: MemoryBudget, private val level: Engin
 
         /**
          * Section 2.13: what a refused first write to a blank, parked or evicted layer says: at FULL
-         * with the session's swap store "Not enough free storage for more layers", else "Not enough
-         * memory to paint on this layer. Merge or delete layers". `EditorController.checkEditable`
-         * and `updateLayerData` show it (a lead request; they show the second text until then).
+         * with the session's swap store [EngineLabels110.STORAGE_FULL], else
+         * [EngineLabels110.PAINT_REFUSED]. `EditorController.checkEditable` and `updateLayerData`
+         * show it (a lead request; they show the second text until then).
          */
         fun firstWriteRefusal(): String =
             if (EngineConfig.level == EngineLevel.FULL && EngineConfig.swapStore.capacityBytes > 0L) {
