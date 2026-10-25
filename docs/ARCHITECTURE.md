@@ -3647,7 +3647,118 @@ editor's layer window header at each: "14 / 14", "103" alone, "10000 / 10000").
 
 <!-- v110-A11 -->
 
-(A11 writes this section.)
+R1. Files: `storage/LayerEntries.kt` (`StreamedLoad`, `Writer`, `ClassicOpen`,
+`ClassicCapacityException`), `storage/LayerCodec.kt` (`Band`, `readBands`, `writeRows`, the blank
+encoding), `storage/ProjectRepository.kt` (`SaveThumbnail`), `storage/ImageExport.kt`,
+`engine/CanvasOps.kt`, `engine/LayerMerge.kt`, `tools/transform/FolderLift.kt`,
+`ui/canvas/ResizeTabs.kt`, `exchange/ImportLayers.kt`, `exchange/export/Payload.kt`; regions
+`EditorSession.kt` `v110-A11 open` and `v110-A11 save`, `EditorController.kt` `v110-A11 canvasOps`
+(three blocks: `flipLayerNow`, `clearLayer`, `applyMask`) and `ExportSceneBuilder.kt`
+`v110-A11 layerExport`. `PayloadImport.kt`, `VectorImport.kt` and `pdf/PdfImport.kt` are
+unchanged (see "Not built"). Labels: `EngineLabels110.NEEDS_FULL_STORAGE`,
+`NEEDS_FULL_NO_MEMORY`, `OPEN_WITH_FULL` (the button is a lead request), `PAINT_REFUSED`,
+`CANVAS_OP_TOO_BIG`; `LayersLabels110.PAYLOAD_TOO_MANY`. No field, no codec version and no
+`@Serializable` change: format 4 is F1's `ProjectFormat.writtenVersion`, and the pixel file
+encoding is v1.9's.
+
+**Streamed load** (`LayerEntries.readLayers`, `StreamedLoad`). Every pixel file is inflated
+through one band of `w x 256 x 4` bytes (`LayerCodec.Band`, admitted on R before it is made, made
+once per open): v1.9's whole-layer `ByteArray` is gone (`loadScratchBytes` is the test seam). Each
+band goes straight into the layer's store:
+- the active layer, and every layer at Classic: a FLAT bitmap (admitted as LAYER or MASK, then
+  filled band by band through `Band.copyRows`);
+- every other layer at TILES and FULL: one row of tiles per band; an all-zero slice is no tile, a
+  uniform opaque slice is `Tile.solid`, anything else is its own admitted tile;
+- a file equal to the cached canonical blank encoding (`LayerCodec.isBlankEncoding`: the same
+  length, then the whole file compared byte for byte, never a prefix): a `BlankPixels` store,
+  nothing decoded.
+
+A failure releases every store the open built (`releaseAll`). `uniqueIds` rebuilds a renumbered
+layer as `Layer(newId, name, pixels)` with its `maskPixels`, so nothing is materialized.
+`EditorSession` records the open's ms as `EngineStat.OPEN`.
+
+**Save from stores** (`LayerEntries.Writer.entryFor`, X6: equal pixels write equal bytes). Only
+changed layers are written. A FLAT store writes as v1.9 (snapshot, banded write). A
+`TiledPixels` writes from a `snapshot()` taken on main with a non-resident pin; on IO, 256-row
+bands are read with `TileOps.readRegion` into an admitted band bitmap and encoded by
+`LayerCodec.writeRows`; the snapshot and pin are let go of back on main. A `BlankPixels` store
+writes the canonical encoding (`writeBlank`). `fits()` checks the stores, never the facade. The
+written format depends only on the document (I30): the same document saved from bitmaps, tiles or
+blank stores, at any level, writes the same `project.json`. `ImageExport` reserves the JPEG's
+white copy on R (TRANSIENT) as well as through `MemoryGovernor`.
+
+**The autosave thumbnail** (region `v110-A11 save`, `SaveThumbnail`). `SaveThumbnail.take(doc)` on
+main builds a private document of views: each visible layer's store as a `snapshot()` (Tiled) or
+the store itself (Blank), with non-resident pins; at most two FLAT stores are copied (TRANSIENT).
+The 512 px thumbnail is rendered from it on the save writer through the compositor (an adjustment
+layer's tiled mask is made into a bitmap there); `release()` on main lets the snapshots and pins
+go. At Classic, or with more than two FLAT stores, `take` returns null and the thumbnail renders
+on main as in v1.9.
+
+**Classic's refusal** (J16, UQ16, `ClassicOpen`). A format-4 artwork opens at Classic only up to
+`classicOpenCapacity = max(v19Cap(J), (Rstable - 3.8 L - 184 MB) / L)`, where `Rstable` comes from
+`totalMem`, `isLowRamDevice` and `is64Bit` alone (never `availMem` or the step-down), so the same
+artwork opens in every session on one phone; unknown memory keeps v1.9's cap. The painted content
+and mask files are counted before anything is decoded (`paintedFiles`: a file of the blank
+encoding's length is compared with it; any other file costs one length check); array pixels are
+checked after the stream. An artwork that fits admits its FLAT layers against `Rstable`, not the
+session's R. Formats 1-3 always open. A refusal is `ClassicCapacityException`: the editor's failed
+state shows `NEEDS_FULL_STORAGE` (plus `NEEDS_FULL_NO_MEMORY` when the check chose Classic for low
+memory, `refusedForMemory`) and otherwise sets `offersFullStorage`;
+`EditorSession.openWithFullStorage()` opens this artwork once at FULL (2 GiB free) or TILES,
+without changing the setting.
+
+**Canvas operations layer by layer** (`CanvasOps`). `CanvasSnapshot` holds each layer's stores
+(snapshots of tiled stores, taken on main under a `Lease`) instead of bitmaps; rotate, flip,
+resize, crop and trim map one layer at a time off main (`mapLayers`, `mapStore`). A layer's source
+is its FLAT bitmap, or a temporary bitmap of its tiled store recycled after the operation; a blank
+store stays blank where the operation keeps transparent pixels transparent. Each result is
+admitted (TRANSIENT) before it is made and, unless the layer is the active one or the level is
+Classic, cut into tiles at once (`settle`, `TileOps.cut` with blank detection: blank when no tile
+is left), so at most one layer is FLAT at a time. `StoresAction` swaps the stores of every layer by reference (undo gives
+back the very stores the layers held) and releases the tiled stores it no longer needs on
+dispose. `ResizeTabs` asks `LayerBudget.current.canTransformCanvas(doc, w, h)`; a refusal toasts
+`CANVAS_OP_TOO_BIG`.
+
+**Merge, lift and the canvasOps blocks.** `LayerMerge.mergeDownInto` composites views of the two
+layers' stores (`Layer(-1, name, pixels)` with `maskPixels`, both layers pinned) and records
+`MergedStoresAction`, which keeps the lower layer's old stores by reference. `FolderLift` reads a
+child's bounds and crop from its store (`ChildPixels`: FLAT scans the bitmap, Tiled reads only its
+occupied band through `TileOps.readRegion`) and admits a write first (`admitWrite`, else
+`PAINT_REFUSED`). The three `canvasOps` blocks: `flipLayerNow` and `applyMask` call
+`admitWrite()` first; `clearLayer` of a whole layer (content, no selection) swaps in
+`BlankPixels` (`StoreSwapAction`, self-inverse, nothing read or written); `applyMask` draws the
+mask store with `Compositor.drawMaskPixels` and keeps it by reference (`MaskStoreAction`).
+
+**Import and export.** `ImportLayers` parks every inserted layer but the top one (at TILES and
+FULL): its bitmap is cut into tiles (`parkedStoreOf`) and recycled at insert, its mask likewise.
+The region `layerExport` writes each layer's image from its store at write time (`storeImage`: a
+FLAT bitmap's pixels, otherwise `TileOps.readRegion` on the pixel dispatcher), finds content
+bounds from the store, builds masks from `maskPixels`, and composites from views of the stores.
+`Payload.refusal(n)` is `PAYLOAD_TOO_MANY` above `MAX_LAYERS` (1000), and every payload write
+(`toJson`, so `toBase64`, `deflated`, the SVG and PDF writers) throws it: an SVG or PDF export
+with Brushwork data of a bigger artwork stops with that text and keeps no file. 1000 layers still
+write and read back.
+
+**Not built, and what waits for other areas.**
+- Steps 6 (two decoder threads at open) and 7 (the "Opening layer n of m" line) are not built
+  (both cuttable); the open decodes one layer after another on one IO thread.
+- `PayloadImport`, `VectorImport` and `PdfImport` still render every new layer's bitmap before
+  the insert; only the insert parks them.
+- The payload refusal happens when the payload is written, not before the export starts (that
+  check belongs in `ExportJob`, a lead request); `payloadLayer` (outside the region) still reads
+  `layer.mask`.
+- An evicted store (A8/A10) cannot be mapped yet: a canvas operation on one is refused with
+  `CANVAS_OP_TOO_BIG`. The thumbnail uses the compositor, not A9's `BandAssembler`; the swap-in
+  half of the autosave (reading swapped tiles) is A10's. There is no `LayerTree` index here, so
+  per-layer loops stay O(n). `OtherTabs` (not A11's) still reads `opaqueBounds` off main without
+  a lease (a lead request).
+
+Tests (`v110/a11/`): `StreamedLoadParityTest`, `StreamedLoadNoScratchTest`, `BlankFastPathTest`,
+`TiledSaveByteIdenticalTest`, `FormatFourDeterminismTest`, `ClassicRefusesBigArtworkTest`,
+`AutosaveNoInflateOnMainTest`, `CanvasOpsLayerByLayerTest`, `PayloadRefusalTest`; Timing:
+`Open200TimingTest`, `SaveOneLayerTimingTest`, `AutosaveMainThreadTimingTest`,
+`CanvasRotate50TimingTest`.
 
 <!-- /v110-A11 -->
 

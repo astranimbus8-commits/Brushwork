@@ -4,8 +4,13 @@ import android.graphics.Bitmap
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.LayerListEvent
 import com.brushwork.paint.LayerListKind
+import com.brushwork.paint.engine.EngineConfig
+import com.brushwork.paint.engine.EngineLevel
 import com.brushwork.paint.engine.LayerStructure
 import com.brushwork.paint.engine.UndoAction
+import com.brushwork.paint.engine.parkedStoreOf
+import com.brushwork.paint.engine.tiles.FlatPixels
+import com.brushwork.paint.engine.tiles.PixelStore
 import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.FolderSpec
 import com.brushwork.paint.model.Layer
@@ -98,9 +103,12 @@ object ImportLayers {
                 if (layers.any { it.inTree }) created += insertTree(c, layers, ids, links, label, replace, point)
                 else for ((k, n) in layers.withIndex()) {
                     // Unique among the layers that stay (a restored "Background" keeps its name).
-                    val layer = Layer(ids[k], uniqueName(c, n.name, replace), n.bitmap)
+                    // v1.10 (A11, design 2.5): every layer but the one that becomes active is parked as it goes in.
+                    val parks = k < layers.lastIndex
+                    val name = uniqueName(c, n.name, replace)
+                    val layer = parked(n.bitmap, parks)?.let { Layer(ids[k], name, it) } ?: Layer(ids[k], name, n.bitmap)
                     n.props?.let { layer.copyPropsFrom(it.copy(name = layer.name)) }
-                    layer.mask = n.mask
+                    layer.maskPixels = n.mask?.let { parked(it, parks) ?: FlatPixels(it) }
                     layer.restoreData(if (n.sourceId != 0L) relinked(n.data, links) { doc.newLayerId() } else n.data)
                     val index = at
                     // As the project loader does: an adjustment layer is never clipped nor a clipping base.
@@ -156,8 +164,10 @@ object ImportLayers {
             val layer = if (n.folder != null) {
                 Layer.newFolder(ids[k], name, n.folder).also { it.folderOpen = n.folderOpen }
             } else {
-                Layer(ids[k], name, n.bitmap).also { l ->
-                    l.mask = n.mask
+                // v1.10 (A11, design 2.5): every layer but the topmost (the active one) is parked as it goes in.
+                val parks = k < layers.lastIndex
+                (parked(n.bitmap, parks)?.let { Layer(ids[k], name, it) } ?: Layer(ids[k], name, n.bitmap)).also { l ->
+                    l.maskPixels = n.mask?.let { parked(it, parks) ?: FlatPixels(it) }
                     l.restoreData(if (n.sourceId != 0L) relinked(n.data, links) { doc.newLayerId() } else n.data)
                 }
             }
@@ -230,6 +240,16 @@ object ImportLayers {
             c.onDocumentGeometryChanged()
         }
     }
+
+    /**
+     * v1.10 (A11, design 2.5): [b] (an imported layer's bitmap or mask, which the import owns)
+     * parked when [parks] and the engine is above Classic: cut into tiles and recycled, one layer
+     * at a time as the layers go in, so an import of many layers does not keep them all in
+     * memory. Null (keep [b] FLAT, as v1.9) at Classic, for the layer that becomes active, for
+     * a folder's bitmap, or when the budget refuses the tiles.
+     */
+    private fun parked(b: Bitmap, parks: Boolean): PixelStore? =
+        if (!parks || EngineConfig.level == EngineLevel.CLASSIC || b === Layer.FOLDER_BITMAP) null else parkedStoreOf(b)
 
     /** [base], or "[base] 2", "[base] 3"... so names stay unique (the layers in [leaving] don't count). */
     fun uniqueName(c: EditorController, base: String, leaving: List<Layer> = emptyList()): String {

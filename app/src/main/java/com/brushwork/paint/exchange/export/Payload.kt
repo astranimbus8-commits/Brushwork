@@ -6,6 +6,7 @@ import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.FolderSpec
 import com.brushwork.paint.model.LayerProps
 import com.brushwork.paint.model.PaperSpec
+import com.brushwork.paint.ui.common.LayersLabels110
 import com.brushwork.paint.vector.VectorCodec
 import com.brushwork.paint.vector.VectorContent
 import kotlinx.serialization.EncodeDefault
@@ -146,6 +147,7 @@ object Payload {
      * with their v1.7 fallback outline, as in a `.vec` file (`VectorCodec.forWriting`, D23).
      */
     fun toJson(p: BrushworkPayload): ByteArray {
+        refusal(p.layers.size)?.let { throw IOException(it) }
         val v = writtenVersion(p)
         return json.encodeToString(BrushworkPayload.serializer(), forWriting(if (p.version == v) p else p.copy(version = v))).toByteArray(Charsets.UTF_8)
     }
@@ -189,6 +191,14 @@ object Payload {
         }
         return fromDeflated(bytes)
     }
+
+    /**
+     * v1.10 (A11, D47): null when an artwork of [layerCount] layers (folders included, as a
+     * payload lists them) may be written with Brushwork data, else why not: the share format
+     * holds at most [MAX_LAYERS] layers, as it reads (a larger payload is never written). Every
+     * write ([toJson], under [deflated] and [toBase64]) refuses with this text.
+     */
+    fun refusal(layerCount: Int): String? = if (layerCount > MAX_LAYERS) LayersLabels110.PAYLOAD_TOO_MANY else null
 
     /** Sanity limits of a decoded payload (a damaged file must not create huge documents). */
     private fun check(p: BrushworkPayload) {
