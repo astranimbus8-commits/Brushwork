@@ -215,10 +215,10 @@ internal class WaitingTiles(
     }
 
     /**
-     * One tile read by [worker]: [bitmap] is the reader's [own] copy, or the bitmap the tile held
+     * One tile read by [worker]: [copy] is the reader's [own] copy, or the bitmap the tile held
      * at the read (resident meanwhile, or lent by another job): that one is never recycled here.
      */
-    private class Read(val tile: Tile, val bitmap: Bitmap, val own: Boolean) {
+    private class Read(val tile: Tile, val copy: Bitmap, val own: Boolean) {
         var lent = false
     }
 
@@ -237,16 +237,16 @@ internal class WaitingTiles(
                 return
             }
             try {
-                for (r in read) r.lent = BandAssembler.lend(r.tile, r.bitmap)
+                for (r in read) r.lent = BandAssembler.lend(r.tile, r.copy)
                 if (!composite(job, from, until)) return
             } finally {
-                for (r in read) if (r.lent) BandAssembler.unlend(r.tile, r.bitmap)
+                for (r in read) if (r.lent) BandAssembler.unlend(r.tile, r.copy)
             }
         } finally {
             // Only an own copy that was never lent is recycled: a lent copy may have been handed
             // to a reader off main by `bitmapForRead` meanwhile (the GC frees it), and a bitmap
             // that is not the reader's own is a tile's.
-            for (r in read) if (r.own && !r.lent && !r.bitmap.isRecycled) r.bitmap.recycle()
+            for (r in read) if (r.own && !r.lent && !r.copy.isRecycled) r.copy.recycle()
             for (p in pins) p.close()
         }
         step(job)

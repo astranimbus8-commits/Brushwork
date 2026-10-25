@@ -68,11 +68,11 @@ class LayerThumbnails internal constructor(
     /** Bumped when a picture made from tiles lands: [content] and [mask] read it, so rows recompose. */
     private var landed by mutableIntStateOf(0)
 
-    /** One request: the [store] of [layer] (its mask when [mask]) at its key. */
-    private class Request(val layer: Layer, val mask: Boolean, val version: Long, val generation: Long, val store: TiledPixels) {
+    /** One request: the [store] of [layer] (its mask when [ofMask]) at its key. */
+    private class Request(val layer: Layer, val ofMask: Boolean, val version: Long, val generation: Long, val store: TiledPixels) {
         /** Its own paint: the request draws on main and on the worker. */
         val paint by lazy { Paint(Paint.FILTER_BITMAP_FLAG) }
-        val want = Want(layer.id, mask, version, generation)
+        val want = Want(layer.id, ofMask, version, generation)
     }
 
     private data class Want(val id: Long, val mask: Boolean, val version: Long, val generation: Long)
@@ -191,7 +191,7 @@ class LayerThumbnails internal constructor(
     /** True when [r] still describes its layer's store and key. */
     private fun isCurrent(r: Request): Boolean {
         val l = r.layer
-        val store = if (r.mask) l.maskPixels else l.pixels
+        val store = if (r.ofMask) l.maskPixels else l.pixels
         return store === r.store && l.contentVersion == r.version && l.pixelGeneration == r.generation && r.store.evictedTo == null
     }
 
@@ -202,7 +202,7 @@ class LayerThumbnails internal constructor(
             busy = false
             return
         }
-        val have = (if (r.mask) masks else content)[r.layer.id]
+        val have = (if (r.ofMask) masks else content)[r.layer.id]
         if (!isCurrent(r) || (have != null && have.exact && have.version == r.version && have.generation == r.generation)) return done(r)
         val store = r.store
         val (w, h) = fitSize(store.width, store.height, maxSize)
@@ -298,9 +298,9 @@ class LayerThumbnails internal constructor(
     private fun land(r: Request, inter: Bitmap, w: Int, h: Int, big: Boolean) {
         val picture = if (big) Bitmap.createScaledBitmap(inter, w, h, true).also { if (it !== inter) inter.recycle() } else inter
         val bytes = picture.allocationByteCount.toLong()
-        put(if (r.mask) masks else content, r.layer.id, Entry(r.version, r.generation, picture.asImageBitmap(), exact = true, tileBytes = bytes))
+        put(if (r.ofMask) masks else content, r.layer.id, Entry(r.version, r.generation, picture.asImageBitmap(), exact = true, tileBytes = bytes))
         tileBytes += bytes
-        tileOrder.addLast(r.mask to r.layer.id)
+        tileOrder.addLast(r.ofMask to r.layer.id)
         while (tileBytes > TILE_PICTURES_BYTES) {
             val (mask, id) = tileOrder.removeFirstOrNull() ?: break
             val cache = if (mask) masks else content
