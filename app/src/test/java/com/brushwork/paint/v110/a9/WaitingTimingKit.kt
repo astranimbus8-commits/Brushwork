@@ -101,21 +101,21 @@ object WaitingTimingKit {
 
     /**
      * Renders every dirty tile progressively as the view does (budgeted updates of [frameNanos],
-     * the main looper run between them) until none is dirty or waiting; returns the longest update.
+     * the main looper run between them) until none is dirty or waiting; returns how many updates it
+     * took. Nothing here is timed (the callers time it); the 120 s guard reads the wall clock.
      */
-    fun renderAll(tiles: DisplayTiles, compositor: Compositor, frameNanos: Long = 8_000_000L): Long {
-        val until = System.nanoTime() + 120_000_000_000L
-        var longest = 0L
+    fun renderAll(tiles: DisplayTiles, compositor: Compositor, frameNanos: Long = 8_000_000L): Int {
+        val until = System.currentTimeMillis() + 120_000L
+        var updates = 0
         while (tiles.hasDirty || tiles.hasWaiting) {
-            val t0 = System.nanoTime()
             tiles.updateBudgeted(compositor, null, frameNanos)
-            longest = maxOf(longest, System.nanoTime() - t0)
+            updates++
             shadowOf(Looper.getMainLooper()).idle()
             if (!tiles.hasDirty && !tiles.hasWaiting) break
-            check(System.nanoTime() < until) { "the tiles never completed" }
+            check(System.currentTimeMillis() < until) { "the tiles never completed" }
             Thread.yield()
         }
-        return longest
+        return updates
     }
 
     /** Tile [index] of [tiles] drawn alone onto a new bitmap of the document's size. */

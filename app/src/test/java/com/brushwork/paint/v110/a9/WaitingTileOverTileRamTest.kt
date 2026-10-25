@@ -122,11 +122,11 @@ class WaitingTileOverTileRamTest {
 
     /** Runs the main looper until no tile waits (the worker reads meanwhile). */
     private fun settle(tiles: DisplayTiles) {
-        val until = System.nanoTime() + 60_000_000_000L
+        val until = System.currentTimeMillis() + 60_000L
         while (tiles.hasWaiting) {
             shadowOf(Looper.getMainLooper()).idle()
             if (!tiles.hasWaiting) break
-            assertTrue("the waiting tile completes", System.nanoTime() < until)
+            assertTrue("the waiting tile completes", System.currentTimeMillis() < until)
             Thread.sleep(1)
         }
     }

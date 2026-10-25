@@ -31,7 +31,7 @@ class StrokeFrame200TimingTest {
     fun aStrokeFrameAt200LayersIsQuick() {
         val kit = StrokeFrameKit(WaitingTimingKit.stack(N, 200L), N - 10)
         try {
-            val ms = PerfBudget.measuredWithin(PerfBudget.ms(BUDGET_MS), what = "stroke frame, N = 200, projections") { kit.medianFrameMs() }
+            val ms = PerfBudget.measuredWithin(PerfBudget.ms(BUDGET_MS), what = "stroke frame, N = 200, projections") { kit.medianFrameMs(PerfBudget::timeMs) }
             println("StrokeFrame200TimingTest: median $ms ms (budget ${PerfBudget.ms(BUDGET_MS)} ms)")
             assertTrue("the frames drew from the below projection", kit.projection.hits > 0)
             val expected = ProjectionOracle.frame(kit.doc, display = true)

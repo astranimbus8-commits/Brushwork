@@ -11,7 +11,6 @@ import com.brushwork.paint.engine.tiles.ChaosResidency
 import com.brushwork.paint.engine.tiles.FlatPixels
 import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.Layer
-import com.brushwork.paint.testing.PerfBudget
 
 /**
  * v1.10 A9 step 3: the stroke-frame timings (`StrokeFrame200TimingTest`,
@@ -46,10 +45,13 @@ internal class StrokeFrameKit(val doc: Document, activeIndex: Int) {
         tiles.update(compositor)
     }
 
-    /** The median of [runs] stroke frames after 3 warm-ups (ms). */
-    fun medianFrameMs(runs: Int = 15): Double {
+    /**
+     * The median of [runs] stroke frames after 3 warm-ups (ms), each measured by [timeMs] (the
+     * Timing test's `PerfBudget` clock; this kit reads no clock itself).
+     */
+    fun medianFrameMs(timeMs: (() -> Unit) -> Double, runs: Int = 15): Double {
         repeat(3) { frame() }
-        val times = DoubleArray(runs) { PerfBudget.timeMs { frame() } }
+        val times = DoubleArray(runs) { timeMs { frame() } }
         times.sort()
         return times[times.size / 2]
     }

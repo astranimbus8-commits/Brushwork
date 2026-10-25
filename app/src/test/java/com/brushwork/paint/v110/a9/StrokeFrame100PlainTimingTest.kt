@@ -35,7 +35,7 @@ class StrokeFrame100PlainTimingTest {
         for (i in ACTIVE + 1 until N step 4) doc.layers[i].blendMode = LayerBlendMode.MULTIPLY
         val kit = StrokeFrameKit(doc, ACTIVE)
         try {
-            val ms = PerfBudget.measuredWithin(PerfBudget.ms(BUDGET_MS), what = "stroke frame, N = 100, ineligible stack") { kit.medianFrameMs() }
+            val ms = PerfBudget.measuredWithin(PerfBudget.ms(BUDGET_MS), what = "stroke frame, N = 100, ineligible stack") { kit.medianFrameMs(PerfBudget::timeMs) }
             println("StrokeFrame100PlainTimingTest: median $ms ms (budget ${PerfBudget.ms(BUDGET_MS)} ms)")
             assertTrue("the frames drew from the below projection", kit.projection.hits > 0)
             val expected = ProjectionOracle.frame(kit.doc, display = true)
