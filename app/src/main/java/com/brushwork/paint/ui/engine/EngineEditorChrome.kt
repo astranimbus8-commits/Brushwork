@@ -65,7 +65,9 @@ import kotlinx.coroutines.withContext
  * [SlabSwapStore] becomes `EngineConfig.swapStore` ([SlabSwapStore.installIfFull]; at CLASSIC and
  * TILES, with a store already installed, or under Robolectric nothing happens); the session's end
  * (`EngineConfig.closeSession`) closes it and deletes its directory. Installed here and not in
- * `EditorSession` (region `v110-A10 session`) until A11's merge (design 4.0, `$Sequential`).
+ * `EditorSession` (region `v110-A10 session`) until A11's merge (design 4.0, `$Sequential`). With a
+ * store installed, [LowStorageNotice] shows [EngineLabels110.LOW_STORAGE] once in the session when
+ * the store reads less than 1.5 GiB free (at the start, then every 60 s).
  *
  * A10: the activation ring (design 2.7). While a layer is made ready asynchronously, canvas input
  * is held without a toast; when that lasts [RING_DELAY_MS] (250 ms), the pill slot (under the
@@ -86,6 +88,7 @@ fun EngineEditorChrome(controller: EditorController) {
     val context = LocalContext.current
     LaunchedEffect(controller) {
         SlabSwapStore.installIfFull(context.applicationContext)
+        LowStorageNotice.watch { controller.toast(it) }
     }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     if (ExitWatch.markerRuns) EditorMarker(controller, lifecycle)
