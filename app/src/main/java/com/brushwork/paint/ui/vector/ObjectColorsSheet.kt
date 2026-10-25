@@ -93,7 +93,8 @@ import kotlinx.coroutines.launch
  * touch outside the sheet only minimizes it (SheetHost) and keeps the preview. When the object's
  * session ends, the caller drops this call: the tool's ✓ keeps the colors inside its one step, ✕
  * restores them with everything else. Undo while the sheet is open or minimized first closes it
- * with Cancel, then undoes as usual ([ObjectColorSheetState]).
+ * with Cancel, then undoes as usual; when the colors were the object's only change, it closes the
+ * object as it was opened and undoes no document step ([ObjectColorSheetState]).
  */
 @Composable
 internal fun ObjectColorsSheet(editor: ObjectColorEditor, onClose: () -> Unit) {
@@ -306,7 +307,9 @@ internal interface ObjectColorExtras {
  * same text) starts with the sheet closed.
  *
  * Undo (R2, J21): while the sheet is open or minimized, the app's Undo first closes it with Cancel
- * ([cancel], the editor's: the colors it opened with), then undoes as usual. For that the state is
+ * ([cancel], the editor's: the colors it opened with), then undoes as usual; when the colors were
+ * the object's only change, that Undo closes the object as it was opened and goes no further (no
+ * document step: the colors were what the user changed). For that the state is
  * [controller]'s `inToolHistory` while open ([UndoFirst]), handing every call on to the owner it
  * found there (a session that owns Undo keeps it); a session that takes `inToolHistory` over later
  * (a filter, a text path's nodes) simply goes first. Without [controller] (a stand-in editor) there
@@ -374,7 +377,16 @@ internal class ObjectColorSheetState(
         }
     }
 
-    /** Undo's first stop while the sheet is open: its Cancel, then [next] (or the usual Undo). */
+    /**
+     * Undo's first stop while the sheet is open: its Cancel, then [next] (or the usual Undo).
+     *
+     * When the previewed colors were the open object's only change, the usual Undo would find an
+     * untouched reopened object after the Cancel, close it and undo the document's step before it
+     * too (v1.9 R17: an untouched object does not swallow an Undo). The colors were the user's
+     * change, so Undo stops there instead, as it does for colors kept by OK (design 4.4 A2 J21: at
+     * the bottom of the object's steps Undo closes it without its colors and undoes no document
+     * step): the object closes as it was opened, and that is the whole Undo.
+     */
     private inner class UndoFirst(val next: InToolHistoryOwner?) : InToolHistoryOwner {
         override val canUndo: Boolean get() = next?.canUndo == true
         override val canRedo: Boolean get() = next?.canRedo == true
@@ -383,13 +395,26 @@ internal class ObjectColorSheetState(
 
         override fun undoStep(): Boolean {
             val n = next
-            if (isOpen) {
-                cancel()
-                close()
-            } else {
+            if (!isOpen) {
                 giveUndoBack()
+                return n?.undoStep() == true
             }
-            return n?.undoStep() == true
+            val c = controller
+            val tool = c?.currentTool
+            val changed = tool != null && tool.hasPendingWork && tool.hasUserChanges
+            cancel()
+            close()
+            if (n?.undoStep() == true) return true
+            if (c == null || tool == null || !changed || c.currentTool !== tool) return false
+            if (!tool.hasPendingWork || tool.hasUserChanges) return false
+            // The Cancel took back the object's only change: close it as the usual Undo closes an
+            // object at the bottom of its steps (EditorController.undo), without a document step.
+            c.flushDeferredSteps()
+            c.landSavedSelections()
+            c.settleVectorWork()
+            tool.discard()
+            c.invalidateOverlay()
+            return true
         }
 
         override fun redoStep(): Boolean = next?.redoStep() == true

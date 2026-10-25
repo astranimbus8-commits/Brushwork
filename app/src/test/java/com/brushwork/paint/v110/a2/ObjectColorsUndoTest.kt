@@ -14,6 +14,8 @@ import com.brushwork.paint.tools.vector.ShapeObject
 import com.brushwork.paint.tools.vector.ShapeStyle
 import com.brushwork.paint.tools.vector.ShapeTool
 import com.brushwork.paint.tools.vector.ShapeType
+import com.brushwork.paint.tools.text.TextCodec
+import com.brushwork.paint.tools.text.TextTool
 import com.brushwork.paint.ui.vector.ObjectColorExtras
 import com.brushwork.paint.v110.a2.A2ToolRig.Companion.BLACK
 import com.brushwork.paint.v110.a2.A2ToolRig.Companion.BLUE
@@ -29,6 +31,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
@@ -48,6 +51,10 @@ import org.robolectric.Shadows.shadowOf
  * - Undo while the Object colors sheet is open (or minimized) first closes it with Cancel, then
  *   undoes as usual; a sheet closed by OK, or by the end of its object's session, leaves Undo
  *   to the app (the controller's `inToolHistory` given back).
+ * - Review fix (8/8): when the previewed colors were the object's only change, that Undo closes
+ *   the object as it was opened and undoes no document step (before, the Cancel left an untouched
+ *   object, whose usual Undo also took back the document's step before it: the shape's placing);
+ *   with nothing previewed, Undo stays v1.9's (an untouched object does not swallow it).
  *
  * For a reopened shape, a new shape and a reopened path (the Polyline tool). The editor is driven
  * as the sheet drives it (`begin`, `preview`, OK's `commit`); the sheet's own tests drive the UI.
@@ -178,6 +185,139 @@ class ObjectColorsUndoTest {
         settle()
         assertFalse(sheet.isOpen)
         assertNull("✓ gave Undo back", c.inToolHistory)
+        assertEquals("the user's drawing color", hex(GREEN), hex(c.color))
+    }
+
+    @Test
+    fun undoWithTheSheetOpenOnAnOtherwiseUntouchedShapeClosesItAndUndoesNoDocumentStep() {
+        val c = rig.controller()
+        val tool = shapeTool(c)
+        c.drag(30f to 30f, 80f to 60f, 110f to 90f)
+        tool.commit()
+        settle()
+        val layer = c.activeLayer
+        val placed = shapeOf(layer)
+        val layers = c.doc.layers.size
+        c.color = GREEN
+        c.tap(60f, 60f)
+        settle()
+        assertSame("reopened", layer, tool.editingLayer)
+        val ed = tool.objectColors.open()
+        val sheet = (ed as ObjectColorExtras).sheet
+        sheet.open()
+        ed.begin()
+        ed.preview(ObjectColorTarget.STROKE, BLUE)
+        ed.preview(ObjectColorTarget.FILL, BLACK)
+        assertEquals(hex(BLUE), hex(requireNotNull(tool.pendingObject()).strokeColor))
+        val steps = c.undoManager.undoCount
+
+        c.undo()
+        settle()
+        assertFalse("Undo closed the sheet", sheet.isOpen)
+        assertNull("and gave Undo back", c.inToolHistory)
+        assertNull("the shape closed", tool.editingLayer)
+        assertFalse(tool.hasPendingWork)
+        assertEquals("as it was placed: no colors", placed, shapeOf(layer))
+        assertEquals("no document step undone (the shape's placing stays)", steps, c.undoManager.undoCount)
+        assertEquals("the shape's layer stays", layers, c.doc.layers.size)
+        assertTrue(c.doc.layers.contains(layer))
+        assertEquals("the user's drawing color", hex(GREEN), hex(c.color))
+
+        // With nothing previewed the sheet changes nothing about Undo (v1.9 R17): an untouched
+        // reopened shape closes and the document's step before it is undone, in one Undo.
+        c.tap(60f, 60f)
+        settle()
+        assertSame("reopened again", layer, tool.editingLayer)
+        val ed2 = tool.objectColors.open()
+        val sheet2 = (ed2 as ObjectColorExtras).sheet
+        sheet2.open()
+        ed2.begin()
+        c.undo()
+        settle()
+        assertFalse(sheet2.isOpen)
+        assertNull(c.inToolHistory)
+        assertNull("the shape closed", tool.editingLayer)
+        assertEquals("then undid as usual: the shape's placing", steps - 1, c.undoManager.undoCount)
+    }
+
+    @Test
+    fun undoWithTheSheetOpenOnAnOtherwiseUntouchedTextClosesItAndUndoesNoDocumentStep() {
+        val c = rig.controller(400, 300)
+        c.viewTransform.set(android.graphics.Matrix())
+        c.snapping.enabled = false
+        c.selectTool(ToolId.TEXT)
+        val tool = c.tools.getValue(ToolId.TEXT) as TextTool
+        c.tap(200f, 150f)
+        assertTrue("the editor opened for a new text", tool.editorOpen && tool.editingNew)
+        tool.setText("HH")
+        tool.updateSpec { it.copy(sizePx = 80f, color = BLACK, strokeWidthPx = 0f) }
+        tool.confirmEditor()
+        assertTrue(tool.commitItem())
+        settle()
+        val layer = c.activeLayer
+        assertTrue(layer.isTextLayer)
+        val placed = TextCodec.decodeAll(layer.textData).single().spec
+        val layers = c.doc.layers.size
+        c.tap(200f, 150f)
+        settle()
+        assertNotNull("the tap opens the text", tool.item)
+        val ed = tool.objectColors.open()
+        val sheet = (ed as ObjectColorExtras).sheet
+        sheet.open()
+        assertTrue(sheet.isOpen)
+        ed.begin()
+        ed.preview(ObjectColorTarget.TEXT, GREEN)
+        ed.preview(ObjectColorTarget.OUTLINE, BLUE)
+        val steps = c.undoManager.undoCount
+
+        c.undo()
+        settle()
+        assertFalse("Undo closed the sheet", sheet.isOpen)
+        assertNull("and gave Undo back", c.inToolHistory)
+        assertNull("the text closed", tool.item)
+        assertEquals("as it was placed: no colors", placed, TextCodec.decodeAll(layer.textData).single().spec)
+        assertEquals("no document step undone (the text's placing stays)", steps, c.undoManager.undoCount)
+        assertEquals("the text's layer stays", layers, c.doc.layers.size)
+        assertEquals("the drawing color never changed", hex(RED), hex(c.color))
+    }
+
+    @Test
+    fun undoWithTheSheetOpenOnAnOtherwiseUntouchedPathClosesItAndUndoesNoDocumentStep() {
+        val c = rig.controller()
+        c.snapping.enabled = false
+        c.selectTool(ToolId.POLYLINE)
+        val tool = c.tools.getValue(ToolId.POLYLINE) as CurveTool
+        tool.update { it.copy(stroke = CurveStroke.PLAIN, plainWidth = 8f, useBrushSize = false, fill = true, fillColor = null, closed = true, ownLayer = true) }
+        for (p in listOf(Vec2(40f, 40f), Vec2(160f, 40f), Vec2(160f, 160f), Vec2(40f, 160f))) assertTrue(tool.addAnchor(p))
+        tool.deselect()
+        tool.commit()
+        settle()
+        val layer = c.doc.activeLayer
+        assertTrue("a vector layer of its own", layer.isVectorLayer)
+        fun placed() = layer.vector!!.objects.single() as VPath
+        val before = placed()
+        val layers = c.doc.layers.size
+        c.color = GREEN
+        assertTrue(tool.reopen(before))
+        settle()
+        tool.deselect()
+        val ed = tool.objectColors.open()
+        val sheet = (ed as ObjectColorExtras).sheet
+        sheet.open()
+        ed.begin()
+        ed.preview(ObjectColorTarget.STROKE, BLUE)
+        ed.preview(ObjectColorTarget.FILL, BLACK)
+        settle()
+        val steps = c.undoManager.undoCount
+
+        c.undo()
+        settle()
+        assertFalse("Undo closed the sheet", sheet.isOpen)
+        assertNull("and gave Undo back", c.inToolHistory)
+        assertFalse("the path closed", tool.isReopened)
+        assertEquals("as it was placed: no colors", before, placed())
+        assertEquals("no document step undone (the path's placing stays)", steps, c.undoManager.undoCount)
+        assertEquals("the path's layer stays", layers, c.doc.layers.size)
         assertEquals("the user's drawing color", hex(GREEN), hex(c.color))
     }
 

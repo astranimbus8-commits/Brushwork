@@ -2981,7 +2981,11 @@ with the cell) keeps its start values, and Cancel restores what the first openin
 its `next`; labels and `canUndo`/`canRedo` are `next`'s). The controller's Undo asks it first:
 with the sheet open or minimized it closes the sheet with Cancel, then hands the step to `next`
 (an in-tool step), or returns false so the controller goes on as usual (the v1.9 R17 rule closes
-an untouched reopened object, else the document's last step). `close()` (OK, Cancel, the
+an untouched reopened object, else the document's last step). One exception (review fix 8/8):
+when the open object had user changes before the Cancel and has none after it (the previews were
+its only change), `UndoFirst` itself closes it (`discard`, after the controller's flushes) and
+returns true, so the Undo that took back the colors never also takes back the document's step
+before the object (its placing); with nothing previewed v1.9's rule stands. `close()` (OK, Cancel, the
 session's end) gives `inToolHistory` back when it still holds `UndoFirst`, and calls
 `refreshDeferredWaitGuard()`. Known edges: while the sheet is open the controller's deferred-wait
 guard (an Undo that waited for a pending render) is not installed, and a session that takes
@@ -3067,7 +3071,9 @@ strip edit after the sheet stays the tool's; the sheet's fill, mode and line col
 font scale 2.0: live, Cancel, OK then ✓ as one step, Undo, Redo), `PillColorPlacementTest`,
 `PillColorRestoresMainColorTest`, `PillColorSwatchOnDarkTest`, `ObjectColorsUndoTest` (✓ one step
 with the colors; an in-tool undo keeps them; the bottom of the steps closes without them; Undo
-with the sheet open closes it with Cancel first), `ObjectColorsSheetCancelTest` (Cancel, Back, a
+with the sheet open closes it with Cancel first; on a Shape, a Text and a Polyline whose only
+change was the previews, that Undo closes the object and undoes no document step),
+`ObjectColorsSheetCancelTest` (Cancel, Back, a
 filter started under the sheet), `GradientKeptTest` (both pickers), `NoFillSetsStrokeModeTest`,
 `ColorPreviewFrameTimingTest` (Timing); `qa110/Qa110ObjectColorsUiTest` (the real editor at 392
 and 360 dp, font scale 1.3 and 2.0, every tap a finger's); kits `A2ToolRig`, `A2FakeColorEditor`,
