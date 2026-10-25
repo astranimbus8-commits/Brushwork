@@ -458,17 +458,26 @@ internal object TileOps {
      */
     private fun classifyRaw(px: IntArray, n: Int): Int {
         val first = px[0]
-        var visible = false
-        var uniform = true
-        for (i in 0 until n) {
-            val p = px[i]
-            if (p ushr 24 != 0) visible = true
-            if (p != first) uniform = false
-            if (visible && !uniform) return OTHER
+        // Branch-free within a chunk (the JIT vectorizes the two ORs); OTHER is known at a chunk's end.
+        var alphas = 0
+        var diff = 0
+        var i = 0
+        while (i < n) {
+            val end = min(n, i + SCAN_CHUNK)
+            for (k in i until end) {
+                val p = px[k]
+                alphas = alphas or p
+                diff = diff or (p xor first)
+            }
+            if (alphas ushr 24 != 0 && diff != 0) return OTHER
+            i = end
         }
-        if (!visible) return BLANK
-        return if (uniform && first ushr 24 == 0xFF) UNIFORM_OPAQUE else OTHER
+        if (alphas ushr 24 == 0) return BLANK
+        return if (diff == 0 && first ushr 24 == 0xFF) UNIFORM_OPAQUE else OTHER
     }
+
+    /** The pixels a raw scan ([classifyRaw], [isTransparent]) reads between its early exits. */
+    private const val SCAN_CHUNK = 4096
 
     /**
      * An exact copy of [tw] x [th] pixels of [b] at ([x], [y]), drawn through [canvas] (reused
@@ -711,16 +720,52 @@ internal object TileOps {
         }
     }
 
-    /** v1.9's emptiness scan of a flat bitmap: no pixel with alpha above 0 (row by row, stops at the first). */
+    /**
+     * v1.9's emptiness scan of a flat bitmap: no pixel with alpha above 0, stopping at the first.
+     *
+     * A8: a finished edit tests each of its tiles on main (the transparent-to-null test,
+     * [undoTileOf]), inside the lift's budget (Q5: `LiftPerfTest`). A tile-sized ARGB_8888 bitmap
+     * is read raw in one copy (`copyPixelsToBuffer`, as [cutPieces] does; the alpha is the top
+     * byte of each int there) into a per-thread buffer: `getPixels` converts every pixel to
+     * unpremultiplied colors, and that conversion cost the PRINT lift about 0.6 ms per transparent
+     * tile. Anything bigger (a full layer: `FlatPixels.isEmpty`) is read in bands of whole rows of
+     * about [TRANSPARENT_BAND] pixels, one `getPixels` each.
+     */
     fun isTransparent(b: Bitmap): Boolean {
         val w = b.width
-        val row = IntArray(w)
-        for (y in 0 until b.height) {
-            b.getPixels(row, 0, w, 0, y, w, 1)
-            for (x in 0 until w) if (row[x] ushr 24 != 0) return false
+        val h = b.height
+        if (w <= 0 || h <= 0) return true
+        val n = w * h
+        if (n <= TILE_SIZE * TILE_SIZE && b.config == Bitmap.Config.ARGB_8888 && b.rowBytes == w * 4) {
+            val px = scanBuffer.get()!!
+            b.copyPixelsToBuffer(IntBuffer.wrap(px, 0, n))
+            var i = 0
+            while (i < n) {
+                val end = min(n, i + SCAN_CHUNK)
+                var alphas = 0
+                for (k in i until end) alphas = alphas or px[k]
+                if (alphas ushr 24 != 0) return false
+                i = end
+            }
+            return true
+        }
+        val band = max(1, min(h, TRANSPARENT_BAND / w))
+        val px = IntArray(band * w)
+        var y = 0
+        while (y < h) {
+            val rows = min(band, h - y)
+            b.getPixels(px, 0, w, 0, y, w, rows)
+            for (i in 0 until rows * w) if (px[i] ushr 24 != 0) return false
+            y += rows
         }
         return true
     }
+
+    /** The pixels [isTransparent] reads at once from a bitmap bigger than a tile: a quarter of a tile (64 KiB). */
+    private const val TRANSPARENT_BAND = TILE_SIZE * TILE_SIZE / 4
+
+    /** [isTransparent]'s raw copy of a tile, one per thread (main and the worker). */
+    private val scanBuffer: ThreadLocal<IntArray> = ThreadLocal.withInitial { IntArray(TILE_SIZE * TILE_SIZE) }
 
     // ---------------------------------------------------------------- pins
 

@@ -3711,13 +3711,15 @@ row) starts the unpark before the release selects the row, so the switch usually
 FLAT. `selectLayer` sets the index, and the setter activates. While an asynchronous activation
 holds input, undo and redo wait in order (`UndoManager.beginWaiting`;
 `ActivationAsyncHoldsInputTest`). `LayerSwitchTimingTest` measures a switch to a resident layer on
-the PC, and `LayerSwitchBigTimingTest` a switch to a parked 2048 x 2048 layer.
+the PC, and `LayerSwitchBigTimingTest` a switch to a swapped 4000 x 5000 layer (512 x 512 on CI).
 
 **Undo on tiles (section 2.6, `engine/Undo.kt`).** `PixelEditAction` holds ONE map of undo tiles
 by tile index (null = transparent), each held once by the step. It swaps them with the layer's
 pixels on each undo and redo, so a step costs 1x its touched tiles, as in v1.9. Its `byteSize` is
 fixed at construction (I28; `UndoOneMapBytesTest`). The transparent-to-null test runs in
-`finish()` on main.
+`finish()` on main, inside the brush lift. `TileOps.isTransparent` reads a tile raw, in one
+`copyPixelsToBuffer`, because `getPixels` converts every pixel. With `getPixels` the test cost
+about 0.6 ms per transparent tile, and the PRINT lift of `LiftPerfTest` (Q5) went over its budget.
 - On a FLAT layer each entry is copied in, and the pixels that were there become its tile.
 - On a PARKED layer `TiledPixels.replaceTiles` swaps the map's tiles into the store in place and
   returns the replaced references to the map. Nothing is copied or materialized. The store stays
