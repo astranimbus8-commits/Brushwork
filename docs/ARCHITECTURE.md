@@ -3036,9 +3036,10 @@ state stays private.
   kind kept; a reopened gradient fill is kept until a fill color is picked (one
   `GRADIENT_REPLACED` note per opening). A new path's main color and options come back by the
   same one-frame watch, on `pointCount > 0` going false; known gap: a caller that commits the
-  new path and opens another in the same call (`openPath`, later A6's `openObject`) skips that
-  frame, so `open()` takes the new path's color, and the fill and paint mode the sheet showed,
-  as the user's (untested; lead request: an end-of-path hook in `CurveTool`).
+  new path and opens another in the same call (`openPath`; A6's `openObject`, reached from the
+  bars' Edit, which commits the current tool's path first) skips that frame, so `open()` takes
+  the new path's color, and the fill and paint mode the sheet showed, as the user's (untested;
+  the end-of-path hook in `CurveTool` is deferred to Gate 2).
 - `tools/text/TextColorsDelegate.kt` (Text; targets Text and Outline, no paint mode): previews
   are `updateSpec` changes of the open text (`color`, `strokeColor`); the drawing color is never
   touched. An outline color at width 0 brings `defaultOutlineWidth(sizePx)` = max(1, 6 % of the
