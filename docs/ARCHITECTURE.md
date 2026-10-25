@@ -3112,7 +3112,82 @@ and 360 dp, font scale 1.3 and 2.0, every tap a finger's); kits `A2ToolRig`, `A2
 
 <!-- v110-A4 -->
 
-(A4 writes this section.)
+R6 ("changing the color of a shape, curve, path, polyline or text by using the change drawing
+color filter, changes the color of both the fill, stroke and outline and doesn't rasterize the
+image") and the CDC consumer of R7 (the canvas previews a color while it is being picked).
+
+- **Files.** `filters/adjust/ColorFilters.kt` (`ChangeDrawingColorFilter`: `apply` calls
+  `ColorUtils.recolor` per pixel and `colorMapper` returns the same function, so pixels and
+  objects get the same colors bit for bit), `filters/ObjectColorTargets.kt` (new: the selection
+  rule and the mapped data), `filters/FilterSession.kt` (object mode: preview and apply),
+  `ui/filters/FilterUi.kt` (the rasterize banner and subtitle, the object-mode note),
+  `ui/filters/FilterParamControls.kt` (`ColorControl`'s live preview). Region `EditorController`
+  `v110-A4 startFilter` (keeps the selected object ids and hands them to the session; it puts
+  them back after the tool lets them go only for a filter with a `colorMapper`, so the other
+  filters start as in v1.9). Tests:
+  `v110/a4/`, `qa110/Qa110CdcObjects*`.
+- **Object mode** (`FilterSession.objectMode`, fixed at the start). On when the session filters
+  the layer's content (not a mask), the filter has a `colorMapper` (in 1.10 only CDC) and the
+  layer has objects (`ObjectColorTargets.hasObjects`: vector content, texts or a legacy shape).
+  A raster layer, with or without an array, keeps the v1.9 pixel path, and so does CDC on a mask.
+  An empty vector or text layer says so as an empty raster layer does (`isEmpty`).
+- **Which objects** (`ObjectColorTargets.of`, read when the source is built and again whenever
+  the selection, the layer's data or its `pixelGeneration` changes, C16). (1) `Rule.OBJECTS`:
+  selected objects of the layer, alone. (2) `Rule.SELECTION`: with a pixel selection, every
+  object whose drawn coverage meets the mask, recolored whole: vector objects through
+  `VectorOps.touching` over `ArrayDraw.effectiveVector` (a copy counts for its source id, the
+  low 53 bits of a copy id), a text by its rendered ink, a legacy shape by its path and each live
+  copy's (`ObjectCopies.expanded`, I17; the preview draws it through `shapeContent`). Bounds never
+  decide: a diagonal curve whose box meets the selection but whose ink does not is unchanged.
+  (3) `Rule.ALL`. `map(data, f)` maps the targets through `ObjectColorSlots` (`map`, `mapText`,
+  `mapShape`; I35) and returns `data` itself when nothing changes. An array is kept as it is: its
+  copies are drawn from the mapped source and keep their tint stops (D1).
+- **Preview (C12).** `ObjectColorTargets.exactByPixels`: when every object is a target (`Rule.ALL`,
+  or every object selected or touched by the pixel selection: the selection then masks nothing,
+  the objects change whole), no text and no array tint, the CDC mapping of the layer's pixels
+  equals the re-render of the mapped data (CDC is affine per channel; within 2 per premultiplied
+  channel, `CdcObjectModeNoRasterizeTest`), so the v1.9 pixel preview is kept (`holdsPixelCopy`).
+  Otherwise (some objects selected or touched, a tint, any text: Skia antialiases a glyph's edge
+  by its paint's luminance) `renderObjectsOnce`
+  re-renders the mapped data into the preview bitmap, a live array through `ArrayDraw`, and the
+  session holds no copy of the layer's pixels (no untiled whole-image CDC buffer). A selection
+  made or dropped during the session moves it between the two.
+- **Apply** (`applyObjects`, called first in `apply` in region `v19-A7b apply`). The data mapped
+  once more from a fresh source; vector content through `VectorLayers.update` (sync or async,
+  one step named after the filter, the cache re-rendered from the new data), a text or shape
+  layer through `DataRender.apply`. Nothing is rasterized: the layer keeps its kind, data and
+  array, and its pixels are a fresh render of the new data (I1). A result equal to the layer
+  says "<filter> didn't change anything here" and records nothing, as the pixel path does.
+  The preview stays shown while an async render runs. That render can't be stopped (the panel
+  offers no Stop; `cancelApply` does nothing in object mode), so it never lands after the panel
+  has gone: `undoStep` and `cancel` land it first (`landObjectApply`, `VectorLayers.flushPending`),
+  which closes the session; the controller's Undo then takes the step back (v1.5's rule for an
+  edit still rendering) and Cancel leaves it applied. Dropped at the wait limit (v1.9 A7b), no
+  step lands: that Undo is spent with the panel left open, a Cancel closes it.
+  `CdcObjectApplyAsyncTest`, `CdcSaveReopenTest`.
+- **Rasterize warning** (`rasterizeWarning`). The Filters sheet's banner covers every layer with
+  editable data, by kind (text, shape, vector, then a raster layer with a live array), and on a
+  layer with objects adds that Change Drawing Color keeps it editable (the filters with a
+  `colorMapper`, named). The panel's " · applying rasterizes it" covers every data layer except
+  in object mode, which shows `CdcLabels110.OBJECTS` at the top of the settings, plus
+  `CdcLabels110.SELECTION_WHOLE` under `Rule.SELECTION`. The banner texts other than v1.9's
+  vector one are `FilterLabels110`'s (`RASTERIZES_TEXT`, `RASTERIZES_SHAPE`, `RASTERIZES_ARRAY`,
+  `KEEPS_EDITABLE`), added to `LabelsV110.kt` by the lead at the merge (the area's request).
+- **Live color (R7).** `ColorControl` passes `onPreview = { host.update(key, it) }`: each frame's
+  color updates the session's values (no step; a pending change of another control is recorded
+  first, as any update does) and the canvas re-previews; Cancel's `onPreview(start)` restores
+  the opening color the same way; OK updates and calls `onChangeFinished`, one panel step. The
+  same control in an adjustment layer's Adjust sheet previews through `AdjustmentEdit.preview`.
+- **Budget.** `CdcObjectPreviewTimingTest` (Timing), on a 1280 x 1280 layer (the preview's
+  size) of 200 paths and shapes spread over it: a whole-layer frame with 8 copies each (1,800
+  drawn) is PC 5.5 ms / device 33 ms; a re-rendered frame of 199 selected objects is PC 42 ms /
+  device 250 ms (C12). Frames are `PerfTrace.FILTER_PREVIEW` medians of 15 after 3 warm-ups,
+  waited for with a busy loop (`idleUntil`'s 5 ms sleeps would count). A re-rendered frame costs
+  a render of the whole layer, the renderer's cost: brush strokes are far dearer than paths
+  (review probe at 1280 px: 200 strokes 272 ms on the PC against 20 ms for 200 paths and
+  shapes), so on a stroke-heavy layer a partial recolor previews in about a second and a half on
+  the phone; the whole layer stays on the pixel preview. The apply re-renders too (500 strokes:
+  PC 560 to 670 ms against the 250 ms proxy of contracts C12), the case for cut item P4.
 
 <!-- /v110-A4 -->
 

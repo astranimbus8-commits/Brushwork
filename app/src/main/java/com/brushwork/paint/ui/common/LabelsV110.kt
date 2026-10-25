@@ -109,3 +109,11 @@ object EngineLabels110 {    // 2.11, A10
     const val CHECK_TILES = "Free storage is low or slow, so Brushwork keeps all layers in memory. Free some space to allow more layers. To change it, $SETTINGS_PATH."
     const val LMK_NOTICE = "Brushwork was closed by the phone because memory ran out. Layer storage is now Classic to keep your work safe. To change it, $SETTINGS_PATH."
 }
+
+object FilterLabels110 {    // R6 (A4's lead request): the Filters sheet's rasterize banner
+    const val RASTERIZES_TEXT = "Applying rasterizes this text layer"
+    const val RASTERIZES_SHAPE = "Applying rasterizes this shape layer"
+    const val RASTERIZES_ARRAY = "Applying rasterizes this array layer"
+    /** Appended to the banner on a layer with objects; `%s` names the filters with a `colorMapper`. */
+    const val KEEPS_EDITABLE = "%s keeps it editable"
+}

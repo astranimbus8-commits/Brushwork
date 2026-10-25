@@ -95,9 +95,13 @@ import com.brushwork.paint.filters.FilterCategory
 import com.brushwork.paint.filters.FilterRecents
 import com.brushwork.paint.filters.FilterRegistry
 import com.brushwork.paint.filters.FilterSession
+import com.brushwork.paint.filters.ObjectColorTargets
 import com.brushwork.paint.masks.AdjustmentEffects
 import com.brushwork.paint.masks.AdjustmentLayerOps
+import com.brushwork.paint.model.Layer
 import com.brushwork.paint.ui.common.BwSheet
+import com.brushwork.paint.ui.common.CdcLabels110
+import com.brushwork.paint.ui.common.FilterLabels110
 import com.brushwork.paint.ui.common.SectionHeader
 import com.brushwork.paint.ui.common.SheetBackground
 import com.brushwork.paint.ui.theme.BrushworkColors
@@ -177,7 +181,8 @@ fun FilterBrowser(controller: EditorController, onDismiss: () -> Unit) {
 
 /**
  * v1.5: what applying a filter means for the active layer. An adjustment layer has no pixels
- * (its effect is edited in the Masks tool: [Open]); a vector layer is rasterized by applying.
+ * (its effect is edited in the Masks tool: [Open]); a layer with editable data is rasterized by
+ * applying ([rasterizeWarning]; v1.10: text, shape and array layers too, R6).
  */
 @Composable
 private fun LayerKindBanner(controller: EditorController, onDismiss: () -> Unit) {
@@ -186,11 +191,11 @@ private fun LayerKindBanner(controller: EditorController, onDismiss: () -> Unit)
         derivedStateOf {
             controller.layersVersion
             val l = controller.activeLayer
-            Triple(l, l.isAdjustmentLayer, l.isVectorLayer)
+            Triple(l, l.isAdjustmentLayer, if (controller.editTargetOf(l) == EditTarget.CONTENT) rasterizeWarning(l) else null)
         }
     }
-    val (active, adjustment, vector) = kind
-    if (!adjustment && !vector) return
+    val (active, adjustment, warning) = kind
+    if (!adjustment && warning == null) return
     Row(
         Modifier
             .fillMaxWidth()
@@ -204,7 +209,7 @@ private fun LayerKindBanner(controller: EditorController, onDismiss: () -> Unit)
         Icon(if (adjustment) Icons.Filled.Tune else Icons.Filled.Info, contentDescription = null, tint = BrushworkColors.Accent, modifier = Modifier.size(20.dp))
         Spacer(Modifier.width(10.dp))
         Text(
-            if (adjustment) "Adjustment layers have no pixels — edit the effect in Masks" else "Applying rasterizes this vector layer",
+            if (adjustment) "Adjustment layers have no pixels — edit the effect in Masks" else warning.orEmpty(),
             style = MaterialTheme.typography.bodyMedium,
             modifier = Modifier.weight(1f).padding(vertical = 8.dp),
         )
@@ -212,6 +217,27 @@ private fun LayerKindBanner(controller: EditorController, onDismiss: () -> Unit)
             TextButton(onClick = { AdjustmentLayerOps.edit(controller, active); onDismiss() }) { Text("Open") }
         }
     }
+}
+
+/** v1.10 (R6): the filters that recolor a layer's objects instead of its pixels (Change Drawing Color). */
+private val objectRecolorFilters: List<Filter> by lazy { FilterRegistry.all.filter { it.colorMapper(it.defaultValues()) != null } }
+
+/**
+ * v1.10 (R6): what applying a filter does to [layer]'s editable data (by kind: text, shape,
+ * vector, then a live array), or null when it has none. A filter with a [Filter.colorMapper]
+ * recolors a vector, text or shape layer's objects without rasterizing it ([FilterSession.objectMode]),
+ * which the warning names; on a raster layer with an array it filters the pixels like any other.
+ */
+internal fun rasterizeWarning(layer: Layer): String? {
+    val kind = when {
+        layer.isTextLayer -> FilterLabels110.RASTERIZES_TEXT
+        layer.isShapeLayer -> FilterLabels110.RASTERIZES_SHAPE
+        layer.isVectorLayer -> "Applying rasterizes this vector layer"
+        layer.array != null -> FilterLabels110.RASTERIZES_ARRAY
+        else -> return null
+    }
+    if (objectRecolorFilters.isEmpty() || !ObjectColorTargets.hasObjects(layer.dataSnapshot())) return kind
+    return kind + "; " + FilterLabels110.KEEPS_EDITABLE.format(objectRecolorFilters.joinToString(" and ") { it.name })
 }
 
 @Composable
@@ -280,6 +306,7 @@ fun FilterSessionPanel(session: FilterSession, modifier: Modifier = Modifier) {
                     .verticalScroll(rememberScrollState())
                     .padding(horizontal = 16.dp, vertical = 8.dp),
             ) {
+                if (session.objectMode) ObjectModeNote(session)
                 // (Not while a mask is filtered: an adjustment layer changes the picture, not the mask.)
                 if (session.filter.isAdjustmentCapable && session.target == EditTarget.CONTENT) AsAdjustmentLayerRow(session, enabledByPanel = !busy)
                 if (!session.filter.livePreview) PreviewOnDemand(session)
@@ -354,7 +381,8 @@ private fun PanelHeader(session: FilterSession) {
                 append(session.layer.name)
                 if (session.target == EditTarget.MASK) append(" · mask")
                 if (controller.selection != null) append(" · selection")
-                if (session.target == EditTarget.CONTENT && session.layer.isVectorLayer) append(" · applying rasterizes it")
+                // v1.10 (R6): every layer with editable data; object mode keeps it (its note below).
+                if (session.target == EditTarget.CONTENT && session.layer.hasEditableData && !session.objectMode) append(" · applying rasterizes it")
             }
             Text(where, style = MaterialTheme.typography.labelSmall, color = BrushworkColors.OnChromeDim, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
@@ -368,6 +396,20 @@ private fun PanelHeader(session: FilterSession) {
             enabled = !busy,
             colors = IconButtonDefaults.filledIconButtonColors(containerColor = BrushworkColors.Accent, contentColor = Color(0xFF002B55)),
         ) { Icon(Icons.Filled.Check, contentDescription = "Apply filter") }
+    }
+}
+
+/**
+ * v1.10 (R6): the subtitle of a filter in object mode: the objects keep their data; with a pixel
+ * selection ([ObjectColorTargets.Rule.SELECTION]) the objects it touches change whole. Wraps (at a
+ * large font scale it takes lines, which scroll with the settings instead of crowding the header).
+ */
+@Composable
+private fun ObjectModeNote(session: FilterSession) {
+    val style = MaterialTheme.typography.bodySmall
+    Text(CdcLabels110.OBJECTS, style = style, color = BrushworkColors.OnChromeDim, modifier = Modifier.padding(vertical = 4.dp))
+    if (session.objectRule == ObjectColorTargets.Rule.SELECTION) {
+        Text(CdcLabels110.SELECTION_WHOLE, style = style, color = BrushworkColors.OnChromeDim, modifier = Modifier.padding(bottom = 4.dp))
     }
 }
 
@@ -430,7 +472,8 @@ private fun ApplyProgress(session: FilterSession) {
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp), color = BrushworkColors.Accent)
             }
         }
-        TextButton(onClick = { session.cancelApply() }) { Text("Stop") }
+        // v1.10 (R6): object mode's ✓ is a vector render, which lands as one step: no Stop.
+        if (!session.objectMode) TextButton(onClick = { session.cancelApply() }) { Text("Stop") }
     }
 }
 

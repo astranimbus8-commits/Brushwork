@@ -383,15 +383,21 @@ class ChangeDrawingColorFilter : Filter("adjust.change_drawing_color", "Change D
     )
 
     override fun apply(src: PixelBuffer, values: FilterValues, ctx: FilterContext): PixelBuffer {
-        val amount = (values.float("amount") / 100f).coerceIn(0f, 1f)
+        val amount = amountOf(values)
         if (amount <= 0f) return src.copy()
         val rgb = values.color("color") and 0xFFFFFF
-        return FilterMath.mapPixels(src, ctx) { c ->
-            val a = c ushr 24
-            if (a == 0) c else {
-                val m = rgb or (a shl 24)
-                if (amount >= 1f) m else ColorUtils.lerp(c, m, amount)
-            }
-        }
+        return FilterMath.mapPixels(src, ctx) { c -> ColorUtils.recolor(c, rgb, amount) }
     }
+
+    /**
+     * v1.10 (R6): [apply] per color, so the objects of a vector, text or shape layer are recolored
+     * (`ObjectColorSlots`) instead of rasterized: `FilterSession` object mode.
+     */
+    override fun colorMapper(values: FilterValues): (Int) -> Int {
+        val amount = amountOf(values)
+        val rgb = values.color("color") and 0xFFFFFF
+        return { c -> ColorUtils.recolor(c, rgb, amount) }
+    }
+
+    private fun amountOf(values: FilterValues): Float = (values.float("amount") / 100f).coerceIn(0f, 1f)
 }

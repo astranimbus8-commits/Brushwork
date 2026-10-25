@@ -202,7 +202,8 @@ class Qa3ChromeNarrowUiRobolectricTest {
         assertFalse("the px badge is decoration (I10)", SmokeUi.has("px", exact = true))
         SmokeUi.click("Filters", exact = true)
         SmokeUi.assertPanelShown("Filters")
-        assertTrue("the vector banner", SmokeUi.has("Applying rasterizes this vector layer"))
+        // v1.10 (R6): Change Drawing Color recolors the objects instead, which the banner says.
+        assertTrue("the vector banner", SmokeUi.has("Applying rasterizes this vector layer; Change Drawing Color keeps it editable", exact = true))
         SmokeUi.click("Close", exact = true)
         // Back to raster: no badges.
         SmokeUi.click("Vector", exact = true)

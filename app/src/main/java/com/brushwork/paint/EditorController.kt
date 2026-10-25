@@ -2887,6 +2887,9 @@ class EditorController(
         // v1.7: a folder has no pixels to filter.
         if (activeLayer.isFolder) { toast(FolderLabels.PAINT_REFUSAL); return }
         if (activeLayer.isAdjustmentLayer) { toast(ADJUSTMENT_FILTER_MESSAGE); return }
+        // v1.10 (R6): the selected objects of this layer, kept for a filter that recolors objects
+        // (rule 1 of ObjectColorTargets); deactivating the tool below may let them go.
+        val keptIds = vectors.selectedIds.takeIf { vectors.selectedLayer === activeLayer }.orEmpty()
         filterSession?.cancel()
         // A vector edit still rendering and the object edits waiting for it land first (v1.5),
         // while the tool is still active (an Object bar action may lift its objects again, which
@@ -2897,9 +2900,11 @@ class EditorController(
         // (What the tool's commit rendered in the background lands too.)
         vectors.flushPending()
         if (!checkEditable()) return
+        if (keptIds.isNotEmpty() && vectors.selectedIds.isEmpty() && filter.colorMapper(filter.defaultValues()) != null) vectors.setSelection(activeLayer, keptIds)
+        val ids = vectors.selectedIds.takeIf { vectors.selectedLayer === activeLayer }.orEmpty()
         Breadcrumbs.add("filter:${filter.id}")
         // A session that closes itself during start() (target not usable) must not stay installed.
-        filterSession = FilterSession(this, filter).also { it.start() }.takeUnless { it.isClosed }
+        filterSession = FilterSession(this, filter, ids).also { it.start() }.takeUnless { it.isClosed }
     }
     // endregion
 
