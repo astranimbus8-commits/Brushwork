@@ -10,6 +10,7 @@ import com.brushwork.paint.engine.budget.Budgets
 import com.brushwork.paint.engine.check.AutoCheckRunner
 import com.brushwork.paint.engine.check.CheckNotices
 import com.brushwork.paint.engine.check.CheckStore
+import com.brushwork.paint.engine.tiles.SwapJanitor
 
 /**
  * v1.10 (F1, J32; signature frozen, A10 body): the engine's start, called from
@@ -18,9 +19,11 @@ import com.brushwork.paint.engine.check.CheckStore
  *
  * A10, on the main thread (cheap: one small file): the gallery's budget from the stored check
  * result ([CheckStore]; none stored, nothing changes), its notice if it was raised and never shown
- * ([CheckNotices.atStart]), and `onTrimMemory` stopping the check and deleting its marker. Then, on a background thread and never under Robolectric (one JVM, many
- * apps; the tests call the parts themselves): the launch's look at an interrupted check
- * ([AutoCheckRunner.atLaunch]).
+ * ([CheckNotices.atStart]), and `onTrimMemory` stopping the check and deleting its marker. Then, on
+ * a background thread and never under Robolectric (one JVM, many apps; the tests call [atStart]
+ * themselves): the swap leftovers of earlier processes deleted ([SwapJanitor.purge]: never a live
+ * session's directory, so an editor reopened meanwhile keeps its own) and the launch's look at an
+ * interrupted check ([AutoCheckRunner.atLaunch]).
  */
 object EngineStartup {
     fun onAppCreate(app: Application) {
@@ -36,6 +39,11 @@ object EngineStartup {
 
     /** The background part of the start (its thread). */
     internal fun atStart(app: BrushworkApp) {
+        try {
+            SwapJanitor.purge(SwapJanitor.root(app))
+        } catch (e: Exception) {
+            Log.w(TAG, "swap purge", e)
+        }
         try {
             AutoCheckRunner.of(app).atLaunch()
         } catch (e: Exception) {
