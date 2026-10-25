@@ -4192,11 +4192,12 @@ I/O error, disk full, kill mid-write, janitor purge, slow reads, eviction, the r
 watch and step-down, the pressure net, the stats rings, the low-storage message) and
 `Soak500LayersTest`: random edits at FULL with park chaos and swap, replayed at CLASSIC and
 compared bit for bit at each checkpoint (a small plan in the suite; the 500-layer, 20-minute plan
-under `bw.testSet = soak`, once `-PsoakOnly` includes it: LeadRequest). After the close the tile ledger and the swap are back to where they
-started. Until A7 is merged the soak pins the layers for a canvas rotation and releases the
-parked stores that the gate's code lets go of without releasing their tiles: the `Layer` setters
-under an undo or redo of a whole-document step, and the undo history's removed layers at the
-close. `PRE_A7_DROPS = false` turns each such store into a failure. Timing:
+under `bw.testSet = soak`, once `-PsoakOnly` includes it: LeadRequest). After the close the tile
+ledger and the swap are back to where they started. Until A8 (undo on tiles) and A11 (canvas
+operations on stores, with pins) are merged, the soak pins the layers for a canvas rotation and
+releases the parked stores that the gate's code lets go of without releasing their tiles: the
+`Layer` setters under an undo or redo of a whole-document step, and the undo history's removed
+layers at the close. `PRE_A8_A11_DROPS = false` turns each such store into a failure. Timing:
 `AutoCheckDurationTimingTest`, `EvictReloadTimingTest`, `UnparkSwappedTimingTest`.
 
 <!-- /v110-A10 -->

@@ -70,17 +70,18 @@ import kotlin.random.Random
  * the FULL run sets the length and the replay follows it step for step. The layer budget is not
  * under test, so both runs use one with room for every layer ([Roomy]; v1.9's cap is 100).
  *
- * Until A7 is merged (it is not in gate-v110-1), the gate's code lets go of a PARKED layer's tiled
- * store without releasing its tiles in three places; the tiles then stay in the ledger and the
- * swap. (1) A canvas operation takes no pins (A7b step 4, "pins at every async job"): the chaos
- * parks a layer again between the operation's snapshot and its commit, which still matches (a
- * park changes no generation) and puts its bitmap over the parked store. The soak pins the pixel
- * layers itself from the rotation to its landing ([held]). (2) The `Layer.bitmap` and `mask`
- * setters replace a parked store without releasing it: an undo or redo of a whole-document step
- * (`DocumentBitmapsAction`) over a layer parked since. (3) The undo history lets go of a removed
- * layer's parked store when the editor closes. The soak finds the stores of (2) and (3) ([Drops]),
- * releases them and counts them, so the ledger check holds for everything else. With
- * [PRE_A7_DROPS] false each such store fails the run (LeadRequest to the lead, for when A7 is in).
+ * Until A8 (undo on tiles, step 4) and A11 (canvas operations on stores, with pins, step 4) are
+ * merged (neither is in gate-v110-1), the gate's code lets go of a PARKED layer's tiled store
+ * without releasing its tiles in three places; the tiles then stay in the ledger and the swap.
+ * (1) A canvas operation takes no pins: the chaos parks a layer again between the operation's
+ * snapshot and its commit, which still matches (a park changes no generation) and puts its bitmap
+ * over the parked store. The soak pins the pixel layers itself from the rotation to its landing
+ * ([held]). (2) The `Layer.bitmap` and `mask` setters replace a parked store without releasing it:
+ * an undo or redo of a whole-document step (`DocumentBitmapsAction`) over a layer parked since.
+ * (3) The undo history lets go of a removed layer's parked store when the editor closes. The soak
+ * finds the stores of (2) and (3) ([Drops]), releases them and counts them, so the ledger check
+ * holds for everything else. With [PRE_A8_A11_DROPS] false each such store fails the run
+ * (LeadRequest: for when A8 and A11 are in).
  */
 @RunWith(RobolectricTestRunner::class)
 class Soak500LayersTest {
@@ -111,7 +112,7 @@ class Soak500LayersTest {
         println(
             "v110 A10 Soak500LayersTest ($plan): ${full.steps} steps, ${full.checkpoints.size} checkpoints, " +
                 "up to ${full.mostLayers} layers, ${full.parked} parked layers seen at checkpoints, ${full.swapped} tiles swapped out, " +
-                "${full.drops} pre-A7 dropped stores released",
+                "${full.drops} stores the gate dropped, released",
         )
     }
 
@@ -254,7 +255,7 @@ class Soak500LayersTest {
         /** Releases [old] when it is a tiled store that still has tiles; returns [now]. */
         private fun dropped(old: PixelStore?, now: PixelStore?): PixelStore? {
             if (old is TiledPixels && old.occupied() > 0) {
-                if (!PRE_A7_DROPS) throw AssertionError("a ${old.width}x${old.height} tiled store was let go of with ${old.occupied()} tiles")
+                if (!PRE_A8_A11_DROPS) throw AssertionError("a ${old.width}x${old.height} tiled store was let go of with ${old.occupied()} tiles")
                 TileOps.releaseStore(old)
                 released++
             }
@@ -460,8 +461,8 @@ class Soak500LayersTest {
     }
 
     private companion object {
-        /** True until A7 is merged: the soak releases the stores the gate's code lets go of (the class KDoc). */
-        const val PRE_A7_DROPS = true
+        /** True until A8 and A11 are merged: the soak releases the stores the gate's code lets go of (the class KDoc). */
+        const val PRE_A8_A11_DROPS = true
 
         const val ROOM = 10_000
 
