@@ -219,6 +219,17 @@ class LayerBudgetV110(private val budget: MemoryBudget, private val level: Engin
     /** The vector render caches and array patches: R/16 (v1.9: J/8). */
     override fun renderCacheCap(): Long = if (!known) LayerBudgetV19.renderCacheCap() else r / RENDER_CACHE_DIVISOR
 
+    /**
+     * The new-canvas dialog's line under the size fields and a refused import's text (section
+     * 2.13): [largestCanvas] at [width]:[height]'s aspect ratio (square while a side is still
+     * empty), or null while memory is unknown, where v1.9's rules apply and it showed no such line.
+     */
+    fun largestNewCanvas(width: Int, height: Int): Pair<Int, Int>? = when {
+        !known -> null
+        width < 1 || height < 1 -> largestCanvas(1, 1)
+        else -> largestCanvas(width, height)
+    }
+
     /** The swap store's free bytes (0 without one). */
     private fun freeSwap(): Long = EngineConfig.swapStore.let { (it.capacityBytes - it.usedBytes).coerceAtLeast(0L) }
 

@@ -69,6 +69,7 @@ import com.brushwork.paint.BrushworkApp
 import com.brushwork.paint.core.LengthUnit
 import com.brushwork.paint.core.Units
 import com.brushwork.paint.engine.LayerBudget
+import com.brushwork.paint.engine.budget.LayerBudgetV110
 import com.brushwork.paint.storage.NewCanvasSpec
 import com.brushwork.paint.ui.color.ColorPickerDialog
 import com.brushwork.paint.ui.common.CanvasLabels19
@@ -212,6 +213,15 @@ private fun NewCanvasContent(creating: Boolean, onDismiss: () -> Unit, onCreate:
                     onUnit = { unit = it },
                     onDpi = { changeDpi(it) },
                     onSwap = { size = size.swapped() },
+                )
+            }
+            // v1.10 (A7, design 2.13): the largest canvas at this shape, under the size fields.
+            largestLine(budget, w, h)?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = BrushworkColors.OnChromeDim,
+                    modifier = Modifier.padding(top = 8.dp).testTag(LARGEST_TAG),
                 )
             }
 
@@ -429,14 +439,31 @@ private fun SummaryCard(w: Int, h: Int, dpi: Double, unit: LengthUnit, check: Ca
         }
         Spacer(Modifier.height(8.dp))
         InfoRow("Memory per layer", CanvasPresets.formatBytes(CanvasPresets.layerBytes(w, h)))
-        // v1.10 (F1): no fixed count where the budget has none (never in F1).
-        InfoRow("Layers on this device", if (check.ok) budget.capacity(w, h)?.let { "up to $it" } ?: LayersLabels110.NO_FIXED_LIMIT else "—")
+        InfoRow("Layers on this device", layersOnDevice(budget, check, w, h))
         val message = check.message
         if (message != null) {
             Text(message, color = BrushworkColors.Danger, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 8.dp))
         }
     }
 }
+
+/**
+ * The "Layers on this device" value: "up to N" with [budget]'s count for a [w] x [h] layer, "—"
+ * when [check] refuses the size. v1.10 (A7, design 2.13): [LayersLabels110.NO_FIXED_LIMIT] where
+ * the budget has no count (FULL).
+ */
+internal fun layersOnDevice(budget: LayerBudget, check: CanvasCheck, w: Int, h: Int): String =
+    if (check.ok) budget.capacity(w, h)?.let { "up to $it" } ?: LayersLabels110.NO_FIXED_LIMIT else "—"
+
+/** v1.10 (A7): the tag of the line under the size fields ([largestLine]). */
+internal const val LARGEST_TAG = "newCanvasLargest"
+
+/**
+ * v1.10 (A7, design 2.13): the line under the size fields, the largest canvas [budget] takes at the
+ * [w]:[h] shape ("about", as the too-big refusal says it), or null while memory is unknown.
+ */
+internal fun largestLine(budget: LayerBudget, w: Int, h: Int): String? =
+    (budget as? LayerBudgetV110)?.largestNewCanvas(w, h)?.let { (lw, lh) -> "Largest on this phone: about $lw × $lh px" }
 
 @Composable
 private fun InfoRow(label: String, value: String) {

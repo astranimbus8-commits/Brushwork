@@ -75,7 +75,8 @@ internal object GalleryImports {
     /**
      * Decides the artwork for an SVG [file] (its Brushwork canvas, else its physical size);
      * throws [ImportException] when the file can't make one. v1.10 (F1): sized within the
-     * gallery's layer budget (`LayerBudget.current`), as the PDF imports below.
+     * gallery's layer budget (`LayerBudget.current`), as the PDF imports below. v1.10 (A7): a Brushwork
+     * canvas too big for this phone is refused with [NewArtwork.payloadRefusal] (its largest size).
      */
     suspend fun svgSpec(file: ImportFile): NewArtworkSpec = withContext(Dispatchers.Default) {
         val svg = SvgParser.parse(file.bytes!!)
@@ -90,7 +91,7 @@ internal object GalleryImports {
             null
         }
         if (p != null) {
-            NewArtwork.forPayload(file.name, p) ?: throw ImportException("This artwork is too large for this device")
+            NewArtwork.forPayload(file.name, p) ?: throw ImportException(NewArtwork.payloadRefusal(p))
         } else {
             NewArtwork.forSvg(file.name, svg)
         }
@@ -103,7 +104,7 @@ internal object GalleryImports {
         } catch (e: Exception) {
             null
         } ?: return@withContext null
-        NewArtwork.forPayload(file.name, p) ?: throw ImportException("This artwork is too large for this device")
+        NewArtwork.forPayload(file.name, p) ?: throw ImportException(NewArtwork.payloadRefusal(p))
     }
 }
 

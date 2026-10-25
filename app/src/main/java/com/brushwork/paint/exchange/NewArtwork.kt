@@ -1,6 +1,7 @@
 package com.brushwork.paint.exchange
 
 import com.brushwork.paint.engine.LayerBudget
+import com.brushwork.paint.engine.budget.LayerBudgetV110
 import com.brushwork.paint.exchange.export.BrushworkPayload
 import com.brushwork.paint.exchange.pdf.PdfImport
 import com.brushwork.paint.exchange.svg.SvgDocument
@@ -8,6 +9,7 @@ import com.brushwork.paint.exchange.svg.SvgToVector
 import com.brushwork.paint.exchange.svg.SvgUnits
 import com.brushwork.paint.storage.CanvasLimits
 import com.brushwork.paint.storage.NewCanvasSpec
+import com.brushwork.paint.ui.common.LayersLabels110
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -23,8 +25,12 @@ data class NewArtworkSpec(val name: String, val width: Int, val height: Int, val
  * page at 300 dpi (clamped the same way); a Brushwork file at exactly its own size and DPI.
  *
  * v1.10 (F1, design 3.3): the forms without a heap read the gallery's layer budget
- * ([LayerBudget.current]: its `importMaxSide` and `rawMaxLayers`; v1.9's numbers at CLASSIC); the
- * gallery's imports call them. The forms that take a heap keep v1.9's numbers for their tests.
+ * ([LayerBudget.current]: its `importMaxSide` and `rawMaxLayers`); the gallery's imports call them.
+ * The forms that take a heap keep v1.9's numbers for their tests. v1.10 (A7, design 2.4 and 2.13):
+ * with the phone's memory known that budget is R's, so an import keeps up to
+ * [CanvasLimits.IMPORT_MAX_SIDE] while the canvas holds 5 layers at CLASSIC and TILES (at FULL, while it
+ * fits), and a Brushwork file too big for it is refused with [payloadRefusal]; with memory unknown
+ * every number is v1.9's.
  */
 object NewArtwork {
     const val SVG_DPI = 350f
@@ -48,6 +54,19 @@ object NewArtwork {
 
     /** v1.10 (F1): [forPayload] with [LayerBudget.current]'s layer count. */
     fun forPayload(name: String, p: BrushworkPayload): NewArtworkSpec? = payloadSpec(name, p, LayerBudget.current::rawMaxLayers)
+
+    /**
+     * v1.10 (A7, design 2.13): why [forPayload] gave null for [p]. With the phone's memory known,
+     * "This canvas is too big for this phone's memory. The largest is about W × H." (the largest
+     * canvas at [p]'s aspect ratio); with memory unknown, v1.9's [TOO_LARGE].
+     */
+    fun payloadRefusal(p: BrushworkPayload): String =
+        (LayerBudget.current as? LayerBudgetV110)?.largestNewCanvas(p.width, p.height)
+            ?.let { (w, h) -> LayersLabels110.canvasTooBig(w, h) }
+            ?: TOO_LARGE
+
+    /** v1.9's refusal of a Brushwork file too big for the device ([payloadRefusal] with memory unknown). */
+    const val TOO_LARGE = "This artwork is too large for this device"
 
     /** [w] x [h] with the long side scaled into [MIN_LONG_SIDE] .. the memory limit (aspect kept). */
     fun clampLongSide(w: Float, h: Float, maxHeap: Long): Pair<Int, Int> =

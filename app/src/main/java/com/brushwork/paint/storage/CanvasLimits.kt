@@ -10,6 +10,11 @@ import kotlin.math.sqrt
  * Canvas size and memory rules shared by the new canvas dialog and picture import. Uses the same
  * layer budget as `EditorController.maxLayers` (55% of the heap, minus 3 layer-sized buffers
  * for undo and compositing). Pure Kotlin, so it is unit-tested on the JVM.
+ *
+ * v1.10 (A7, design 2.4 and 2.15): these are v1.9's heap rules. The gallery and the editor ask
+ * `LayerBudget.current`, which keeps them while the phone's memory is unknown (`LayerBudgetV19`,
+ * I32) and otherwise counts on R (`LayerBudgetV110`: the J12 ceiling, about 6000 x 6000 on the
+ * T606, and its layer counts). [MAX_SIDE] and the import constants hold at every level.
  */
 object CanvasLimits {
     /** Longest allowed canvas side in pixels. */

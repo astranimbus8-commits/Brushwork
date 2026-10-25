@@ -161,7 +161,8 @@ class CloneSource(private val controller: EditorController) : CoverageSource, Co
 
     /**
      * The All-layers snapshot may not be larger than this (falls back to This layer). v1.10 (F1,
-     * design 3.3): the session budget's cap (v1.9's max(48 MiB, heap / 4) until A7).
+     * design 3.3): the session budget's cap; v1.10 (A7, design 2.4): `max(48 MiB, R/8)` with the
+     * phone's memory known, v1.9's `max(48 MiB, heap / 4)` while it is unknown.
      */
     internal var snapshotBudgetBytes: Long = EngineConfig.budget.cloneSnapshotCap()
 
@@ -258,7 +259,9 @@ class CloneSource(private val controller: EditorController) : CoverageSource, Co
         }
         needed.fill(false)
         neededAny = false
-        if (bmp == null) bmp = (if (maskTarget) layer.mask else null) ?: layer.bitmap
+        // v1.10 (A7, I28): This layer is the stroke's own layer, which checkEditable made writable
+        // (resident) before the stroke: sampled in place, not copied through PixelReads.region.
+        if (bmp == null) bmp = (if (maskTarget) layer.mask else null) ?: layer.bitmap // I28: one layer
         backing = bmp
         direct = shaderOf(bmp, dx, dy)
         current = direct
