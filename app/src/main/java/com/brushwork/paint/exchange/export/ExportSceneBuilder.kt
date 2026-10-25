@@ -515,6 +515,11 @@ class ExportSceneBuilder(
      * v1.9 (F2): the source is every text of the layer ([items], picture order, bottom first;
      * an empty text of several is left out), so each copy holds all of them; null when any of
      * them is unknown or has letters without outlines.
+     *
+     * v1.10 (R4): an array that hides its source ([ArrayDraw.hidesSource]) leaves the source's
+     * own items out, as its cache does: only the copies (none with one instance or an unusable
+     * source rectangle). v1.10 (R5): a Recolored look's copies get their recolored colors
+     * ([ArrayDraw.tinted] follows the look's mode).
      */
     private fun textCopies(layer: Layer, items: List<TextItem>, array: LayerArray): List<SceneItem>? {
         val own = ArrayList<SceneItem>()
@@ -529,11 +534,12 @@ class ExportSceneBuilder(
         val source = ArrayDraw.sourceBounds(layer.dataSnapshot()) ?: return null
         // As the cache: the source alone while editing it or without a usable source rectangle.
         val usable = source.left.isFinite() && source.top.isFinite() && source.right.isFinite() && source.bottom.isFinite() && !source.isEmpty
-        if (array.spec.editingSource || !usable) return own
-        val instances = ArrayInstances.of(array.spec, source)
+        val hide = ArrayDraw.hidesSource(array.spec)
+        if (array.spec.editingSource || !usable) return if (hide) emptyList() else own
+        val instances = ArrayInstances.of(array.spec, source) // hideSource: copy 0 skipped below
         val out = ArrayList<SceneItem>(instances.size * own.size)
         for (inst in instances) {
-            if (inst.k == 0) { out += own; continue }
+            if (inst.k == 0) { if (!hide) out += own; continue }
             val v = inst.matrix
             if (v.any { !it.isFinite() }) continue
             val look = inst.look
@@ -786,11 +792,17 @@ class ExportSceneBuilder(
      * v1.8 (area B): placed by the [ArrayInstances] matrices, each copy's objects restyled by its
      * look ([ArrayDraw.restyled]), as [ArrayDraw.effectiveVector] shows them; a copy with opacity
      * 0 is left out. Without a look the objects are v1.7's.
+     *
+     * v1.10 (R4): an array that hides its source ([ArrayDraw.hidesSource]) leaves the source
+     * objects (copy 0) out, as [ArrayDraw.effectiveVector] does. v1.10 (R5): a Recolored look's
+     * copies carry their recolored slot colors ([ArrayDraw.restyled] follows the look's mode).
      */
     private fun arrayObjects(content: VectorContent, spec: ArraySpec): List<VObject> {
-        val instances = ArrayInstances.of(spec, ObjectIndex.of(content).unionBounds())
+        val instances = ArrayInstances.of(spec, ObjectIndex.of(content).unionBounds()) // hideSource: copy 0 skipped below
+        val hide = ArrayDraw.hidesSource(spec)
         val out = ArrayList<VObject>(instances.size * content.objects.size)
         for (inst in instances) {
+            if (inst.k == 0 && hide) continue
             val look = inst.look
             if (look != null && look.opacity <= 0f) continue
             for (o in content.objects) {

@@ -20,6 +20,7 @@ import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.remove.ContentAwareFillJob
 import com.brushwork.paint.ui.color.RobolectricUi
 import com.brushwork.paint.ui.common.ArrayLabels
+import com.brushwork.paint.ui.common.ArrayLabels110
 import com.brushwork.paint.ui.common.LayerLabels19
 import com.brushwork.paint.ui.common.MenuLabels18
 import com.brushwork.paint.ui.common.MirrorLabels18
@@ -69,6 +70,9 @@ import org.robolectric.shadows.ShadowLog
  * v1.10 (A6, R10, R11): the one selected path also shows [ObjectBarLabels110.EDIT] after Transform
  * (row 1: eight buttons at 392 dp) and [ObjectBarLabels110.TO_SHAPE] after Detach on the More row;
  * both keep their names, and their bubbles say them, like the v1.7 buttons.
+ *
+ * v1.10 (A3, R4, UQ4): [ArrayLabels110.BEHIND] follows "Array" in the selection bar and on the
+ * object bar's More row, with [ArrayLabels110.BEHIND_DESC] as its name.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = "w392dp-h873dp-xxhdpi", instrumentedPackages = ["com.brushwork.paint.qa18.chromelabelssandbox"])
@@ -85,7 +89,9 @@ class ChromeLabelsTest {
         "Copy selection" to "Copy", "Cut selection" to "Cut", "Paste as a new layer" to "Paste",
         "Clear the selection" to "Deselect", "Delete the selected pixels" to "Clear", ContentAwareFillJob.FILL_LABEL to "Content\naware",
         "Invert the selection" to "Invert", "Selection menu" to "More",
-        ArrayLabels.FROM_SELECTION to ArrayLabels.BUTTON, SavedSelectionLabels.SAVE to SavedSelectionLabels.SAVE_BUTTON,
+        ArrayLabels.FROM_SELECTION to ArrayLabels.BUTTON,
+        ArrayLabels110.BEHIND_DESC to ArrayLabels110.BEHIND,
+        SavedSelectionLabels.SAVE to SavedSelectionLabels.SAVE_BUTTON,
         LayerLabels19.DUPLICATE_DESC to LayerLabels19.DUPLICATE,
     )
 
@@ -100,7 +106,9 @@ class ChromeLabelsTest {
     /** Its More row, with a selected path that has mirror copies. */
     private val objectMore = listOf(
         "Bring forward" to "Forward", "Send backward" to "Backward",
-        ArrayLabels.FROM_OBJECTS to ArrayLabels.BUTTON, MirrorLabels18.DETACH to MirrorLabels18.DETACH,
+        ArrayLabels.FROM_OBJECTS to ArrayLabels.BUTTON,
+        ArrayLabels110.BEHIND_DESC to ArrayLabels110.BEHIND,
+        MirrorLabels18.DETACH to MirrorLabels18.DETACH,
         ObjectBarLabels110.TO_SHAPE to ObjectBarLabels110.TO_SHAPE,
     )
 

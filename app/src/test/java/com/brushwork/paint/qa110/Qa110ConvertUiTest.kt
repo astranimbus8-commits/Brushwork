@@ -48,8 +48,9 @@ import org.robolectric.annotation.Config
  * real editor on a 392 dp and a 360 dp phone, at font scale 1, 1.3 and 2.0 (I27).
  *
  * One selected path with a gradient fill and mirror copies: the object bar's More row shows "Turn
- * into shape" after Detach and as wide as it (at 360 dp, where Front and Back join the More row,
- * it starts the row's second line), with no text cut. A tap turns the path into a
+ * into shape" after Detach and as wide as it (at 360 dp, where Front and Back join the More row
+ * and Behind follows Array (A3), Detach starts the row's second line), with no text cut. A tap
+ * turns the path into a
  * shape (the same id, one step "Turn into shape") open in the Shape tool, and the note "Gradient
  * fill became its first color" shows with "Undo" and a dismiss action; a later tool message waits
  * behind it. Its Undo drops the open shape and takes the step back: the path returns, as one Undo
@@ -115,14 +116,17 @@ class Qa110ConvertUiTest {
         assertTrue("on the More row $where: $toShape in $more", more.contains(toShape.center))
         assertEquals("as wide as Detach $where", detach.width, toShape.width, 0.5f)
         if (width == 392) {
-            // Forward, Backward, Array, Detach (2), Turn into shape (2): one line.
+            // Forward, Backward, Array, Behind, Detach (2), Turn into shape (2): one line.
             assertEquals("on Detach's line $where", detach.top, toShape.top, 0.5f)
             assertTrue("right after Detach $where: $detach, $toShape", detach.right <= toShape.left + 0.5f)
         } else {
-            // Front and Back are on the More row too: Turn into shape starts its second line.
-            assertEquals("the next line, under Detach's $where: $detach, $toShape", detach.bottom, toShape.top, 0.5f)
+            // Front and Back are on the More row too, and Behind after Array: Detach starts the second
+            // line, with Turn into shape right after it.
+            assertEquals("on Detach's line, the second $where: $detach, $toShape", detach.top, toShape.top, 0.5f)
+            assertTrue("right after Detach $where: $detach, $toShape", detach.right <= toShape.left + 0.5f)
             val forward = Finger.control(s, ObjectEdits.Arrange.FORWARD.label) ?: throw AssertionError("no Forward $where")
-            assertEquals("at the line's start, under Forward $where", forward.left, toShape.left, 0.5f)
+            assertEquals("Detach at the line's start, under Forward $where", forward.left, detach.left, 0.5f)
+            assertTrue("under Forward's line $where", forward.bottom <= detach.top + 0.5f)
         }
         Qa19Ui.assertNoTextOverflow("with the More row open $where")
 

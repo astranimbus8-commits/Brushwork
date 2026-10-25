@@ -458,15 +458,25 @@ private fun LayerMenu(env: LayerWindowEnv) {
                     // A raster array's source pixels (§3.3 a): paint them with the last painting tool, then finish.
                     if (row.arrayEditingSource) {
                         MenuItem(ArrayLabels.FINISH_SOURCE, Icons.Filled.Check) { act { ArrayOps.finishSource(c, layer) } }
-                    } else if (layer.array?.pixels != null) {
+                    } else if (layer.array?.pixels != null && !com.brushwork.paint.array.ArrayBehind.isCopiesOnly(layer)) {
+                        // v1.10 (R4): not on a copies-only layer, whose source is a copy of the main layer.
                         MenuItem(ArrayLabels.EDIT_SOURCE, EditorIcons.tool(ToolId.BRUSH)) {
                             act { c.selectLayer(layer); if (ArrayOps.editSource(c, layer)) c.selectTool(c.lastPaintTool) }
                         }
                     }
                     MenuItem(ArrayLabels.APPLY, Icons.Filled.Check) { act { ArrayOps.apply(c, layer) } }
-                    MenuItem(ArrayLabels.REMOVE, Icons.Filled.Delete) { act { ArrayOps.remove(c, layer) } }
+                    // v1.10 (R4, UQ11): on a copies-only layer the item names and removes the whole layer.
+                    MenuItem(com.brushwork.paint.array.ArrayBehind.removeLabel(layer), Icons.Filled.Delete) { act { ArrayOps.remove(c, layer) } }
                 } else {
                     MenuItem(ArrayLabels.OPEN, EditorIcons.tool(ToolId.ARRAY)) { act { c.arrayWholeLayer(layer) } }
+                    // v1.10 (R4, UQ4): the copies on a new layer directly below, for a text, shape or vector layer.
+                    if (row.isText || row.isShape || row.isVector) {
+                        MenuItem(
+                            com.brushwork.paint.ui.common.ArrayLabels110.LAYER_MENU,
+                            com.brushwork.paint.ui.common.icons.ArrayBehindIcon.icon,
+                            enabled = env.canAddLayer,
+                        ) { act { com.brushwork.paint.array.ArrayBehind.fromLayerBelow(c, layer) } }
+                    }
                 }
                 // endregion
                 HorizontalDivider(color = BrushworkColors.ChromeBorder)

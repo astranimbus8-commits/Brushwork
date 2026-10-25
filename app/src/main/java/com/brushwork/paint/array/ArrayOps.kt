@@ -29,6 +29,7 @@ import com.brushwork.paint.tools.array.ArrayTool
 import com.brushwork.paint.tools.vector.ShapeCodec
 import com.brushwork.paint.ui.common.ArrayLabels
 import com.brushwork.paint.ui.common.ArrayLabels18
+import com.brushwork.paint.ui.common.EngineLabels110
 import com.brushwork.paint.vector.VObject
 import com.brushwork.paint.vector.VShape
 import com.brushwork.paint.vector.VectorContent
@@ -239,19 +240,26 @@ object ArrayOps {
         }
     }
 
-    /** "Remove array" (one step): the copies go and the source stays, editable as before. */
+    /**
+     * "Remove array" (one step): the copies go and the source stays, editable as before.
+     * v1.10 (R4, UQ11): on a copies-only layer (`ArrayBehind.isCopiesOnly`) there is no source to
+     * keep: the whole layer goes, one step `ArrayLabels110.REMOVE_WITH_LAYER` ([ArrayBehind.removeWithLayer]).
+     */
     fun remove(c: EditorController, layer: Layer): Boolean {
         if (c.doc.indexOf(layer) < 0 || layer.array == null) return false
+        if (ArrayBehind.isCopiesOnly(layer)) return ArrayBehind.removeWithLayer(c, layer)
         return paused(c) { layer.array != null && setArray(c, layer, null, ArrayLabels.REMOVE) }
     }
 
     /**
      * "Edit source pixels" (one step): a raster array shows its source alone at its place, and
      * pixel edits change the source without baking (I14) until [finishSource]. True without a
-     * step when already editing it.
+     * step when already editing it. v1.10 (R4): not on a copies-only layer (`ArrayBehind.isCopiesOnly`):
+     * its source is a copy of the main layer's pixels, which stay the ones to paint.
      */
     fun editSource(c: EditorController, layer: Layer): Boolean {
         val a = layer.array ?: return false
+        if (ArrayBehind.isCopiesOnly(layer)) return false
         if (a.pixels == null) { c.toast(NOT_PIXELS); return false }
         if (a.spec.editingSource) return true
         if (c.doc.indexOf(layer) < 0) return false
@@ -277,7 +285,8 @@ object ArrayOps {
             // Read again after the pause: the work it committed may have finished it already.
             val cur = layer.array ?: return@paused false
             if (!cur.spec.editingSource) return@paused true
-            val px = try { ArraySources.layerPixels(layer.bitmap) } catch (e: OutOfMemoryError) { c.toast(MEMORY_REFUSAL); return@paused false }
+            // v1.10 (A3 step 6, C-TILE): read from the store (the row may be parked); the step's write admits it.
+            val px = try { ArraySources.layerPixelsOf(layer) } catch (e: OutOfMemoryError) { c.toast(MEMORY_REFUSAL); return@paused false }
             if (px == null) { c.toast(EMPTY_SOURCE); return@paused false }
             if (!ArraySources.hasRoom(c, 0, px.bytes, freedBytes = cur.pixels?.bytes ?: 0L)) {
                 px.bitmap.recycle()
@@ -304,6 +313,8 @@ object ArrayOps {
     private fun pixelArray(c: EditorController, src: Layer): Boolean {
         if (!c.checkUsable(src)) return false
         if (src.alphaLocked) { c.toast(alphaLocked(src.name)); return false }
+        // v1.10 (A3 step 6, design 2.13): the cut writes the source (the active layer, so FLAT: always admitted).
+        if (!src.admitWrite()) { c.toast(EngineLabels110.PAINT_REFUSED); return false }
         if (!ArraySources.hasRoom(c, 1, 0L)) { c.toast(MEMORY_REFUSAL); return false }
         val layer = paused(c) {
             val sel = c.selection ?: return@paused null
@@ -318,7 +329,7 @@ object ArrayOps {
         var px: ArrayPixels? = null
         var bmp: Bitmap? = null
         try {
-            px = ArraySources.selectedPixels(src.bitmap, sel)
+            px = ArraySources.selectedPixelsOf(src, sel)
             if (px == null) { c.toast(EMPTY_SELECTION); return null }
             if (!ArraySources.hasRoom(c, 1, px.bytes)) { c.toast(MEMORY_REFUSAL); return null }
             if (doc.colorMode != ColorMode.RGB) ColorModeOps.constrain(px.bitmap, Rect(0, 0, px.bitmap.width, px.bitmap.height), doc.colorMode)
@@ -335,11 +346,11 @@ object ArrayOps {
             val placed = c.editScope {
                 val rec = c.beginEdit(src, EditTarget.CONTENT)
                 rec.touch(sel.bounds)
-                Canvas(src.bitmap).apply {
+                Canvas(src.bitmap).apply { // I28: one layer
                     clipRect(sel.bounds)
                     drawBitmap(sel.mask, 0f, 0f, Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT) })
                 }
-                if (doc.colorMode != ColorMode.RGB) ColorModeOps.constrain(src.bitmap, sel.bounds, doc.colorMode)
+                if (doc.colorMode != ColorMode.RGB) ColorModeOps.constrain(src.bitmap, sel.bounds, doc.colorMode) // I28: one layer
                 // v1.7 (rule S): directly above the source at its level (without folders: the
                 // v1.6 AddLayerAction), recorded in the same step as the pixel edit.
                 val add = c.structure.placed(layer, c.structure.above(src), ArrayLabels.BUTTON)
@@ -527,14 +538,16 @@ object ArrayOps {
     /**
      * A vector array's copies as real objects: the expanded content with new ids for the copies
      * (v1.8: already restyled by their look, `ArrayDraw.restyled`, so they look as drawn).
+     * v1.10 (R4): an array that hides its source bakes the copies alone (`effectiveVector` leaves
+     * the source objects out).
      */
     private fun applyVector(c: EditorController, layer: Layer, before: LayerData, a: LayerArray): Boolean {
         val v = before.vector ?: return false
         if (!c.checkUsable(layer)) return false
-        val n = if (v.objects.isEmpty()) 1 else ArrayInstances.of(a.spec, ObjectIndex.of(v).unionBounds()).size
-        if (n.toLong() * v.objects.size > ArraySpec.MAX_INSTANCES) { c.toast(ArrayLabels.TOO_MANY); return false }
+        val n = if (v.objects.isEmpty()) 1 else ArrayInstances.of(a.spec, ObjectIndex.of(v).unionBounds()).size // hideSource: a count for the limit only
+        if (n.toLong() * v.objects.size > ArraySpec.MAX_INSTANCES) { c.toast(ArrayLabels.TOO_MANY); return false } // hideSource: the limit, as v1.9
         val eff = ArrayDraw.effectiveVector(before) ?: v
-        val sourceIds = v.objects.mapTo(HashSet()) { it.id }
+        val sourceIds = v.objects.mapTo(HashSet()) { it.id } // hideSource: ids only; eff holds no source when hidden
         var next = v.nextId
         val objects = eff.objects.map { o -> if (o.id in sourceIds) o else o.withId(next++) }
         c.vectors.updateArray(layer, null, ArrayLabels.APPLY, after = v.copy(objects = objects, nextId = next))
@@ -544,12 +557,13 @@ object ArrayOps {
     /**
      * A shape array becomes a vector layer: one shape per copy (copy N − 1 first, the source on
      * top). v1.8: each copy restyled by its look (`ArrayDraw.restyled`: colors tinted, opacity
-     * multiplied); a copy with opacity 0 draws nothing and is left out.
+     * multiplied); a copy with opacity 0 draws nothing and is left out. v1.10 (R4): an array
+     * that hides its source (`ArrayDraw.hidesSource`) bakes the copies without the source.
      */
     private fun applyShape(c: EditorController, layer: Layer, before: LayerData, a: LayerArray): Boolean {
         val o = before.shape?.let { ShapeCodec.decode(it) } ?: return false
         val source = VShape(0L, shape = o)
-        val instances = ArrayInstances.of(a.spec, VectorOps.bounds(source))
+        val instances = ArrayInstances.of(a.spec, VectorOps.bounds(source)) // hideSource: copy 0 skipped; the source added only when shown
         val objects = ArrayList<VObject>(instances.size)
         for (inst in instances) {
             if (inst.k == 0) continue
@@ -558,7 +572,7 @@ object ArrayOps {
             if (look != null && look.opacity <= 0f) continue
             objects += ArrayDraw.restyled(VectorOps.transformed(source, inst.matrix), look)
         }
-        objects += source
+        if (!ArrayDraw.hidesSource(a.spec)) objects += source
         val content = VectorContent.EMPTY.plus(objects).first
         val after = before.copy(shape = null, vector = content, array = null)
         val area = ArraySources.rectOf(ArrayDraw.cacheBounds(before)).also { it.union(ArraySources.sourceRect(before)); it.inset(-2, -2) }
@@ -574,7 +588,13 @@ object ArrayOps {
     private fun applyPixels(c: EditorController, layer: Layer, before: LayerData, a: LayerArray): Boolean {
         val after = before.copy(array = null)
         if (!a.spec.editingSource) return c.updateLayerData(layer, after, ArrayLabels.APPLY, null, draw = null)
-        val px = ArraySources.layerPixels(layer.bitmap) ?: return c.updateLayerData(layer, after, ArrayLabels.APPLY, null, draw = null)
+        // v1.10 (A3 step 6, C-TILE): read from the store (the row may be parked); the step's write admits it.
+        val px = try {
+            ArraySources.layerPixelsOf(layer)
+        } catch (e: OutOfMemoryError) {
+            c.toast(MEMORY_REFUSAL)
+            return false
+        } ?: return c.updateLayerData(layer, after, ArrayLabels.APPLY, null, draw = null)
         val baked = LayerArray(a.spec.copy(editingSource = false), px)
         val dirty = ArraySources.rectOf(ArrayDraw.cacheBounds(LayerData(array = baked))).also { it.inset(-1, -1) }
         // (Drawn into the cache, never published in data: let go once drawn.)

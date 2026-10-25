@@ -23,6 +23,7 @@ import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.LayerArray
 import com.brushwork.paint.model.LayerData
 import com.brushwork.paint.tools.array.ArrayTool
+import com.brushwork.paint.ui.common.EngineLabels110
 import com.brushwork.paint.vector.VectorLayers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -140,7 +141,11 @@ internal class ArrayRenders(private val c: EditorController) {
         val stats: Stats,
     ) {
         val contentVersion = layer.contentVersion
-        /** v1.10 (F0, C16): the layer's bitmap and mask as they were (replaced: stale). */
+        /**
+         * v1.10 (F0, C16): the layer's bitmap and mask as they were (replaced: stale). v1.10 (A3
+         * step 6): parking or unparking the layer meanwhile moves the same pixels to another store
+         * without a bump, so the patch still lands ([apply] admits the write first).
+         */
         val pixelGeneration = layer.pixelGeneration
         val docW = c.doc.width
         val docH = c.doc.height
@@ -468,11 +473,13 @@ internal class ArrayRenders(private val c: EditorController) {
         val layer = p.layer
         // Committed while usable: a layer hidden since (a properties preview, no step) still takes it.
         if (c.doc.indexOf(layer) < 0 || !c.checkUsable(layer, allowHidden = true)) return@editScope false
+        // v1.10 (A3 step 6, design 2.13): the first write to a layer parked meanwhile may be refused, as `updateLayerData`'s.
+        if (!layer.admitWrite()) { c.toast(EngineLabels110.PAINT_REFUSED); return@editScope false }
         val before = layer.dataSnapshot()
         val rec = c.beginEdit(layer, EditTarget.CONTENT).also { it.preserveData = true }
         try {
             rec.touch(p.area)
-            Canvas(layer.bitmap).drawBitmap(patch, Rect(0, 0, p.area.width(), p.area.height()), p.area, SRC)
+            Canvas(layer.bitmap).drawBitmap(patch, Rect(0, 0, p.area.width(), p.area.height()), p.area, SRC) // I28: one layer
         } catch (e: OutOfMemoryError) {
             rec.abort()
             c.toast("Not enough memory for \"${p.label}\"")
@@ -556,7 +563,7 @@ internal class ArrayRenders(private val c: EditorController) {
         val one = src.width().toDouble() * src.height()
         if (a == null || a.spec.editingSource || (cache is Cache.Draw && cache.pixels)) return cleared + one
         var covered = 0.0
-        for (inst in ArrayInstances.of(a.spec, src)) {
+        for (inst in ArrayInstances.of(a.spec, src)) { // hideSource: a cost estimate only (copy 0 counted)
             val look = inst.look
             if (look != null && look.opacity <= 0f) continue
             val m = inst.matrix

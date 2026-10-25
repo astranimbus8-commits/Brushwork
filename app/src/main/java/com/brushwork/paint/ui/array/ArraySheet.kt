@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -28,7 +29,9 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.brushwork.paint.array.ArrayBehind
 import com.brushwork.paint.array.ArraySources
 import com.brushwork.paint.model.ArrayMode
 import com.brushwork.paint.model.ArraySpec
@@ -75,9 +78,21 @@ fun ArraySheet(tool: ArrayTool, layer: Layer, spec: ArraySpec, onDismiss: () -> 
         onDismiss = onDismiss,
         modifier = Modifier.testTag(V17Tags.ARRAY_SHEET),
         footer = {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = { tool.removeArray() }, modifier = Modifier.heightIn(min = 44.dp)) { Text(ArrayLabels.REMOVE) }
-                Spacer(Modifier.weight(1f))
+            // v1.10 (R4, UQ11): on a copies-only layer the item removes the layer too, and says so. Its
+            // longer words take all the room the Apply button leaves (the only weight of the row:
+            // one line at 392 and 360 dp), and wrap rather than push the Apply button out at large
+            // font sizes; the arrangement keeps Apply at the right end.
+            val whole = ArrayBehind.isCopiesOnly(layer)
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = if (whole) Arrangement.SpaceBetween else Arrangement.Start,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                TextButton(
+                    onClick = { tool.removeArray() },
+                    modifier = (if (whole) Modifier.weight(1f, fill = false) else Modifier).heightIn(min = 44.dp),
+                ) { Text(ArrayBehind.removeLabel(layer)) }
+                Spacer(if (whole) Modifier.width(8.dp) else Modifier.weight(1f))
                 Button(
                     onClick = { tool.applyArray() },
                     modifier = Modifier.heightIn(min = 44.dp),
@@ -113,7 +128,8 @@ fun ArraySheet(tool: ArrayTool, layer: Layer, spec: ArraySpec, onDismiss: () -> 
             ArrayMode.CURVE -> CurveFields(tool, spec)
             ArrayMode.TRANSFORM -> TransformFields(tool, spec)
         }
-        if (raster) {
+        // v1.10 (R4): a copies-only layer's source is a copy of the main layer, so it offers no source edit.
+        if (raster && !ArrayBehind.isCopiesOnly(layer)) {
             SectionHeader(SOURCE)
             OutlinedButton(onClick = { tool.editSource() }, modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp)) { Text(ArrayLabels.EDIT_SOURCE) }
             Hint(EDIT_SOURCE_HINT)
@@ -134,12 +150,24 @@ private fun SheetTabs(selected: ArrayTool.SheetTab, onSelect: (ArrayTool.SheetTa
     Segments(words.map { it to it }, ArrayTool.SheetTab.entries.indexOf(selected), Role.Tab) { i -> onSelect(ArrayTool.SheetTab.entries[i]) }
 }
 
-/** One selectable segment per (shown word, spoken name) of [items], 44 dp tall; [selected] is lit. */
+/**
+ * One selectable segment per (shown word, spoken name) of [items], 44 dp tall; [selected] is lit.
+ * v1.10 (R5): [minHeight], [maxLines] and [modifier] for the Look tab's color mode row (48 dp,
+ * words on up to two lines at large font sizes); the defaults are the v1.8 segments.
+ */
 @Composable
-private fun Segments(items: List<Pair<String, String>>, selected: Int, role: Role, onSelect: (Int) -> Unit) {
+internal fun Segments(
+    items: List<Pair<String, String>>,
+    selected: Int,
+    role: Role,
+    minHeight: Dp = 44.dp,
+    maxLines: Int = 1,
+    modifier: Modifier = Modifier,
+    onSelect: (Int) -> Unit,
+) {
     val shape = RoundedCornerShape(8.dp)
     Row(
-        Modifier
+        modifier
             .fillMaxWidth()
             .padding(vertical = 4.dp)
             .border(1.dp, BrushworkColors.OnChromeDim.copy(alpha = 0.5f), shape)
@@ -151,7 +179,7 @@ private fun Segments(items: List<Pair<String, String>>, selected: Int, role: Rol
             Box(
                 Modifier
                     .weight(1f)
-                    .heightIn(min = 44.dp)
+                    .heightIn(min = minHeight)
                     .background(if (on) BrushworkColors.AccentDim else Color.Transparent, shape)
                     .selectable(selected = on, role = role, onClick = { onSelect(i) })
                     .semantics { contentDescription = spoken },
@@ -159,7 +187,7 @@ private fun Segments(items: List<Pair<String, String>>, selected: Int, role: Rol
             ) {
                 Text(
                     word,
-                    maxLines = 1,
+                    maxLines = maxLines,
                     textAlign = TextAlign.Center,
                     color = if (on) Color.White else BrushworkColors.OnChrome,
                     style = MaterialTheme.typography.labelLarge,

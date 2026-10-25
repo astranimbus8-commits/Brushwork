@@ -17,10 +17,28 @@ class ArrayInstance(val k: Int, val matrix: FloatArray, val look: CopyLook?) {
 /**
  * What a copy's draw applies, besides its matrix: its [opacity] (0..1, multiplied into the
  * copy's alpha) and its tint ([tintColor] at [tintStrength], see [ArrayTint]; strength 0 = none).
+ *
+ * v1.10 (R5): [colorMode] says how [tintColor] applies: [ArrayColorMode.TINT] is v1.9's tint
+ * ([ArrayTint]); [ArrayColorMode.RECOLOR] replaces the copy's colors with [tintColor] at
+ * [tintStrength] as `ColorUtils.recolor` does (Change Drawing Color's math). A copy without a
+ * tint always says TINT, so a look without one draws and compares as in v1.9.
  */
-data class CopyLook(val opacity: Float, val tintColor: Int, val tintStrength: Float) {
-    /** The 4x5 color matrix for ColorMatrixColorFilter; null when tintStrength == 0. */
-    fun colorMatrix(): FloatArray? = if (tintStrength == 0f) null else ArrayTint.matrix(tintColor, tintStrength)
+data class CopyLook(
+    val opacity: Float,
+    val tintColor: Int,
+    val tintStrength: Float,
+    val colorMode: ArrayColorMode = ArrayColorMode.TINT,
+) {
+    /**
+     * The 4x5 color matrix for ColorMatrixColorFilter; null when tintStrength == 0. v1.10 (R5):
+     * RECOLOR gives `ColorUtils.recolorMatrix` (within +-1 of `ColorUtils.recolor`; `ArrayDraw`
+     * keeps its filters in an LRU).
+     */
+    fun colorMatrix(): FloatArray? = when {
+        tintStrength == 0f -> null
+        colorMode == ArrayColorMode.RECOLOR -> ColorUtils.recolorMatrix(tintColor, tintStrength).array
+        else -> ArrayTint.matrix(tintColor, tintStrength)
+    }
 }
 
 /**
@@ -66,6 +84,8 @@ object ArrayInstances {
                 opacity = lerp(look.opacityStart, look.opacityEnd, t).coerceIn(0f, 1f),
                 tintColor = if (tinted) ArrayTint.sample(look.tint, t) else 0,
                 tintStrength = if (tinted) look.tintStrength else 0f,
+                // v1.10 (R5): the mode only with a tint (a copy without one compares as v1.9's).
+                colorMode = if (tinted) look.colorMode else ArrayColorMode.TINT,
             )
             out += ArrayInstance(k, m, copyLook)
         }

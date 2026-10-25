@@ -5,6 +5,9 @@ import android.graphics.ColorMatrixColorFilter
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.RectF
+import android.util.LruCache
+import com.brushwork.paint.core.ColorUtils
+import com.brushwork.paint.model.ArrayColorMode
 import com.brushwork.paint.model.ArrayInstance
 import com.brushwork.paint.model.ArrayInstances
 import com.brushwork.paint.model.ArraySpec
@@ -15,6 +18,7 @@ import com.brushwork.paint.model.LayerData
 import com.brushwork.paint.tools.text.TextCodec
 import com.brushwork.paint.tools.text.TextRenderer
 import com.brushwork.paint.tools.vector.ShapeCodec
+import com.brushwork.paint.vector.ObjectColorSlots
 import com.brushwork.paint.vector.VObject
 import com.brushwork.paint.vector.VPaint
 import com.brushwork.paint.vector.VPath
@@ -48,6 +52,22 @@ import kotlin.math.roundToInt
  * multiplied: design R12). The source (k = 0) never has a look, and a spec without a look
  * (`look == null`) draws, bounds and copies exactly as in v1.7: no layer, no paint change.
  *
+ * v1.10 (R4, "Array behind"): a spec with [ArraySpec.hideSource] ([hidesSource]) draws every copy
+ * but not copy 0, the source: [drawWithArray] never calls its lambda at identity, [drawPixels]
+ * leaves the source's place empty and [effectiveVector] holds only the copies' objects (an empty
+ * content when there are none). Placement is unchanged: [ArrayInstances.of] still returns copy 0
+ * and measures from the source (I19). While a raster source is edited ([ArraySpec.editingSource])
+ * the source shows, as before, so the user sees what they paint. A spec without the flag draws
+ * exactly as in v1.9.
+ *
+ * v1.10 (R5, `ArrayLabels110.RECOLORED`): a look in [ArrayColorMode.RECOLOR] sets each copy's
+ * colors toward its gradient color instead of tinting them: a pixel, text or shape copy draws through
+ * `ColorMatrixColorFilter(ColorUtils.recolorMatrix(color, strength))` (no extra cache; the filters
+ * are kept in a [RECOLOR_FILTERS]-entry LRU keyed by color and strength, [recolorFilter]), and a
+ * vector copy's every color slot goes through `ObjectColorSlots.mapObject` with
+ * `ColorUtils.recolor` ([restyled], [tinted]): exact, bit for bit Change Drawing Color's math.
+ * Stops, opacity and fade are Tint's. A look in TINT mode draws exactly as in v1.9.
+ *
  * Thread-safe: canvas operations call [effectiveVector] and [sourceBounds] from their worker, and
  * `ArrayRenders` draws [drawPixels] and [drawWithArray] on its worker.
  */
@@ -71,11 +91,16 @@ object ArrayDraw {
      * v1.8: a copy whose look changes its pixels ([changesPixels]: opacity below 1 or a tint) is
      * drawn inside a `saveLayer` over [sourceBounds] grown by [layerMargin], through [paintOf] its
      * look; a copy with opacity 0 is skipped. Copies without one draw exactly as in v1.7.
+     *
+     * v1.10 (R4): when [array] hides its source ([hidesSource]) the source is never drawn at
+     * identity: only the copies k = N − 1 down to 1 (nothing at all with one instance or an
+     * unusable [sourceBounds]).
      */
     fun drawWithArray(canvas: Canvas, array: LayerArray?, sourceBounds: RectF, drawSource: (Canvas) -> Unit) {
         val instances = if (array == null) null else instancesOf(array, sourceBounds)
+        val hide = array != null && hidesSource(array.spec)
         if (instances == null || instances.size <= 1) {
-            drawSource(canvas)
+            if (!hide) drawSource(canvas) // hideSource: the source alone, unless hidden
             return
         }
         val m = Matrix()
@@ -92,14 +117,14 @@ object ArrayDraw {
             if (look != null && changesPixels(look)) {
                 val r = layer ?: RectF(sourceBounds).apply { val g = layerMargin(sourceBounds); inset(-g, -g) }.also { layer = it }
                 canvas.saveLayer(r, paintOf(look, null))
-                drawSource(canvas)
+                drawSource(canvas) // hideSource: a copy (k >= 1) under its matrix
                 canvas.restore()
             } else {
-                drawSource(canvas)
+                drawSource(canvas) // hideSource: a copy (k >= 1) under its matrix
             }
             canvas.restore()
         }
-        drawSource(canvas)
+        if (!hide) drawSource(canvas) // hideSource: copy 0 skipped when hidden
     }
 
     /**
@@ -111,6 +136,9 @@ object ArrayDraw {
      *
      * [keepGoing] is asked before each copy (a background render that was superseded stops
      * early: `ArrayRenders`); when it says false the drawing stops there, unfinished.
+     *
+     * v1.10 (R4): when [array] hides its source ([hidesSource]) the source's place stays empty;
+     * only the copies are drawn.
      */
     fun drawPixels(canvas: Canvas, array: LayerArray, keepGoing: (() -> Boolean)? = null) {
         val px = array.pixels ?: return
@@ -133,7 +161,7 @@ object ArrayDraw {
             canvas.drawBitmap(bmp, src.left, src.top, if (look != null && changesPixels(look)) paintOf(look, bilinear) else bilinear)
             canvas.restore()
         }
-        canvas.drawBitmap(bmp, src.left, src.top, null)
+        if (!hidesSource(array.spec)) canvas.drawBitmap(bmp, src.left, src.top, null)
     }
 
     /**
@@ -150,24 +178,30 @@ object ArrayDraw {
      * instance. Results are memoized by the content's identity and the spec, and copies of
      * unchanged source objects are reused (the same instances) while the matrices and the looks
      * stay the same, so `ContentDiff` and `ObjectIndex` see unchanged copies as unchanged.
+     *
+     * v1.10 (R4): when the array hides its source ([hidesSource]) the source objects are left
+     * out: the result is the copies alone (the same copy limit), and a content with no objects
+     * where the copies are none (one instance, or too many objects for a copy). The layer's
+     * DATA still holds the source objects; only what the cache shows changes.
      */
     fun effectiveVector(data: LayerData): VectorContent? {
         val v = data.vector ?: return null
         val a = data.array ?: return v
-        if (v.objects.isEmpty()) return v
+        if (v.objects.isEmpty()) return v // hideSource: nothing to draw either way
         synchronized(lock) {
             for (e in memo) if (e.source === v && e.spec == a.spec) return e.result
         }
+        val hide = hidesSource(a.spec)
         val instances = instancesOf(a, ObjectIndex.of(v).unionBounds())
-        if (instances.size <= 1) return v
+        if (instances.size <= 1) return if (hide) noCopies(v, a.spec) else v
         val total = instances.size
         val byK = arrayOfNulls<ArrayInstance>(total)
         for (inst in instances) byK[inst.k] = inst
         val matrices = byK.map { it?.matrix ?: IDENTITY }
         val looks = byK.map { it?.look }
-        val n = v.objects.size
+        val n = v.objects.size // hideSource: the copy limit counts the source as v1.9 does
         val copies = minOf(total, maxOf(1, ArraySpec.MAX_INSTANCES / n))
-        if (copies <= 1) return v
+        if (copies <= 1) return if (hide) noCopies(v, a.spec) else v
         // Copies of source objects already mapped by the same matrices and looks (a previous result).
         val reuse: IdentityHashMap<VObject, Array<VObject?>>? = synchronized(lock) {
             memo.firstOrNull { e -> sameMatrices(e.matrices, matrices) && e.looks == looks }?.copies
@@ -180,20 +214,38 @@ object ArrayDraw {
             val look = looks[k]
             if (look != null && look.opacity <= 0f) continue
             val shift = k.toLong() shl COPY_ID_SHIFT
-            for (o in v.objects) {
+            for (o in v.objects) { // hideSource: copy k >= 1 of each source object
                 val slots = made.getOrPut(o) { reuse?.get(o)?.copyOf(total) ?: arrayOfNulls(total) }
                 val c = slots[k]?.takeIf { it.id == o.id + shift }
                     ?: restyled(VectorOps.transformed(o, mk), look).withId(o.id + shift).also { slots[k] = it }
                 out += c
             }
         }
-        out.addAll(v.objects)
+        if (!hide) out.addAll(v.objects) // hideSource: copy 0 skipped when hidden
         val result = v.copy(objects = out)
+        remember(Memo(v, a.spec, matrices, looks, made, result))
+        return result
+    }
+
+    /**
+     * v1.10 (R4): whether [spec] leaves copy 0 (the source) out of every drawing, export and
+     * apply: [ArraySpec.hideSource], except while a raster source is edited
+     * ([ArraySpec.editingSource]: the source alone shows then, as in v1.9).
+     */
+    fun hidesSource(spec: ArraySpec): Boolean = spec.hideSource && !spec.editingSource
+
+    /** [v] with no objects, memoized like a result of [effectiveVector] (the same instance each time). */
+    private fun noCopies(v: VectorContent, spec: ArraySpec): VectorContent {
+        val result = v.copy(objects = emptyList())
+        remember(Memo(v, spec, emptyList(), emptyList(), IdentityHashMap(), result))
+        return result
+    }
+
+    private fun remember(e: Memo) {
         synchronized(lock) {
-            memo.addFirst(Memo(v, a.spec, matrices, looks, made, result))
+            memo.addFirst(e)
             while (memo.size > MEMO) memo.removeLast()
         }
-        return result
     }
 
     /**
@@ -202,10 +254,21 @@ object ArrayDraw {
      * color; a shape's stroke and fill colors) and the object's opacity multiplied by the look's.
      * Geometry, ids and live symmetry copies are kept. [o] itself (the same instance) without a
      * look or with one that changes nothing (opacity 1, no tint).
+     *
+     * v1.10 (R5): in [ArrayColorMode.RECOLOR] every color slot is mapped by
+     * `ObjectColorSlots.mapObject` (I35) with [tinted] (`ColorUtils.recolor`, exact); the
+     * opacity as above.
      */
     fun restyled(o: VObject, look: CopyLook?): VObject {
         if (look == null || !changesPixels(look)) return o
         val opacity = o.opacity * look.opacity.coerceIn(0f, 1f)
+        if (look.colorMode == ArrayColorMode.RECOLOR && look.tintStrength > 0f) {
+            return when (val m = ObjectColorSlots.mapObject(o) { tinted(it, look) }) {
+                is VStroke -> m.copy(opacity = opacity)
+                is VPath -> m.copy(opacity = opacity)
+                is VShape -> m.copy(opacity = opacity)
+            }
+        }
         return when (o) {
             is VStroke -> o.copy(color = tinted(o.color, look), opacity = opacity)
             is VPath -> o.copy(fill = o.fill?.let { tinted(it, look) }, stroke = o.stroke?.let { it.copy(color = tinted(it.color, look)) }, opacity = opacity)
@@ -213,8 +276,15 @@ object ArrayDraw {
         }
     }
 
-    /** [argb] as a copy with [look] paints it ([ArrayTint.apply]; alpha kept): [argb] itself without a tint. */
-    fun tinted(argb: Int, look: CopyLook): Int = if (look.tintStrength == 0f) argb else ArrayTint.apply(argb, look.tintColor, look.tintStrength)
+    /**
+     * [argb] as a copy with [look] paints it ([ArrayTint.apply]; alpha kept): [argb] itself without a tint.
+     * v1.10 (R5): `ColorUtils.recolor` in [ArrayColorMode.RECOLOR].
+     */
+    fun tinted(argb: Int, look: CopyLook): Int = when {
+        look.tintStrength == 0f -> argb
+        look.colorMode == ArrayColorMode.RECOLOR -> ColorUtils.recolor(argb, look.tintColor, look.tintStrength)
+        else -> ArrayTint.apply(argb, look.tintColor, look.tintStrength)
+    }
 
     /** [paint] with every color [tinted] by [look] ([paint] itself without a tint). */
     fun tinted(paint: VPaint, look: CopyLook): VPaint {
@@ -232,13 +302,39 @@ object ArrayDraw {
     /**
      * The paint a copy with [look] draws through (a new one, based on [base] when given): its
      * opacity as alpha, and its tint as a `ColorMatrixColorFilter` ([CopyLook.colorMatrix]).
+     * v1.10 (R5): a RECOLOR look's filter comes from the LRU ([recolorFilter]).
      */
     fun paintOf(look: CopyLook, base: Paint?): Paint {
         val p = if (base != null) Paint(base) else Paint()
         p.alpha = (look.opacity.coerceIn(0f, 1f) * 255f).roundToInt()
-        look.colorMatrix()?.let { p.colorFilter = ColorMatrixColorFilter(it) }
+        if (look.colorMode == ArrayColorMode.RECOLOR && look.tintStrength != 0f) {
+            p.colorFilter = recolorFilter(look.tintColor, look.tintStrength)
+        } else {
+            look.colorMatrix()?.let { p.colorFilter = ColorMatrixColorFilter(it) }
+        }
         return p
     }
+
+    /**
+     * v1.10 (R5): the `ColorMatrixColorFilter` of `ColorUtils.recolorMatrix(target, s)`, shared:
+     * the last [RECOLOR_FILTERS] are kept, keyed by the target's RGB (its alpha is ignored) and
+     * [s] clamped to 0..1. A filter is never changed after it is made, so any thread may draw with
+     * it.
+     */
+    internal fun recolorFilter(target: Int, s: Float): ColorMatrixColorFilter {
+        val k = if (s > 0f) s.coerceAtMost(1f) else 0f
+        val key = ((target.toLong() and 0xFFFFFFL) shl 32) or (k.toRawBits().toLong() and 0xFFFFFFFFL)
+        recolorFilters.get(key)?.let { return it }
+        val f = ColorMatrixColorFilter(ColorUtils.recolorMatrix(target, k))
+        recolorFilters.put(key, f)
+        return f
+    }
+
+    /** How many recolor filters [recolorFilter] keeps (design R5 (c)). */
+    const val RECOLOR_FILTERS = 256
+
+    /** v1.10 (R5): [recolorFilter]'s LRU (thread-safe). */
+    private val recolorFilters = LruCache<Long, ColorMatrixColorFilter>(RECOLOR_FILTERS)
 
     /**
      * The margin a text or shape copy's layer gets around [source] (document px): glyphs and
@@ -290,7 +386,7 @@ object ArrayDraw {
     internal fun instancesOf(array: LayerArray, source: RectF): List<ArrayInstance> {
         val ok = source.left.isFinite() && source.top.isFinite() && source.right.isFinite() && source.bottom.isFinite() && !source.isEmpty
         if (array.spec.editingSource || !ok) return listOf(ArrayInstance(0, IDENTITY.copyOf(), null))
-        return ArrayInstances.of(array.spec, source)
+        return ArrayInstances.of(array.spec, source) // hideSource: each caller skips copy 0 (hidesSource)
     }
 
     private val IDENTITY = floatArrayOf(1f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 1f)
@@ -343,5 +439,6 @@ object ArrayDraw {
             memo.clear()
             textMemo.clear()
         }
+        recolorFilters.evictAll()
     }
 }
