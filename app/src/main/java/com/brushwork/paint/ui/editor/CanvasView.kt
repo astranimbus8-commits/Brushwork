@@ -23,6 +23,8 @@ import android.view.ViewConfiguration
 import androidx.compose.ui.graphics.toArgb
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.core.Vec2
+import com.brushwork.paint.engine.EngineStat
+import com.brushwork.paint.engine.EngineStats
 import com.brushwork.paint.engine.PaperBackdrop
 import com.brushwork.paint.engine.PerfTrace
 import com.brushwork.paint.engine.live.BeforeFrame
@@ -156,6 +158,15 @@ class CanvasView(context: Context, private val controller: EditorController) : V
 
     private val invalidator: () -> Unit = { postInvalidateOnAnimation() }
     private val antsTick = Runnable { invalidate() }
+
+    /** v1.10 A9 (P4): a waiting display tile completed: draw it. */
+    private val waitingDone: () -> Unit = { postInvalidateOnAnimation() }
+
+    /** v1.10 A9: uptime of the first input event since the last composite (0: none). */
+    private var inputAt = 0L
+
+    /** v1.10 A9: a gesture lifted since the last composite; that composite uses no projection. */
+    private var liftPending = false
 
     init {
         keepScreenOn = true
@@ -444,7 +455,20 @@ class CanvasView(context: Context, private val controller: EditorController) : V
         visibleF.roundOut(visible)
         val smooth = viewport.scale < SMOOTH_ZOOM_LIMIT
         if (!controller.liveAdjust.drawFrame(canvas, t.matrix, visible, smooth)) {
-            tiles.update(controller.compositor, visible)
+            // v1.10 A9: a waiting tile (P4) asks for a frame when it completes; the composite is timed.
+            tiles.onWaitingDone = waitingDone
+            controller.liveAdjust.attachProjection(tiles)
+            if (liftPending) tiles.projectionsOff = true
+            val composeStart = SystemClock.uptimeMillis()
+            val composed = tiles.update(controller.compositor, visible)
+            tiles.projectionsOff = false
+            liftPending = false
+            if (composed) {
+                val now = SystemClock.uptimeMillis()
+                EngineStats.record(EngineStat.COMPOSITE, (now - composeStart).toFloat())
+                if (inputAt != 0L) EngineStats.record(EngineStat.INPUT_TO_COMPOSITE, (now - inputAt).toFloat())
+            }
+            inputAt = 0L
             val save = canvas.save()
             canvas.concat(t.matrix)
             tiles.draw(canvas, visible, smooth)
@@ -584,6 +608,10 @@ class CanvasView(context: Context, private val controller: EditorController) : V
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(e: MotionEvent): Boolean {
         watchTouchSpan(e)
+        // v1.10 A9 (design 4.4 A9, section 7): input-to-composite starts at the first unrendered event;
+        // the first frame after a lift renders on the plain path, never through a projection.
+        if (inputAt == 0L) inputAt = SystemClock.uptimeMillis()
+        if (e.actionMasked == MotionEvent.ACTION_UP || e.actionMasked == MotionEvent.ACTION_CANCEL) liftPending = true
         if (!viewport.hasSize) return true
         val action = e.actionMasked
         if (controller.busyMessage != null) {

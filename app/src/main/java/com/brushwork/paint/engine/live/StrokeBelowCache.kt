@@ -9,6 +9,7 @@ import com.brushwork.paint.engine.AdjustmentStage
 import com.brushwork.paint.engine.CompositeTarget
 import com.brushwork.paint.engine.Compositor
 import com.brushwork.paint.engine.DisplayTiles
+import com.brushwork.paint.engine.EngineConfig
 import com.brushwork.paint.engine.FolderComposite
 import com.brushwork.paint.engine.MemoryGovernor
 import com.brushwork.paint.engine.MemoryPressure
@@ -108,8 +109,18 @@ class StrokeBelowCache internal constructor(private val c: EditorController) : D
      */
     fun begin(layer: Layer, erase: Boolean): Boolean {
         end()
-        if (!enabled || !(if (erase) eraserOn else strokesOn)) return false
-        if (splitFor(layer) <= 0) return false
+        if (!enabled) return false
+        // v1.10 A9 step 3 (design 2.5): Classic uses the cache when the visible units below the
+        // split number at least `EngineConfig.strokeBelowMinLayers` (the check sets it; null: off,
+        // as v1.9). At TILES and FULL the below projection replaces it. The test hooks force it on.
+        val forced = if (erase) eraserOn else strokesOn
+        val k = splitFor(layer)
+        if (k <= 0) return false
+        if (!forced) {
+            if (ProjectionRules.on) return false
+            val min = EngineConfig.strokeBelowMinLayers ?: return false
+            if (ProjectionRules.unitsBelow(c.doc, k) < min) return false
+        }
         val t = c.tiles
         this.layer = layer
         trimmed = false
