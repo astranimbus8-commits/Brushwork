@@ -3218,7 +3218,23 @@ reopens as it was (`ArrayBehindPersistenceTest`).
   row's; and a render lands on a layer parked or replaced meanwhile.
 
 **Tests:** `app/src/test/java/com/brushwork/paint/v110/a3/` (`BehindKit` holds the shared
-fixtures). The v1.9 decode checks (`ArrayBehindCompat19Test`, `ArrayColorModeCompat19Test`)
+fixtures). Two QA walks run at 392 and 360 dp and at font scales 1, 1.3 and 2.0:
+- `qa110/Qa110ArrayBehindUiTest` takes the three entries by label: the selection bar's Behind,
+  the object bar's Behind and the layer ⋮ "Array behind this layer…". Each entry is ONE step and makes a
+  copies-only layer directly below. Leaving re-selects the source: the sheet's ✕ or another tool
+  from the tool menu. Texts are checked outside the lead's raster selection bar and layer window,
+  which cut their own words at 1.3 and 2.0 already. The bar's Behind is cut only where its
+  neighbor "Array" is cut too.
+- `qa110/Qa110ArrayRecolorUiTest` works in the Look tab. Tint strength 100, then Recolored, then
+  Tinted: each is ONE step "Array look". The strength field is renamed, and the pixels change and
+  come back byte for byte. Undo works through both.
+
+`ArrayBehindTimingTest` (Timing) times the selection's array behind plus "Edit array" to 64
+copies against v1.9's "Array" plus the same edit. Its budget is 1.1 x, and the edit's pixels are
+drawn inside the timed run. On the PC, 512 x 512: median 0.952 ms against 1.058 ms (x 6 = 5.7
+ms). On the phone's 1080 x 2408, locally only: 9.964 ms against 11.857 ms (x 6 = 59.8 ms).
+
+The v1.9 decode checks (`ArrayBehindCompat19Test`, `ArrayColorModeCompat19Test`)
 need the frozen `compat19` kit (v1.9's `ArraySpec` and `ArrayLook` DTOs). Neither F0 nor F1
 lands it, and `main` still has no `compat19` folder. They wait for the lead's kit (lead request).
 
