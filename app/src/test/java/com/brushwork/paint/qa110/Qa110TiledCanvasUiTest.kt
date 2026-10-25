@@ -43,7 +43,7 @@ import java.util.Random
  * is hidden: the canvas re-renders through the waiting tiles (P4; chunks counted) and the parked
  * layers stay parked. The same document, flat, at CLASSIC (a second editor of the same size),
  * gives the reference frames: the canvas view's pixels are equal bit for bit, before and after
- * the eye toggle.
+ * the eye toggle. No text of either editor overflows its box (I27).
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = Qa19Ui.Q392)
@@ -114,6 +114,7 @@ class Qa110TiledCanvasUiTest {
                     val t = h.editor(tiled, fontScale = scale)
                     assertEquals(where, if (width == Qa19Ui.Q360) 360 else 392, t.activity.resources.configuration.screenWidthDp)
                     finish(t, "$where, TILES")
+                    Qa19Ui.assertNoTextOverflow("$where, TILES")
                     assertTrue("$where: the frames drew from the below projection", t.c.liveAdjust.belowProjection.hits > 0)
                     assertParked(tiled, "$where, TILES")
                     val tiles1 = shown(t).also { made += it }
@@ -132,6 +133,7 @@ class Qa110TiledCanvasUiTest {
                     val flat = stack()
                     val k = h.editor(flat, fontScale = scale)
                     finish(k, "$where, Classic")
+                    Qa19Ui.assertNoTextOverflow("$where, Classic")
                     val classic1 = shown(k).also { made += it }
                     k.c.toggleVisibility(flat.layers[HIDDEN])
                     finish(k, "$where, Classic after the eye toggle")

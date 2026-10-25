@@ -88,6 +88,29 @@ class DisplayTiles(val docWidth: Int, val docHeight: Int, val tileSize: Int = 51
 
         /** [r] (document px, within the document; a scratch rect valid during the call) was invalidated. */
         fun invalidated(tiles: DisplayTiles, r: Rect)
+
+        /**
+         * v1.10 A9 (P4, X4): the split `k` at which this renderer would draw tile [index]
+         * (document rect [tr]): units `[0, k)` from its cache of the whole tile, made ready for
+         * the current document (key checked, the cache tile allocated); -1 when it would not draw
+         * the tile that way. Asked before the waiting check, so that only the units a render
+         * reads are checked for tiles that are not resident.
+         */
+        fun prepare(tiles: DisplayTiles, index: Int, tr: Rect, compositor: Compositor): Int = -1
+
+        /** v1.10 A9: [render] after [prepare] returned [k] (> 0) for the same tile, in the same render. */
+        fun renderSplit(tiles: DisplayTiles, index: Int, tr: Rect, d: Rect, canvas: Canvas, target: CompositeTarget, compositor: Compositor, k: Int): Boolean =
+            render(tiles, index, tr, d, canvas, target, compositor)
+
+        /** v1.10 A9 (P4): tile [index]'s cache of units `[0, k)` when it is built (after [prepare] returned k), else null. */
+        fun builtCache(index: Int): Bitmap? = null
+
+        /**
+         * v1.10 A9 (P4): [acc] (tile [index], document rect [tr]) holds units `[0, k)` composited
+         * over the whole tile through the waiting tiles; the renderer keeps it as that tile's
+         * cache when its split and key are still those [prepare] saw.
+         */
+        fun adopt(tiles: DisplayTiles, index: Int, tr: Rect, k: Int, acc: Bitmap) = Unit
     }
 
     /** v1.9 A6 (P3): the [BelowRenderer] [render] asks first (null: none). */
@@ -207,19 +230,59 @@ class DisplayTiles(val docWidth: Int, val docHeight: Int, val tileSize: Int = 51
         val save = c.save()
         c.translate(-tr.left.toFloat(), -tr.top.toFloat())
         c.clipRect(d)
-        // v1.9 A6 (P3, R11a): a stroke's below-cache, when it can draw this part exactly.
+        val below = if (projectionsOff) null else belowRenderer
+        // v1.10 A9 (X4): a projection draws the units below its split from its cache.
+        val k = below?.prepare(this, idx, tr, compositor) ?: -1
         // v1.10 A9 (P4): sources not resident: the part waits (the tile keeps what it shows).
-        if (waitingEnabled && WaitingTiles.needsReads(compositor, d)) {
+        if (waitingEnabled && queueWaiting(compositor, idx, tr, d, below, k)) {
             c.restoreToCount(save)
-            (waiting ?: WaitingTiles(this).also { waiting = it }).queue(idx, tr, d, compositor)
             return
         }
-        val below = if (projectionsOff) null else belowRenderer
-        if (below == null || !below.render(this, idx, tr, d, c, target, compositor)) {
+        // v1.9 A6 (P3, R11a): a stroke's below-cache, when it can draw this part exactly.
+        val drawn = when {
+            below == null -> false
+            k > 0 -> below.renderSplit(this, idx, tr, d, c, target, compositor, k)
+            else -> below.render(this, idx, tr, d, c, target, compositor)
+        }
+        if (!drawn) {
+            // A projection that refused (never expected): the plain path, which may read below its split.
+            if (k > 0 && waitingEnabled && WaitingTiles.needsReads(compositor, d)) {
+                c.restoreToCount(save)
+                waitingTiles().queue(idx, tr, d, compositor)
+                return
+            }
             c.drawColor(0, PorterDuff.Mode.CLEAR)
             compositor.drawDocument(c, d, target = target)
         }
         c.restoreToCount(save)
+    }
+
+    private fun waitingTiles(): WaitingTiles = waiting ?: WaitingTiles(this).also { waiting = it }
+
+    /**
+     * v1.10 A9 (P4): queues the part [d] of tile [idx] (document rect [tr]) as waiting when its
+     * render would read a tile that is not resident; true when it did. Without a projection split
+     * ([k] <= 0) every unit shown in [d] is checked. With one, only what the render reads: once
+     * the projection's cache tile is built, the units from the split up inside [d] (a waiting part
+     * then starts from a copy of that cache); before, also the units below the split across the
+     * whole tile (its build), and the cache tile is then built by the waiting part itself
+     * ([BelowRenderer.adopt]), never by a read on main.
+     */
+    private fun queueWaiting(compositor: Compositor, idx: Int, tr: Rect, d: Rect, below: BelowRenderer?, k: Int): Boolean {
+        if (below == null || k <= 0) {
+            if (!WaitingTiles.needsReads(compositor, d)) return false
+            waitingTiles().queue(idx, tr, d, compositor)
+            return true
+        }
+        val cache = below.builtCache(idx)
+        if (cache != null) {
+            if (!WaitingTiles.needsReads(compositor, d, from = k)) return false
+            waitingTiles().queue(idx, tr, d, compositor, start = k, base = cache)
+            return true
+        }
+        if (!WaitingTiles.needsReads(compositor, tr, until = k) && !WaitingTiles.needsReads(compositor, d, from = k)) return false
+        waitingTiles().queue(idx, tr, d, compositor, cut = k) { jobTr, acc -> below.adopt(this, idx, jobTr, k, acc) }
+        return true
     }
 
     // ------------------------------------------------------------------ v1.6: budgeted refinement (§3.1, §4.3)

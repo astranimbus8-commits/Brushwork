@@ -73,7 +73,7 @@ class FirstCompositeEvictedTimingTest {
             val t = s.tileAt(col, row) ?: continue
             if (t.solidColor == null) assertTrue("a packed tile is never made resident", t.bitmap == null)
         }
-        last?.release()
+        last.release()
     }
 
     private companion object {

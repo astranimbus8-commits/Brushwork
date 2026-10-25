@@ -5,6 +5,7 @@ import com.brushwork.paint.AppSettings
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.engine.EngineLevel
 import com.brushwork.paint.engine.RenderScaled
+import com.brushwork.paint.engine.tiles.BlankPixels
 import com.brushwork.paint.engine.tiles.ChaosResidency
 import com.brushwork.paint.engine.tiles.TiledPixels
 import com.brushwork.paint.masks.AdjustmentHistogram
@@ -135,6 +136,18 @@ class CRegToolsParkedLayerTest {
         subject.pixels = TiledPixels.fromBitmap(keep(A9Docs.content(99L)))
         masked.outline(subject)
         assertEquals("a replaced store is traced again", traces + 1, masked.traces)
+        // An enabled transparent mask hides everything, so nothing blocks text: flat (as v1.9) and
+        // blank alike; a blank layer blocks nothing either (an empty outline, not "no memory").
+        assertTrue("the subject's mask is on", subject.maskEnabled && subject.hasMask)
+        subject.mask = keep(A9Docs.empty())
+        val v19 = masked.outline(subject)!!
+        assertEquals("a transparent flat mask: nothing blocks text", null, v19.bounds)
+        subject.maskPixels = BlankPixels(A9Docs.W, A9Docs.H)
+        val blankMask = masked.outline(subject)!!
+        assertEquals("a blank mask as the transparent flat one", v19.bounds, blankMask.bounds)
+        assertEquals("a blank mask as the transparent flat one: shape", v19.shape, blankMask.shape)
+        val blank = WrapContours().outline(Layer(doc.newLayerId(), "Blank", BlankPixels(A9Docs.W, A9Docs.H)))
+        assertTrue("a blank layer blocks nothing", blank != null && blank.bounds == null && blank.shape.isEmpty())
     }
 
     @Test

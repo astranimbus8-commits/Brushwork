@@ -47,6 +47,11 @@ import kotlin.math.min
  *   asks for a frame.
  * - An invalidation of a waiting tile cancels its job ([cancel]): the part is dirty again and is
  *   queued afresh by the next update.
+ * - With the below projection (X4, `DisplayTiles.BelowRenderer.prepare`) a part reads only what
+ *   its render reads: once the projection's cache tile is built, the job starts at the split from
+ *   a copy of that cache ([queue] `start`, `base`); before, the job composites the units below the
+ *   split across the whole tile, hands that to the projection as the tile's cache at the split
+ *   ([queue] `cut`, `onCut`) and goes on above it inside the dirty part only.
  *
  * Main thread, like [DisplayTiles]; only [worker] reads (it never frees, recycles or changes a
  * tile's state: `Tile.kt` rule 1). At CLASSIC nothing is ever parked, so [needsReads] is false and
@@ -60,8 +65,16 @@ internal class WaitingTiles(
     /** The read copies one chunk may hold (bytes). */
     var chunkBytes: Long = CHUNK_BYTES
 
-    private class Job(val index: Int, val tr: Rect, val d: Rect, val compositor: Compositor) {
-        var next = 0
+    private class Job(
+        val index: Int,
+        val tr: Rect,
+        val d: Rect,
+        val compositor: Compositor,
+        start: Int,
+        var cut: Int,
+        val onCut: ((Rect, Bitmap) -> Unit)?,
+    ) {
+        var next = start
         var acc: Bitmap? = null
         var canvas: Canvas? = null
         var target: CompositeTarget? = null
@@ -69,6 +82,9 @@ internal class WaitingTiles(
 
         /** The chunk could not be cut where it was ([cutAt] disagreed with the compositor): one chunk to the end. */
         var whole = false
+
+        /** The part the chunk starting at [from] composites: the whole tile below [cut] (a projection's cache tile), else [d]. */
+        fun regionFor(from: Int): Rect = if (from < cut) tr else d
     }
 
     private val jobs = arrayOfNulls<Job>(tiles.tileCount)
@@ -91,12 +107,37 @@ internal class WaitingTiles(
 
     fun isWaiting(index: Int): Boolean = jobs.getOrNull(index) != null
 
-    /** Queues the dirty part [d] of tile [index] (document rect [tr]) as waiting and starts its first chunk. */
-    fun queue(index: Int, tr: Rect, d: Rect, compositor: Compositor) {
+    /**
+     * Queues the dirty part [d] of tile [index] (document rect [tr]) as waiting and starts its first
+     * chunk. With [base] (a projection's built cache tile: units `[0, start)` over the whole tile)
+     * the job starts at [start] from a copy of [base] inside [d], taken now (the cache may be
+     * rebuilt or freed before the job completes). With [cut] (> 0, a split the compositor accepts)
+     * the units below [cut] are composited across the whole tile and [onCut] gets the tile's rect
+     * and that accumulator (units `[0, cut)`, valid during the call) before the units above.
+     */
+    fun queue(
+        index: Int,
+        tr: Rect,
+        d: Rect,
+        compositor: Compositor,
+        start: Int = 0,
+        base: Bitmap? = null,
+        cut: Int = -1,
+        onCut: ((Rect, Bitmap) -> Unit)? = null,
+    ) {
         cancel(index)
-        val job = Job(index, Rect(tr), Rect(d), compositor)
+        val from = if (base != null && start > 0 && !base.isRecycled) start else 0
+        val job = Job(index, Rect(tr), Rect(d), compositor, from, if (from == 0) cut else -1, onCut)
         jobs[index] = job
         count++
+        if (base != null && from > 0) {
+            val c = accCanvas(job)
+            val save = c.save()
+            c.translate(-job.tr.left.toFloat(), -job.tr.top.toFloat())
+            c.clipRect(job.d)
+            c.drawBitmap(base, job.tr.left.toFloat(), job.tr.top.toFloat(), ProxyTiles.copyPaint)
+            c.restoreToCount(save)
+        }
         step(job)
     }
 
@@ -136,7 +177,8 @@ internal class WaitingTiles(
                 return
             }
             val from = job.next
-            val until = if (job.whole) n else chunkEnd(doc, from, job.d)
+            val region = job.regionFor(from)
+            val until = if (job.whole) n else chunkEnd(doc, from, region, if (from < job.cut) job.cut else n)
             val need = ArrayList<Tile>()
             val pins = ArrayList<PixelPin>()
             val seen = IdentityHashMap<Tile, Boolean>()
@@ -144,8 +186,8 @@ internal class WaitingTiles(
                 val l = doc.layers[i]
                 if (l.isFolder || !l.visible || l.opacity <= 0f) continue
                 val before = need.size
-                collect(l.pixels, job.d, need, seen)
-                if (l.maskEnabled) collect(l.maskPixels, job.d, need, seen)
+                collect(l.pixels, region, need, seen)
+                if (l.maskEnabled) collect(l.maskPixels, region, need, seen)
                 if (need.size > before) pins += l.pin()
             }
             if (need.isEmpty()) {
@@ -197,21 +239,27 @@ internal class WaitingTiles(
         step(job)
     }
 
+    /** The job's accumulator canvas (the accumulator made on first use). */
+    private fun accCanvas(job: Job): Canvas {
+        job.canvas?.let { return it }
+        val acc = Bitmap.createBitmap(job.tr.width(), job.tr.height(), Bitmap.Config.ARGB_8888)
+        job.acc = acc
+        job.target = CompositeTarget.displayTile(acc, job.tr.left, job.tr.top)
+        return Canvas(acc).also { job.canvas = it }
+    }
+
     /** Composites layers [from, until) onto the job's accumulator; false when the job ended. */
     private fun composite(job: Job, from: Int, until: Int, lent: List<Pair<Tile, Bitmap>>): Boolean {
-        val acc = job.acc ?: Bitmap.createBitmap(job.tr.width(), job.tr.height(), Bitmap.Config.ARGB_8888).also {
-            job.acc = it
-            job.canvas = Canvas(it)
-            job.target = CompositeTarget.displayTile(it, job.tr.left, job.tr.top)
-        }
-        val c = job.canvas!!
+        val c = accCanvas(job)
+        val acc = job.acc!!
+        val region = job.regionFor(from)
         val save = c.save()
         var refused = false
         try {
             c.translate(-job.tr.left.toFloat(), -job.tr.top.toFloat())
-            c.clipRect(job.d)
+            c.clipRect(region)
             if (from == 0) c.drawColor(0, PorterDuff.Mode.CLEAR)
-            job.compositor.drawSplit(c, job.d, job.target, from, until)
+            job.compositor.drawSplit(c, region, job.target, from, until)
         } catch (e: IllegalArgumentException) {
             refused = true
         } finally {
@@ -225,11 +273,13 @@ internal class WaitingTiles(
             }
             job.whole = true
             job.next = 0
+            job.cut = -1
             acc.eraseColor(0)
             return true
         }
         chunks++
         job.next = until
+        if (until == job.cut) job.onCut?.invoke(job.tr, acc)
         return true
     }
 
@@ -246,22 +296,22 @@ internal class WaitingTiles(
 
     /**
      * The end of the chunk starting at [from]: the first cut after [from] where the chunk's
-     * non-resident tiles inside [d] reach [chunkBytes], else the layer count.
+     * non-resident tiles inside [d] reach [chunkBytes], else [limit] (the layer count, or the
+     * job's projection split).
      */
-    private fun chunkEnd(doc: Document, from: Int, d: Rect): Int {
-        val n = doc.layers.size
+    private fun chunkEnd(doc: Document, from: Int, d: Rect, limit: Int): Int {
         var bytes = 0L
         var k = from
-        while (k < n) {
+        while (k < limit) {
             val l = doc.layers[k]
             if (!l.isFolder && l.visible && l.opacity > 0f) {
                 bytes += readBytes(l.pixels, d)
                 if (l.maskEnabled) bytes += readBytes(l.maskPixels, d)
             }
             k++
-            if (bytes >= chunkBytes && k < n && cutAt(doc, k)) return k
+            if (bytes >= chunkBytes && k < limit && cutAt(doc, k)) return k
         }
-        return n
+        return limit
     }
 
     companion object {
@@ -277,12 +327,15 @@ internal class WaitingTiles(
 
         /**
          * True when compositing document part [d] would read a tile that is not resident: some
-         * layer shown there holds a PACKED or SWAPPED tile (content or enabled mask) inside [d].
-         * Always false at CLASSIC, where nothing parks.
+         * layer shown there (of the flat indices `[from, until)`; default all) holds a PACKED or
+         * SWAPPED tile (content or enabled mask) inside [d]. Always false at CLASSIC, where nothing
+         * parks.
          */
-        fun needsReads(compositor: Compositor, d: Rect): Boolean {
+        fun needsReads(compositor: Compositor, d: Rect, from: Int = 0, until: Int = Int.MAX_VALUE): Boolean {
             if (EngineConfig.level == EngineLevel.CLASSIC) return false
-            for (l in compositor.document.layers) {
+            val layers = compositor.document.layers
+            for (i in max(from, 0) until min(until, layers.size)) {
+                val l = layers[i]
                 if (l.isFolder || !l.visible || l.opacity <= 0f) continue
                 if (hasReads(l.pixels, d)) return true
                 if (l.maskEnabled && hasReads(l.maskPixels, d)) return true

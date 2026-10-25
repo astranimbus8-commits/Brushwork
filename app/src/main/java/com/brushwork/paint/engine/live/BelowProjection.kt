@@ -28,7 +28,10 @@ import com.brushwork.paint.model.Layer
  *   by dirty rects.
  * - **Lifetime:** persistent across strokes, pans and zooms while the active layer and the key
  *   stay; built lazily, a whole display tile at a time, when a part of that tile is rendered
- *   (inside `DisplayTiles.update` and `updateBudgeted`).
+ *   (inside `DisplayTiles.update` and `updateBudgeted`). P4: when the units below the split hold
+ *   a tile that is not resident anywhere in the display tile, the build is the waiting tiles'
+ *   (their accumulator at the split is [adopt]ed); and a built tile's renders read only the units
+ *   from the split up, so cold tiles below never make a stroke frame wait.
  * - **Memory:** at most `min(displayHeld, R / 8)` ([capBytes]); a tile beyond the cap is not built
  *   and renders on the plain path. Registered with [MemoryGovernor] as "below-projection" at the
  *   below-caches' priority (20): any pressure above NORMAL frees it (P5: projections go first).
@@ -100,21 +103,59 @@ internal class BelowProjection(
     }
 
     override fun render(tiles: DisplayTiles, index: Int, tr: Rect, d: Rect, canvas: Canvas, target: CompositeTarget, compositor: Compositor): Boolean {
-        if (!enabled || !ProjectionRules.on || tiles !== this.tiles || index !in bitmaps.indices) return false
+        val k = prepare(tiles, index, tr, compositor)
+        return k > 0 && renderSplit(tiles, index, tr, d, canvas, target, compositor, k)
+    }
+
+    /**
+     * The split of tile [index] with the key checked (a mismatch drops the whole projection and
+     * captures the new key) and its cache tile allocated within the cap; -1: the plain path.
+     */
+    override fun prepare(tiles: DisplayTiles, index: Int, tr: Rect, compositor: Compositor): Int {
+        if (!enabled || !ProjectionRules.on || tiles !== this.tiles || index !in bitmaps.indices) return -1
         val doc = docOf()
-        if (compositor.document !== doc || tiles.docWidth != doc.width || tiles.docHeight != doc.height) return false
-        val active = activeOf() ?: return false
+        if (compositor.document !== doc || tiles.docWidth != doc.width || tiles.docHeight != doc.height) return -1
+        val active = activeOf() ?: return -1
         val k = ProjectionRules.splitFor(doc, active)
-        if (!ProjectionRules.belowEligible(doc, k)) return false
+        if (!ProjectionRules.belowEligible(doc, k)) return -1
         val ov = overrideOf()
-        if (BelowKey.overrideBelow(doc, k, ov)) return false
+        if (BelowKey.overrideBelow(doc, k, ov)) return -1
         val safe = AdjustmentStage.safeCompositing
         if (k != split || !key.matches(doc, k, safe, ov)) {
             dropAll()
             key.capture(doc, k, safe)
             split = k
         }
-        val cache = tileFor(index, tr) ?: return false
+        return if (tileFor(index, tr) != null) k else -1
+    }
+
+    override fun builtCache(index: Int): Bitmap? = if (index in built.indices && built[index]) bitmaps[index] else null
+
+    /**
+     * P4: the waiting tiles composited units `[0, k)` of tile [index] across the whole tile into
+     * [acc] (exactly what a build here draws, chunk by chunk: I8); it becomes the tile's cache when
+     * the split and the key are still the current ones (else it is not kept, and the tile is built
+     * when next rendered).
+     */
+    override fun adopt(tiles: DisplayTiles, index: Int, tr: Rect, k: Int, acc: Bitmap) {
+        if (!enabled || !ProjectionRules.on || tiles !== this.tiles || index !in bitmaps.indices || k != split) return
+        val doc = docOf()
+        val active = activeOf() ?: return
+        if (ProjectionRules.splitFor(doc, active) != k) return
+        val ov = overrideOf()
+        if (BelowKey.overrideBelow(doc, k, ov) || !key.matches(doc, k, AdjustmentStage.safeCompositing, ov)) return
+        val cache = tileFor(index, tr) ?: return
+        if (cache.width != acc.width || cache.height != acc.height) return
+        canvases[index]!!.drawBitmap(acc, 0f, 0f, ProxyTiles.copyPaint)
+        built[index] = true
+        builds++
+    }
+
+    /** The render after [prepare] returned [k]: the cache tile (built here when it is not yet) copied in, then `drawSplit(k, n)` of [d]. */
+    override fun renderSplit(tiles: DisplayTiles, index: Int, tr: Rect, d: Rect, canvas: Canvas, target: CompositeTarget, compositor: Compositor, k: Int): Boolean {
+        if (tiles !== this.tiles || k != split) return false
+        val cache = bitmaps.getOrNull(index) ?: return false
+        val doc = compositor.document
         try {
             if (!built[index]) {
                 val cv = canvases[index]!!

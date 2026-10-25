@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.Rect
 import com.brushwork.paint.core.Parallel
 import com.brushwork.paint.engine.BitmapUtils
+import com.brushwork.paint.engine.tiles.BlankPixels
 import com.brushwork.paint.engine.tiles.FlatPixels
 import com.brushwork.paint.engine.tiles.PixelStore
 import com.brushwork.paint.engine.tiles.TiledPixels
@@ -287,17 +288,23 @@ class WrapContours {
         val content = layer.pixels
         val maskStore = if (masked) layer.maskPixels else null
         if (content is FlatPixels && content.bitmap.isRecycled) return null
-        var bitmap: Bitmap? = null
-        var mask: Bitmap? = null
-        val outline = try {
-            bitmap = read(content) ?: return null
-            mask = maskStore?.let { read(it) }
-            WrapContourBuilder.outline(WrapContourBuilder.scan(bitmap, mask))
-        } catch (e: OutOfMemoryError) {
-            return null
-        } finally {
-            if (content !is FlatPixels) bitmap?.recycle()
-            if (maskStore !is FlatPixels) mask?.recycle()
+        val outline = if (content is BlankPixels || maskStore is BlankPixels) {
+            // Transparent pixels, or an enabled transparent mask (it hides everything): nothing
+            // blocks text, as the scan of v1.9's transparent bitmap found; no copy is made.
+            WrapContourBuilder.Outline.EMPTY
+        } else {
+            var bitmap: Bitmap? = null
+            var mask: Bitmap? = null
+            try {
+                bitmap = read(content) ?: return null
+                mask = maskStore?.let { read(it) }
+                WrapContourBuilder.outline(WrapContourBuilder.scan(bitmap, mask))
+            } catch (e: OutOfMemoryError) {
+                return null
+            } finally {
+                if (content !is FlatPixels) bitmap?.recycle()
+                if (maskStore !is FlatPixels) mask?.recycle()
+            }
         }
         traces++
         entries[layer.id] = Entry(layer.contentVersion, generation, masked, outline)

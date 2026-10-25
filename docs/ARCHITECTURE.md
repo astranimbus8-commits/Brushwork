@@ -3904,7 +3904,8 @@ full bitmap, without making it.
 
 **Waiting tiles (P4, step 2).** A display update never blocks on a tile that is not resident.
 - `DisplayTiles.render` asks `WaitingTiles.needsReads(compositor, part)`: any visible layer or
-  enabled mask with PACKED or SWAPPED tiles inside the part (never at CLASSIC). The part is then
+  enabled mask with PACKED or SWAPPED tiles inside the part (never at CLASSIC; with the below
+  projection only the units its render reads, see below). The part is then
   queued as waiting: its layers composite bottom-up into a per-tile accumulator, in chunks cut
   only where the compositor can split (`cutAt`), so the result is the plain render bit for bit.
 - Only the current chunk's layers are pinned (`Layer.pin()`); the worker thread
@@ -3928,6 +3929,14 @@ canvas update while no stroke uses Classic's `StrokeBelowCache`.
 - `BelowKey` covers every layer and mask below (identity, `pixelGeneration`, `contentVersion`,
   eye, opacity, blend, clipping, mask switch, parent, folder state), the split, the colour mode
   and safe compositing. Any mismatch drops the whole projection; it is never patched.
+- With the waiting tiles (P4): `DisplayTiles.render` first asks the renderer for its split
+  (`BelowRenderer.prepare`) and checks only what the render reads. A built tile reads only the
+  units from the split up inside the part, so tiles below that P3 swapped never make a stroke
+  frame wait; when those units do need reads, the waiting job starts at the split from a copy of
+  the cache. An unbuilt tile whose units below need reads anywhere in the tile is built by a
+  waiting job: it composites them across the whole tile, the projection adopts that accumulator
+  at the split (`adopt`, when split and key still match), and the job goes on above the split in
+  the part only. Nothing below the split is read on main.
 - At most `min(displayHeld, R / 8)` bytes; registered with `MemoryGovernor` at priority 20, so
   any pressure above NORMAL frees it first (P5).
 - At CLASSIC, `StrokeBelowCache` runs when `EngineConfig.strokeBelowMinLayers` (from the check)
@@ -3942,7 +3951,9 @@ stores and `snapshot()`s:
   Object select, Color select; the canvas and folders through `renderFlattened`);
 - the eyedropper's "This layer", the Content-aware fill layer source, and the Color select and
   Magnetic lasso proxies and samples (`RenderScaled.Source.layer(store)`, `PixelReads.sample`);
-- the text wrap outline: `WrapContours` keys on `pixelGeneration`, so a park keeps its cache;
+- the text wrap outline: `WrapContours` keys on `pixelGeneration`, so a park keeps its cache; a
+  blank store, or an enabled blank mask (transparent: it hides everything), gives the empty
+  outline, as v1.9's transparent bitmaps did; a tiled layer is traced from a transient full copy;
 - the Adjust sheet's histogram: `AdjustmentHistogram.below` composites `snapshot()`s, released
   in `finally`, with masks through `BandAssembler.scaled`.
 - `PixelSnapshot.take(controller, source, bitmap)` stays for its v1.9 callers.
@@ -3968,7 +3979,7 @@ Tests: `test:v110/a9/` (`TiledCompositeGoldenTest`, `BlankSkipExactTest`, `Api28
 `StrokeFrame200TimingTest`, `StrokeFrame100PlainTimingTest`, `BelowRebuildTimingTest`) and
 `test:qa110/Qa110TiledCanvasUiTest`. That UI test runs 200 layers at TILES (parked, then packed
 after an eye toggle) on the canvas, bit-equal to Classic, at 392 and 360 dp and font scale 1,
-1.3 and 2.0.
+1.3 and 2.0, with no text overflowing in either editor.
 
 <!-- /v110-A9 -->
 
