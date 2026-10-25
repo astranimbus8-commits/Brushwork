@@ -213,8 +213,12 @@ class EditorSession(private val app: BrushworkApp, val projectId: String) {
             if (edits == lastSavedEdit) return
             try {
                 Breadcrumbs.add("save:start")
-                val thumb = c.compositor.renderThumbnail(512)
-                app.repository.save(c.doc, thumb)
+                val thumb = thumbnailForSave(c)
+                try {
+                    app.repository.save(c.doc, thumb)
+                } finally {
+                    thumb.recycle()
+                }
                 lastSavedEdit = edits
                 Breadcrumbs.add("save:end")
             } catch (e: kotlinx.coroutines.CancellationException) {
@@ -223,6 +227,20 @@ class EditorSession(private val app: BrushworkApp, val projectId: String) {
                 CrashLog.record(e, "save", fatal = false)
                 c.toast("Autosave failed: ${e.message ?: e.javaClass.simpleName}")
             }
+        }
+    }
+
+    /**
+     * v1.10 (A11, design 2.9, finding 54): the 512 px thumbnail of a save. Main takes only the
+     * snapshots (`SaveThumbnail.take`); the picture is rendered on the save writer (IO) and the
+     * snapshots are let go of back on main. At Classic it is rendered here, as in v1.9.
+     */
+    private suspend fun thumbnailForSave(c: EditorController): android.graphics.Bitmap {
+        val snap = com.brushwork.paint.storage.SaveThumbnail.take(c.doc) ?: return c.compositor.renderThumbnail(512)
+        try {
+            return kotlinx.coroutines.withContext(Dispatchers.IO) { snap.render(512) }
+        } finally {
+            snap.release()
         }
     }
     // endregion

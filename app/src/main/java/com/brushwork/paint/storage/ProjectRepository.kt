@@ -10,10 +10,20 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import android.util.Log
 import com.brushwork.paint.ImageImport
+import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.Compositor
+import com.brushwork.paint.engine.EngineConfig
+import com.brushwork.paint.engine.EngineLevel
 import com.brushwork.paint.engine.LayerBudget
 import com.brushwork.paint.engine.MemoryGovernor
+import com.brushwork.paint.engine.budget.NativePurpose
+import com.brushwork.paint.engine.tiles.FlatPixels
+import com.brushwork.paint.engine.tiles.PixelStore
+import com.brushwork.paint.engine.tiles.Tile
+import com.brushwork.paint.engine.tiles.TileOps
+import com.brushwork.paint.engine.tiles.TiledPixels
 import com.brushwork.paint.model.Document
+import com.brushwork.paint.model.Layer
 import com.brushwork.paint.storage.backup.BackupRestore
 import com.brushwork.paint.storage.backup.BackupService
 import kotlinx.coroutines.CancellationException
@@ -610,5 +620,119 @@ class ProjectRepository(private val context: Context) {
             val s = minOf(1f, ProjectFormat.THUMB_SIZE.toFloat() / max(w, h))
             return max(1, (w * s).roundToInt()) to max(1, (h * s).roundToInt())
         }
+    }
+}
+
+/**
+ * v1.10 (A11, design 2.9, finding 54): the autosave thumbnail, rendered on the save writer instead
+ * of on main. [take] (main) builds a private document that shares nothing mutable with the editor:
+ * each tiled store as a `snapshot()` (copy on write) plus a non-resident pin of its layer (so a
+ * swap or an eviction never takes a tile it reads; nothing is made resident), blank and folder
+ * stores shared (they never change), and each FLAT store copied (above Classic only the active
+ * layer and its mask are FLAT); the copies are admitted as TRANSIENT and hold at most
+ * [MAX_FLAT_LAYERS] layers' worth. [render] (any thread) draws it through a private [Compositor] at
+ * the thumbnail size, materializing an adjustment layer's tiled mask into a bitmap of its own first
+ * (`AdjustmentStage` reads `Layer.mask`, whose facade must never run off main). Tiles are drawn by
+ * the compositor's F1 band path; A9's `BandAssembler` serves them underneath once it lands, with
+ * no change here. [release] (main) lets go of everything. At Classic, where every layer is FLAT,
+ * or when more of the document is FLAT than the copies may hold, [take] returns null and the
+ * caller renders on main, as v1.9 did.
+ */
+internal class SaveThumbnail private constructor(
+    private val doc: Document,
+    private val pins: List<Pair<Layer, List<Tile>>>,
+    private val transient: Long,
+) {
+    /** The tiled masks [render] replaced by bitmaps; released with the rest. */
+    private val replaced = ArrayList<TiledPixels>()
+    private var released = false
+
+    /** The thumbnail, [maxSize] px on its longer side, as `Compositor.renderThumbnail` draws it. Any thread; the caller owns it. */
+    fun render(maxSize: Int): Bitmap {
+        renderThread = Thread.currentThread()
+        for (v in doc.layers) {
+            val m = v.maskPixels
+            if (v.isAdjustmentLayer && m is TiledPixels) {
+                v.maskPixels = FlatPixels(TileOps.materialize(m))
+                replaced += m
+            }
+        }
+        return Compositor(doc) { null }.renderThumbnail(maxSize)
+    }
+
+    /** Lets go of the snapshots, the pins, the copies and their admission. Main only; once. */
+    fun release() {
+        if (released) return
+        released = true
+        for ((layer, held) in pins) TileOps.unpin(layer, held)
+        for (v in doc.layers) v.recycleBitmaps()
+        for (s in replaced) TileOps.releaseStore(s)
+        if (transient > 0L) EngineConfig.budget.release(transient, NativePurpose.TRANSIENT)
+    }
+
+    companion object {
+        /** The FLAT layers (content or mask) a thumbnail copies at most; more renders on main. */
+        const val MAX_FLAT_LAYERS = 2
+
+        /** Test seam: the thread the last [render] ran on (`AutosaveNoInflateOnMainTest`). */
+        @Volatile
+        internal var renderThread: Thread? = null
+
+        /** The private document of [source] (main), or null to render on main (Classic, or too much of it FLAT, or the copies refused). */
+        fun take(source: Document): SaveThumbnail? {
+            if (EngineConfig.level == EngineLevel.CLASSIC || source.layers.isEmpty()) return null
+            var flat = 0
+            for (l in source.layers) {
+                if (l.pixels is FlatPixels && !l.isFolder) flat++
+                if (l.maskPixels is FlatPixels) flat++
+            }
+            if (flat > MAX_FLAT_LAYERS) return null
+            val transient = flat * source.layerBytes
+            val budget = EngineConfig.budget
+            if (transient > 0L && !budget.admitNative(transient, NativePurpose.TRANSIENT)) return null
+            val view = Document(source.id, source.name, source.width, source.height, source.dpi)
+            view.colorMode = source.colorMode
+            view.paper = source.paper
+            val pins = ArrayList<Pair<Layer, List<Tile>>>()
+            val made = SaveThumbnail(view, pins, transient)
+            try {
+                for (l in source.layers) {
+                    if (l.pixels is TiledPixels || l.maskPixels is TiledPixels) pins += l to TileOps.pin(l, resident = false)
+                    view.layers += viewOf(l)
+                }
+            } catch (e: Throwable) {
+                made.release()
+                throw e
+            }
+            return made
+        }
+
+        /** A private layer of [l]: its properties and tree place, with stores the editor never changes. */
+        private fun viewOf(l: Layer): Layer {
+            val v = Layer(l.id, l.name, privateStore(l.pixels))
+            v.copyPropsFrom(l.props())
+            v.parentId = l.parentId
+            v.folder = l.folder
+            v.adjustment = l.adjustment
+            v.maskSpec = l.maskSpec
+            l.maskPixels?.let { v.maskPixels = privateStore(it) }
+            return v
+        }
+
+        private fun privateStore(p: PixelStore): PixelStore = when (p) {
+            is TiledPixels -> p.snapshot()
+            is FlatPixels -> FlatPixels(copyOf(p))
+            else -> p
+        }
+
+        /** A copy of one FLAT store (the active layer or its mask). */
+        private fun copyOf(p: FlatPixels): Bitmap {
+            val src = p.bitmap // I28: one layer
+            val out = BitmapUtils.createLayerBitmap(src.width, src.height)
+            Canvas(out).drawBitmap(src, 0f, 0f, COPY)
+            return out
+        }
+
+        private val COPY = Paint().apply { xfermode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.SRC) }
     }
 }
