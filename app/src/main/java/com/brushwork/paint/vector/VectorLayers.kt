@@ -409,7 +409,15 @@ class VectorLayers internal constructor(private val c: EditorController) {
      * landed ([onReady] runs later): the main thread never waits for the worker here (the
      * Transform tool lifts again right after a commit, and on activation).
      */
-    fun beginEdit(layer: Layer, ids: Set<Long>, onReady: (VectorEditSession?) -> Unit) {
+    fun beginEdit(layer: Layer, ids: Set<Long>, onReady: (VectorEditSession?) -> Unit) = beginEdit(layer, ids, -1, onReady)
+
+    /**
+     * v1.10 (R1): copy [side] of the one object [ids] names, edited alone (a mirror side the
+     * Transform tool lifts): [beginEdit] where the floating bitmap is that copy and the hole shows
+     * the object without it (`CopyEdit.dropCopy`), so the other sides stay in place while it
+     * moves. [side] -1, several ids or an object without that copy: [beginEdit] as in v1.9.
+     */
+    fun beginEdit(layer: Layer, ids: Set<Long>, side: Int, onReady: (VectorEditSession?) -> Unit) {
         if (disposed) { onReady(null); return }
         preparing?.let { old -> cancelPreparing(old) }
         val p = pending
@@ -426,12 +434,20 @@ class VectorLayers internal constructor(private val c: EditorController) {
                 if (preparing === prep) preparing = null
                 updateRendering()
                 // Another render may have started meanwhile: then this waits for it too.
-                beginEdit(layer, ids, onReady)
+                beginEdit(layer, ids, side, onReady)
             }
             return
         }
+        // (Read by planEdit, also when a background preparation starts over.)
+        editSide = if (side >= 0 && ids.size == 1) EditSide(ids.first(), side) else null
         beginEditAttempt(layer, ids, onReady, 0)
     }
+
+    /** v1.10 (R1): copy [k] of object [id], the side the edit being prepared shows alone (see [beginEdit]). */
+    private class EditSide(val id: Long, val k: Int)
+
+    /** The side of the edit being prepared, or null for whole objects. */
+    private var editSide: EditSide? = null
     // endregion
 
     private fun cancelPreparing(p: PreparingEdit) {
@@ -564,13 +580,20 @@ class VectorLayers internal constructor(private val c: EditorController) {
      */
     private fun planEdit(content: VectorContent, present: Set<Long>, array: LayerArray?): EditPlan {
         val index = ObjectIndex.of(content)
-        val edited = content.objects.filter { it.id in present }
-        val all = present.size == content.objects.size && array == null
+        // v1.10 (R1): one side of a mirrored object edited alone: that copy floats, and the hole
+        // shows the object without it (its other sides stay where they are).
+        val side = editSide?.takeIf { s -> present.size == 1 && s.id in present }
+        val sideOf = side?.let { content.byId(it.id) }
+        val sideCopy = if (side != null && sideOf != null) com.brushwork.paint.vector.copies.CopyPick.side(sideOf, side.k) else null
+        val sideRest = if (side != null && sideOf != null && sideCopy != null) com.brushwork.paint.vector.copies.CopyEdit.dropCopy(sideOf, side.k) else null
+        val edited = if (sideCopy != null && sideRest != null) listOf(sideCopy) else content.objects.filter { it.id in present }
+        val all = sideRest == null && present.size == content.objects.size && array == null
         val docW = c.doc.width
         val docH = c.doc.height
         // The edited objects' box, kept within a document's size around the canvas.
         val union = RectF()
-        for ((i, o) in content.objects.withIndex()) if (o.id in present) { val b = index.bounds(i); if (!b.isEmpty) union.union(b) }
+        if (sideCopy != null && sideRest != null) union.set(VectorOps.bounds(sideCopy))
+        else for ((i, o) in content.objects.withIndex()) if (o.id in present) { val b = index.bounds(i); if (!b.isEmpty) union.union(b) }
         val floatingRect = roundOut(union)
         if (!floatingRect.intersect(-docW, -docH, 2 * docW, 2 * docH)) floatingRect.setEmpty()
         // On the renderer's tile grid, so the other objects re-rendered there are exactly the cache's pixels.
@@ -598,8 +621,11 @@ class VectorLayers internal constructor(private val c: EditorController) {
             val b = index.bounds(i)
             !b.isEmpty && !(b.left >= 0f && b.top >= 0f && b.right <= docW && b.bottom <= docH)
         }
+        // (A side: the object stays in the hole without that copy; on an arrayed layer its
+        // layer-array copies stay in place, as v1.9's do.)
+        val others = if (sideRest != null) view(content, array).replaced(mapOf(sideRest.id to listOf(sideRest))) else view(content, array).without(present)
         return EditPlan(
-            present, edited, view(content, array).without(present), all, floatingRect, holeRect, fScale, hScale,
+            present, edited, others, all, floatingRect, holeRect, fScale, hScale,
             overflow = VectorContent(objects = overflow),
             overflowBands = if (overflow.isEmpty()) emptyList() else outside(floatingRect, docRect),
             // On the canvas, dabs are cut at the document exactly as in the cache; past it they

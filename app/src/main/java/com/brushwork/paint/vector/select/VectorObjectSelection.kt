@@ -124,10 +124,26 @@ object VectorObjectSelection {
     private var dashDensity = 0f
 
     // region v110-A1 overlay
+    /** v1.10 (R1): the one faint box around every copy of an object one side of which is lifted (accent at 35 %, 1 dp, 4/4 dp dashes). */
+    private val faint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; color = (ACCENT and 0x00FFFFFF) or (0x59 shl 24) }
+    private var faintDensity = 0f
+    private val faintPath = Path()
+    private val faintRect = RectF()
+
+    /** The object one side of which is lifted (weak: this object outlives editors), that side, its box and its other sides' box. */
+    private var sideOf: java.lang.ref.WeakReference<VObject>? = null
+    private var sideK = -1
+    private val sideBox = RectF()
+    private val restBox = RectF()
+
     /**
      * Dashed boxes around the selected objects of the active layer (screen space; [t] maps
      * document -> screen), plus their common box while the Transform tool is not active (it
      * draws its own). While the Transform tool moves the lifted objects, their boxes follow.
+     *
+     * v1.10 (R1): while one side (copy k) of a mirrored object is lifted, that object's box is
+     * the side's, following the transform, and one faint dashed box surrounds every copy (the
+     * moved side included). It is not a touch target, and there is never a box per copy.
      */
     fun drawOverlay(c: EditorController, canvas: Canvas, t: ViewTransform) {
         val v = c.vectors
@@ -142,12 +158,14 @@ object VectorObjectSelection {
         var m: FloatArray? = null
         var lifted: Set<Long> = emptySet()
         var gone = false
+        var side = -1
         if (transformActive) {
             val st = (c.tools[ToolId.TRANSFORM] as? TransformTool)?.transformState
             val lift = VectorLift.activeLift(c)
             if (st != null && lift != null && lift.layer === layer) {
                 m = LiftGeometry.matrix(st, lift.sourceRect.left, lift.sourceRect.top)
                 lifted = lift.ids
+                side = lift.side
             }
         }
         if (lifted.isEmpty()) {
@@ -156,34 +174,41 @@ object VectorObjectSelection {
                 lifted = landing.ids
                 m = landing.landingMatrix
                 gone = m == null
+                side = landing.side
             }
         }
         boxPath.rewind()
         unionPath.rewind()
         unionRect.setEmpty()
+        faintRect.setEmpty()
         var count = 0
         for (o in content.objects) if (o.id in ids) count++
         val each = count <= MAX_BOXES
         for (o in content.objects) {
             if (o.id !in ids) continue
             if (gone && o.id in lifted) continue
-            val b = ObjectBounds.of(content, o)
+            // A side lifted alone: its own box goes where the transform puts it.
+            val sideLifted = side >= 0 && o.id in lifted
+            val b = if (sideLifted) sideBounds(o, side) else ObjectBounds.of(content, o)
             if (b.isEmpty) continue
             val mm = if (o.id in lifted) m else null
             if (mm == null) {
                 unionRect.union(b)
                 if (each) boxPath.addRect(b, Path.Direction.CW)
+                if (sideLifted) { faintRect.set(restBox); faintRect.union(b) }
             } else {
                 val q = arrayOf(
                     LiftGeometry.map(mm, b.left, b.top), LiftGeometry.map(mm, b.right, b.top),
                     LiftGeometry.map(mm, b.right, b.bottom), LiftGeometry.map(mm, b.left, b.bottom),
                 )
                 // (RectF.union(x, y) would also take in the origin of an empty rect.)
-                unionRect.union(
-                    minOf(q[0].x, q[1].x, q[2].x, q[3].x), minOf(q[0].y, q[1].y, q[2].y, q[3].y),
-                    maxOf(q[0].x, q[1].x, q[2].x, q[3].x), maxOf(q[0].y, q[1].y, q[2].y, q[3].y),
-                )
+                val l = minOf(q[0].x, q[1].x, q[2].x, q[3].x)
+                val tp = minOf(q[0].y, q[1].y, q[2].y, q[3].y)
+                val r = maxOf(q[0].x, q[1].x, q[2].x, q[3].x)
+                val bt = maxOf(q[0].y, q[1].y, q[2].y, q[3].y)
+                unionRect.union(l, tp, r, bt)
                 if (each) addQuad(boxPath, q)
+                if (sideLifted) { faintRect.set(restBox); faintRect.union(l, tp, r, bt) }
             }
         }
         if (unionRect.isEmpty && boxPath.isEmpty) return
@@ -193,6 +218,17 @@ object VectorObjectSelection {
             canvas.drawPath(screenPath, shadow)
             canvas.drawPath(screenPath, dashed)
         }
+        if (!faintRect.isEmpty) {
+            if (faintDensity != t.density) {
+                faintDensity = t.density
+                faint.pathEffect = DashPathEffect(floatArrayOf(t.dp(4f), t.dp(4f)), 0f)
+            }
+            faint.strokeWidth = t.dp(1f)
+            faintPath.rewind()
+            faintPath.addRect(faintRect, Path.Direction.CW)
+            faintPath.transform(t.matrix, screenPath)
+            canvas.drawPath(screenPath, faint)
+        }
         // The common box: when the Transform tool isn't there to show it, or instead of too many boxes.
         if ((!transformActive && count > 1) || !each) {
             unionPath.addRect(unionRect, Path.Direction.CW)
@@ -200,6 +236,25 @@ object VectorObjectSelection {
             canvas.drawPath(screenPath, shadow)
             canvas.drawPath(screenPath, solid)
         }
+    }
+
+    /**
+     * Copy [k]'s box of [o] (document px), with [restBox] set to the box of its other copies
+     * (their source box mapped by each map: cheap at 256 copies); kept while [o] and [k] stay.
+     */
+    private fun sideBounds(o: VObject, k: Int): RectF {
+        if (sideOf?.get() !== o || sideK != k) {
+            sideOf = java.lang.ref.WeakReference(o)
+            sideK = k
+            sideBox.set(com.brushwork.paint.vector.copies.CopyPick.boundsOf(o, k))
+            restBox.setEmpty()
+            val copies = com.brushwork.paint.vector.ObjectCopies.of(o)
+            if (!copies.isEmpty) {
+                val src = com.brushwork.paint.vector.VectorOps.bounds(com.brushwork.paint.vector.ObjectCopies.source(o))
+                for ((j, r) in com.brushwork.paint.vector.ObjectCopies.eachBounds(src, copies).withIndex()) if (j != k && !r.isEmpty) restBox.union(r)
+            }
+        }
+        return sideBox
     }
     // endregion
 

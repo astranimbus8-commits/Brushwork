@@ -23,6 +23,7 @@ import com.brushwork.paint.tools.vector.ShapeTransforms
 import com.brushwork.paint.vector.VShape
 import com.brushwork.paint.vector.VectorContent
 import com.brushwork.paint.vector.VectorOps
+import com.brushwork.paint.vector.convert.LegacyShapes
 import com.brushwork.paint.vector.geom.ObjectIndex
 import com.brushwork.paint.vector.lift.LiftGeometry
 import com.brushwork.paint.vector.render.VectorLayerRenderer
@@ -307,6 +308,14 @@ internal class DataLiftProvider(private val c: EditorController, private val map
     // endregion
 
     override fun tapped(p: Vec2): Boolean = false
+
+    /**
+     * v1.10 (R1 (a)): on a legacy shape layer with live copies a tap on the shape picks the side
+     * under the finger (`LegacyShapes.tap`: the layer is converted in place, held until ✓);
+     * otherwise as v1.7.
+     */
+    override fun tap(p: Vec2, inside: Boolean, moved: Boolean): Boolean =
+        LegacyShapes.tap(c, p, moved, TransformTool.TRANSFORM_OBJECTS_LABEL) || (!inside && tapped(p))
 
     override fun liftBox(layer: Layer): RectF? = DataRender.paintBounds(layer.dataSnapshot())?.takeIf { !it.isEmpty }
 }

@@ -23,6 +23,7 @@ import androidx.compose.ui.unit.dp
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.model.SymmetryType
 import com.brushwork.paint.ui.common.ChoiceChips
+import com.brushwork.paint.ui.common.MirrorLabels110
 import com.brushwork.paint.ui.common.SectionHeader
 import com.brushwork.paint.ui.common.SymmetryLabels
 import com.brushwork.paint.ui.theme.BrushworkColors
@@ -44,7 +45,7 @@ fun SymmetryRulerSection(controller: EditorController, onEditOnCanvas: () -> Uni
         onSelect = { i -> SymmetryUi.update(controller) { it.copy(type = SymmetryType.entries[i]) } },
     )
     Text(
-        hint(s.type),
+        symmetryRulerHint(s.type),
         style = MaterialTheme.typography.bodySmall,
         color = BrushworkColors.OnChromeDim,
         modifier = Modifier.padding(top = 4.dp, bottom = 2.dp),
@@ -72,12 +73,17 @@ fun SymmetryRulerSection(controller: EditorController, onEditOnCanvas: () -> Uni
     }
 }
 
-/** What the chosen symmetry ruler does (one line under the chips). */
-private fun hint(type: SymmetryType): String = when (type) {
+/**
+ * What the chosen symmetry ruler does (the subtitle under the chips). v1.10 (R1 (a), J19): the
+ * Perspective array's subtitle also says that its copies are separate objects
+ * ([MirrorLabels110.PERSPECTIVE_SEPARATE]): they are baked, so Transform picks and moves each
+ * one on its own, unlike the linked sides of the other rulers.
+ */
+internal fun symmetryRulerHint(type: SymmetryType): String = when (type) {
     SymmetryType.OFF -> "Brush strokes are repeated by a symmetry ruler: mirrored, turned or tiled."
     SymmetryType.MIRROR -> "Every brush stroke is mirrored across the axis."
     SymmetryType.KALEIDOSCOPE -> "Every brush stroke is turned around the centre and mirrored, like a kaleidoscope."
     SymmetryType.ROTATION -> "Every brush stroke is turned around the centre."
     SymmetryType.ARRAY -> "Every brush stroke repeats in each cell of the grid."
-    SymmetryType.PERSPECTIVE_ARRAY -> "Every brush stroke repeats in each cell of a grid in perspective."
+    SymmetryType.PERSPECTIVE_ARRAY -> "Every brush stroke repeats in each cell of a grid in perspective. " + MirrorLabels110.PERSPECTIVE_SEPARATE
 }

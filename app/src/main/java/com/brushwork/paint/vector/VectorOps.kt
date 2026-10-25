@@ -28,6 +28,7 @@ import com.brushwork.paint.tools.vector.ShapeOutlines
 import com.brushwork.paint.tools.vector.ShapeType
 import com.brushwork.paint.tools.vector.VectorPath
 import com.brushwork.paint.tools.vector.toAndroidPath
+import com.brushwork.paint.vector.copies.CopyPick
 import com.brushwork.paint.vector.geom.ObjectIndex
 import com.brushwork.paint.vector.geom.ObjectMapping
 import com.brushwork.paint.vector.geom.ShapeAffine
@@ -78,18 +79,27 @@ object VectorOps {
     }
 
     /** True when [p] is on [o]: strokes within radius + [tol] of their polyline, filled paths inside. */
-    fun hit(o: VObject, p: Vec2, tol: Float): Boolean {
+    fun hit(o: VObject, p: Vec2, tol: Float): Boolean = hitCopy(o, p, tol) >= 0
+
+    /**
+     * v1.10 (R1): which copy of [o] is on top at [p] within [tol] (the highest k, see
+     * [CopyPick.hitCopy]), -1 when [o] is missed. An object without live copies and a stroke (its
+     * v1.7 copies are one object) are hit as one: 0. [skip] leaves copy k out (a lifted side).
+     */
+    fun hitCopy(o: VObject, p: Vec2, tol: Float, skip: Int = -1): Int {
         val t = if (tol.isFinite()) max(0f, tol) else 0f
         val b = bounds(o)
         if (!b.isEmpty && !(p.x >= b.left - t && p.x <= b.right + t && p.y >= b.top - t && p.y <= b.bottom + t)) {
             // (An invisible path has control bounds only: still tested below.)
-            if (!(o is VPath && o.fill == null && o.stroke == null)) return false
+            if (!(o is VPath && o.fill == null && o.stroke == null)) return -1
         }
         return when (o) {
-            is VStroke -> strokeHit(o, p, t)
+            is VStroke -> if (skip != 0 && strokeHit(o, p, t)) 0 else -1
             // v1.8 (I17): copies are hit by mapping the point back onto the source.
-            is VPath -> if (o.copies.isEmpty) pathHit(o, p, t) else ObjectCopies.hits(o.copies, p, t) { q, tt -> pathHit(o, q, tt) }
-            is VShape -> ObjectCopies.hits(o.shape, p, t)
+            is VPath ->
+                if (o.copies.isEmpty) { if (skip != 0 && pathHit(o, p, t)) 0 else -1 }
+                else CopyPick.hitCopy(o.copies, p, t, skip) { q, tt -> pathHit(o, q, tt) }
+            is VShape -> ObjectCopies.hitCopy(o.shape, p, t, skip)
         }
     }
 

@@ -37,6 +37,8 @@ import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.IncrementKind
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.Selection
+import com.brushwork.paint.tools.DeletingTool
+import com.brushwork.paint.tools.ObjectDeletion
 import com.brushwork.paint.tools.ObjectPosition
 import com.brushwork.paint.tools.ObjectScale
 import com.brushwork.paint.tools.PillPositionTool
@@ -50,8 +52,14 @@ import com.brushwork.paint.tools.points.PointGizmo
 import com.brushwork.paint.tools.points.PointGroupMath
 import com.brushwork.paint.tools.points.PointSelection
 import com.brushwork.paint.ui.common.ArrayLabels
+import com.brushwork.paint.ui.common.MirrorLabels110
 import com.brushwork.paint.ui.common.TransformLabels17
 import com.brushwork.paint.vector.VectorLayerOps
+import com.brushwork.paint.vector.convert.LegacyShapes
+import com.brushwork.paint.vector.lift.CopyLift
+import com.brushwork.paint.vector.lift.VectorLift
+import com.brushwork.paint.vector.lift.VectorLiftProvider
+import com.brushwork.paint.vector.lift.VectorObjectLift
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -95,7 +103,7 @@ import kotlin.math.min
  * over the step. While a gesture is stepped `increments.readout` says where it is ("+30 px, 0
  * px", "120 %", "45°"). Typed values are never stepped.
  */
-class TransformTool(controller: EditorController) : Tool(controller), PointEditor, PillPositionTool, ScaledTool {
+class TransformTool(controller: EditorController) : Tool(controller), PointEditor, PillPositionTool, ScaledTool, DeletingTool {
     override val id = ToolId.TRANSFORM
 
     /** v1.7 (§3.16): [MESH] is "Free deform", a mesh of up to 12 x 12 cells over the lifted pixels. */
@@ -122,6 +130,8 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
     var mode: Mode
         get() = modeState
         set(v) {
+            // v1.10 (LA4): one mirror side picked: Distort / Free deform would resize it.
+            if (v != modeState && sidePicked && v != Mode.FREE) { sideResizeBlocked(); return }
             if (v == modeState || modeRefusal(v) != null) return
             if (gesture != null || pinch != null || meshGesture != null || meshPinch != null) return
             val s = liveSession()
@@ -251,8 +261,42 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
     var uniformOnly by mutableStateOf(false)
         private set
 
-    /** The side handles are drawn and can be dragged. */
-    val sideHandlesShown: Boolean get() = !uniformOnly
+    /**
+     * v1.10 (R1, LA4: the user's answer "Block resizing"): one side of a mirrored object is
+     * lifted alone (a `CopyLift`): it can be moved, turned and flipped only. The box has no scale
+     * handles, the Scale row is hidden ([objectScale] null) and Distort / Free deform, the sizes
+     * and Fit to canvas are refused with `MirrorLabels110.SIDE_RESIZE_BLOCKED` (a toast once per
+     * pick, also shown when a drag starts at a box corner).
+     */
+    var sidePicked by mutableStateOf(false)
+        private set
+
+    /** The side pick `MirrorLabels110.SIDE_RESIZE_BLOCKED` was shown for (once per pick). */
+    private var resizeToastFor: Any? = null
+
+    /** v1.10 (LA4): a resize of the picked side was tried: the toast, once per pick. */
+    private fun sideResizeBlocked() {
+        val pick = (session?.objectProvider as? VectorLiftProvider)?.sidePick ?: session?.objectLift
+        if (pick != null && pick === resizeToastFor) return
+        resizeToastFor = pick
+        controller.toast(MirrorLabels110.SIDE_RESIZE_BLOCKED)
+    }
+
+    /**
+     * v1.10 (R1): the pill's trash cell, only while one mirror side is picked ([sidePicked]): it is
+     * named `MirrorLabels110.DELETE_SIDE` and deletes that side ([deleteContent], one step). Null
+     * otherwise: as in v1.7, Transform has no pill trash (the strip's Delete stays).
+     */
+    override val objectDeletion: ObjectDeletion? get() = if (sidePicked) sideDeletion else null
+
+    private val sideDeletion = object : ObjectDeletion {
+        override val deleteLabel: String get() = MirrorLabels110.DELETE_SIDE
+
+        override fun delete() { deleteContent() }
+    }
+
+    /** The side handles are drawn and can be dragged (v1.10: not while one mirror side is picked). */
+    val sideHandlesShown: Boolean get() = !uniformOnly && !sidePicked
 
     /** The flips are offered. */
     val flipsAllowed: Boolean get() = !uniformOnly
@@ -263,8 +307,11 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
      * apply it, and a folder is refused. Free deform works on pixels only: a text, shape or
      * vector layer asks to rasterize first, an array to apply it, and a folder is refused with
      * "Free deform works on one layer".
+     *
+     * v1.10 (R1, LA4): while one mirror side is picked ([sidePicked]) both are refused with
+     * `MirrorLabels110.SIDE_RESIZE_BLOCKED` (they would resize it); all sides take them as before.
      */
-    fun modeRefusal(m: Mode): String? = when (m) {
+    fun modeRefusal(m: Mode): String? = if (sidePicked && m != Mode.FREE) MirrorLabels110.SIDE_RESIZE_BLOCKED else when (m) {
         Mode.FREE -> null
         Mode.DISTORT -> when (lifted) {
             Lifted.TEXT, Lifted.SHAPE -> TransformLabels17.RASTERIZE_TO_DEFORM
@@ -281,7 +328,7 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
     }
 
     /** True when [m] is refused only until the layer is rasterized ([rasterizeAndDeform] offers it). */
-    fun canRasterizeFor(m: Mode): Boolean = modeRefusal(m) != null && lifted in RASTERIZABLE
+    fun canRasterizeFor(m: Mode): Boolean = modeRefusal(m) != null && lifted in RASTERIZABLE && !sidePicked
 
     /**
      * "Rasterize and deform" (v1.7, design §3.11): applies the pending transform (its own step,
@@ -593,11 +640,15 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
     override fun onDeactivate() {
         cancelJobs()
         showReadout(null)
-        if (hasPendingWork) commit()
+        // v1.10 (R1): a side move the copy limits refuse is dropped here (✓ keeps it lifted).
+        if (hasPendingWork) session?.let { applyPending(it, moveSelection = true) }
         // v1.7 (§3.1): "Select several" turns itself off when the tool closes.
         selectSeveral = false
         // Nothing to snap until the next transform (what is known stays cached).
         controller.snapping.cancel()
+        // v1.10 (R1): the next tap starts a new cycle, and no mirror side stays picked.
+        VectorLift.toolLeft(controller)
+        LegacyShapes.release(controller, null)
     }
 
     override fun onDispose() {
@@ -701,7 +752,7 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
     override fun commit() {
         cancelJobs()
         val s = session ?: return
-        applyPending(s, moveSelection = true)
+        applyPending(s, moveSelection = true, keepRefused = true)
     }
 
     override fun discard() {
@@ -712,7 +763,15 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
 
     // ------------------------------------------------------------------ input
 
-    private class Gesture(val hit: HandleHit, val start: TransformState, val from: Vec2, val pivot: Vec2, val rotateEdge: Int) {
+    private class Gesture(
+        val hit: HandleHit,
+        val start: TransformState,
+        val from: Vec2,
+        val pivot: Vec2,
+        val rotateEdge: Int,
+        /** v1.10 (LA4): it went down on a corner of a picked side (no handle there: it moves the side). */
+        val sideCorner: Boolean = false,
+    ) {
         /** What the box snaps to during this gesture (built on the first move; rebuilt when layer bounds arrive). */
         var targets: SnapTargets? = null
         var targetsVersion = -1
@@ -741,8 +800,12 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
         val st = transformState ?: return
         val t = controller.viewTransform
         val layout = HandleLayout.compute(st, { t.docToScreen(it) }, t.density, sides = sideHandlesShown)
-        val hit = layout.hitTest(t.docToScreen(Vec2(p.x, p.y)))
-        gesture = Gesture(hit, st, Vec2(p.x, p.y), st.center(), layout.rotateEdge)
+        val found = layout.hitTest(t.docToScreen(Vec2(p.x, p.y)))
+        // v1.10 (LA4): one mirror side picked: no corner handle is drawn, so none is hit (a drag
+        // there moves it, and once it drags the toast says why it does not resize).
+        val sideCorner = sidePicked && found.kind == HandleKind.CORNER
+        val hit = if (sideCorner) HandleHit(HandleKind.MOVE) else found
+        gesture = Gesture(hit, st, Vec2(p.x, p.y), st.center(), layout.rotateEdge, sideCorner)
         session?.let { if (snapToObjects && hit.kind != HandleKind.ROTATE) requestSnapBounds(it) }
         controller.invalidateOverlay()
     }
@@ -757,7 +820,10 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
         val distort = mode == Mode.DISTORT
         if (!g.dragging) {
             val t = controller.viewTransform
-            if (t.docToScreen(to).distanceTo(t.docToScreen(g.from)) > t.dp(SNAP_SLOP_DP)) g.dragging = true
+            if (t.docToScreen(to).distanceTo(t.docToScreen(g.from)) > t.dp(SNAP_SLOP_DP)) {
+                g.dragging = true
+                if (g.sideCorner) sideResizeBlocked()
+            }
         }
         // Every frame snaps what the finger alone gives (never the last snapped state), so
         // moving farther than the snap distance lets go of a guide.
@@ -914,8 +980,18 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
             // never moves them, and the pending transform is applied as it was before the tap.
             if (transformState != g.start) applyState(g.start)
             if (taken) {
-                applyPending(s0, moveSelection = false)
+                // v1.10 (R1): the tap picked another side of a legacy shape layer whose conversion
+                // is held: the conversion stays held for that side's lift (not the shape layer's
+                // data lift of all sides), and is given back when no lift follows.
+                val repick = (provider as? VectorLiftProvider)?.sidePick?.layer === s0.layer && LegacyShapes.isHeld(controller, s0.layer)
+                keepHeldFor = if (repick) s0.layer else null
+                try {
+                    applyPending(s0, moveSelection = false)
+                } finally {
+                    keepHeldFor = null
+                }
                 if (session == null) beginLift()
+                if (repick && session == null && !objectLiftPending && liftJob == null) LegacyShapes.release(controller, s0.layer)
             }
             controller.invalidateOverlay()
             return
@@ -924,6 +1000,8 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
         gesture = null
         clearGuides()
         showReadout(null)
+        // v1.10 (R1): a drag or handle gesture came in between: the next tap starts a new cycle.
+        VectorLift.gestureEnded(controller)
         transformState?.let { st ->
             // A guide the box snapped to keeps it exactly there, and so does a mere tap (a scaled
             // box aligned to a guide earlier must not be nudged off it); a drag settles on whole
@@ -940,6 +1018,7 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
         gesture = null
         clearGuides()
         showReadout(null)
+        VectorLift.gestureEnded(controller)
         if (session != null && transformState != g.start) applyState(g.start)
         controller.invalidateOverlay()
     }
@@ -1250,6 +1329,8 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
     override fun onTwoFingerEnd(cancelled: Boolean) {
         meshPinch?.let { meshPinchEnd(it, cancelled); return }
         val p = pinch ?: return
+        // v1.10 (R1): a pinch came in between: the next tap starts a new cycle.
+        VectorLift.gestureEnded(controller)
         if (p.start == null) {
             // Still lifting: a finished pinch is applied when the content lands.
             if (cancelled || (liftJob == null && !objectLiftPending)) pinch = null else p.ended = true
@@ -1263,12 +1344,16 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
         if (liveSession() == null) { pinch = null; return }
         // v1.6 increments: the scale on the Scale step (percent of the original), the angle on the Angle step.
         val inc = controller.increments
-        val scaleStep = inc.step(IncrementKind.SCALE)
+        // v1.10 (R1, J18): one mirror side picked: two fingers move and turn it only (the scale
+        // stays 1.0, so a turning pinch never resizes the side and it stays linked).
+        val side = sidePicked
+        val scale = if (side) 1f else p.scale
+        val scaleStep = if (side) null else inc.step(IncrementKind.SCALE)
         val angleStep = inc.step(IncrementKind.ANGLE)
         val next = if (scaleStep == null && angleStep == null) {
-            TransformHandles.pinch(start, p.focus, p.translation, p.scale, p.rotationDeg)
+            TransformHandles.pinch(start, p.focus, p.translation, scale, p.rotationDeg)
         } else {
-            TransformHandles.pinchStepped(start, p.focus, p.translation, p.scale, p.rotationDeg, scaleStep, angleStep).also { st ->
+            TransformHandles.pinchStepped(start, p.focus, p.translation, scale, p.rotationDeg, scaleStep, angleStep).also { st ->
                 showReadout(listOfNotNull(scaleStep?.let { IncrementReadout.percent(st.scalePercent) }, angleStep?.let { IncrementReadout.angle(st.rotationDeg) }).joinToString(" · "))
             }
         }
@@ -1428,6 +1513,7 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
         val w = width?.takeIf { it.isFinite() }
         val h = height?.takeIf { it.isFinite() }
         if (w == null && h == null) return
+        if (sidePicked) { sideResizeBlocked(); return }
         val kind = when {
             w != null && h != null -> NumericKind.SIZE
             w != null -> NumericKind.WIDTH
@@ -1443,7 +1529,9 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
 
     /** Sets a uniform scale relative to the original size (100 = original), keeping the [anchor] point in place. */
     fun setScalePercent(percent: Double) {
-        if (percent.isFinite()) numeric(NumericKind.SCALE) { e -> e.start.withScalePercentAbout(e.pivot, percent.toFloat()) }
+        if (!percent.isFinite()) return
+        if (sidePicked) { sideResizeBlocked(); return }
+        numeric(NumericKind.SCALE) { e -> e.start.withScalePercentAbout(e.pivot, percent.toFloat()) }
     }
 
     /**
@@ -1496,7 +1584,9 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
             return false
         }
         s.objectLift?.let { lift ->
-            val deleted = lift.delete(DELETE_LABEL)
+            // v1.10 (R1): one mirror side picked: only that side goes, as one step MirrorLabels110.DELETE_SIDE.
+            val label = if (lift is CopyLift) MirrorLabels110.DELETE_SIDE else DELETE_LABEL
+            val deleted = LegacyShapes.fold(controller, layer, label) { lift.delete(label) }
             endSession(s)
             return deleted
         }
@@ -1560,8 +1650,14 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
         update { s.initial }
     }
 
-    /** Scales uniformly to fit the canvas, centered, straightened (flips are kept). */
-    fun fitToCanvas() = update { it.fittedTo(controller.doc.width, controller.doc.height) }
+    /**
+     * Scales uniformly to fit the canvas, centered, straightened (flips are kept). v1.10 (LA4):
+     * refused while one mirror side is picked (it would resize that side alone).
+     */
+    fun fitToCanvas() {
+        if (sidePicked) { sideResizeBlocked(); return }
+        update { it.fittedTo(controller.doc.width, controller.doc.height) }
+    }
 
     /**
      * Applies a command to the pending transform (not while a finger is moving it). Anything but
@@ -1624,7 +1720,7 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
      * with none selected) as it was when the selection was taken, about that box's centre; one
      * vertex has nothing to scale (null).
      */
-    override val objectScale: ObjectScale? get() = if (transformState != null) transformScale else null
+    override val objectScale: ObjectScale? get() = if (transformState != null && !sidePicked) transformScale else null
 
     private val transformScale = object : ObjectScale {
         override val scalePercent: Vec2?
@@ -1662,6 +1758,7 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
      */
     private fun setBoxScale(xPercent: Float?, yPercent: Float?) {
         val ref = session?.initial ?: return
+        if (sidePicked) { sideResizeBlocked(); return }
         var x = xPercent?.takeIf { it.isFinite() && it > 0f }
         var y = yPercent?.takeIf { it.isFinite() && it > 0f }
         if (uniformOnly) {
@@ -2650,6 +2747,10 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
             is FolderLift -> l.uniformOnly
             else -> false
         }
+        // v1.10 (R1, LA4): one mirror side lifted alone: moved, turned and flipped only.
+        sidePicked = ((s.objectLift as? VectorObjectLift)?.side ?: -1) >= 0
+        // v1.10 (R1): a legacy shape layer converted for a side pick is kept only for its own lift.
+        if (s.objectLift !is VectorObjectLift || !LegacyShapes.isHeld(controller, s.layer)) LegacyShapes.release(controller, null)
         // v1.7: a mode what was lifted can't take falls back to Free.
         if (modeRefusal(modeState) != null) modeState = Mode.FREE
         rebuildPreviewPaint()
@@ -2677,8 +2778,12 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
      * selection the content was lifted with moves along (same step); otherwise the current
      * selection is left alone (it was just replaced by the user). Returns true when a step was
      * recorded.
+     *
+     * v1.10 (R1): a move of one mirror side that the copy limits refuse (`CopyLift.refused`) shows
+     * `MirrorLabels110.SIDE_REFUSED` and changes nothing; with [keepRefused] (✓) the side stays
+     * lifted where it is, otherwise (the tool closes, the selection changed) the lift ends.
      */
-    private fun applyPending(s: Session, moveSelection: Boolean): Boolean {
+    private fun applyPending(s: Session, moveSelection: Boolean, keepRefused: Boolean = false): Boolean {
         val st = transformState ?: run { endSession(s); return false }
         // The layer/bitmap went away underneath us (deleted, canvas resized...): nothing to bake.
         if (!isValid(s)) { cancelSession(s); return false }
@@ -2695,10 +2800,17 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
         // Unchanged: nothing to record.
         if (!s.placement && st.sameGeometry(s.initial)) { endSession(s); return false }
         val objects = s.objectLift
+        if (objects is CopyLift && objects.refused(st)) {
+            controller.toast(MirrorLabels110.SIDE_REFUSED)
+            if (!keepRefused) cancelSession(s)
+            return false
+        }
         if (objects != null && !pixelFallback(objects, st)) {
             // Vector objects: their geometry is mapped exactly (one step, made by the lift); a
             // text, shape or array layer keeps its data, mapped and re-rendered (v1.7, §3.11).
-            val recorded = objects.commit(st, if (objects is DataLift || objects is FolderLift) TRANSFORM_LABEL else TRANSFORM_OBJECTS_LABEL)
+            val label = if (objects is DataLift || objects is FolderLift) TRANSFORM_LABEL else TRANSFORM_OBJECTS_LABEL
+            // v1.10 (R1): a legacy shape layer converted for a side pick: the conversion joins this step.
+            val recorded = LegacyShapes.fold(controller, s.layer, label) { objects.commit(st, label) }
             endSession(s)
             return recorded
         }
@@ -2768,13 +2880,20 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
         isPlacement = false
         lifted = null
         uniformOnly = false
+        sidePicked = false
         numbersOpen = false
         invalidateBoth(last, s.liftRect)
         s.releaseLevels()
         if (s.ownsFloating) s.floating.recycle()
         // After its commit / delete: a lift that applies its result later keeps what it needs.
         s.objectLift?.release()
+        // v1.10 (R1): a legacy shape layer converted for this lift and not committed is a shape layer
+        // again (unless a tap just picked another side of it: see onUp).
+        if (s.objectLift is VectorObjectLift && keepHeldFor !== s.layer) LegacyShapes.release(controller, s.layer)
     }
+
+    /** v1.10 (R1): the layer whose held legacy conversion outlives the session ending now (a tap picked another side of it). */
+    private var keepHeldFor: Layer? = null
 
     private fun cancelJobs() {
         activationJob?.cancel(); activationJob = null
@@ -3105,7 +3224,8 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
         }
         val cr = t.dp(7f)
         whiteStroke.strokeWidth = t.dp(2f)
-        for (p in c) {
+        // v1.10 (LA4): one mirror side picked: no scale handles.
+        if (!sidePicked) for (p in c) {
             if (mode == Mode.DISTORT) {
                 // Round, filled corners signal "moves freely".
                 canvas.drawCircle(p.x, p.y, cr + t.dp(1f), shadowStroke)
