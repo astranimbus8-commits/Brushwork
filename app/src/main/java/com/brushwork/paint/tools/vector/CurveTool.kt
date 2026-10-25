@@ -1920,8 +1920,63 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
     override val objectDeletion: ObjectDeletion? get() = if (pointCount > 0) pillDeletion else null
 
     // region v110-A2 colors
-    /** v1.10 (R2): the pill's Object colors cell. F0: none, so the cell stays hidden (A2 body). */
-    override val objectColors: ObjectColorEditor? = null
+    /**
+     * v1.10 (R2, R7): the colors of the open path, new or reopened, for the pill's COLOR cell
+     * ([CurveColorsDelegate]); none while no path is open or while erasing (the cell hides).
+     */
+    override val objectColors: ObjectColorEditor? get() = if (pointCount > 0 && !eraseOn) colors else null
+
+    private val colors: CurveColorsDelegate by lazy { CurveColorsDelegate(ColorsHost()) }
+
+    /** What [CurveColorsDelegate] reads and sets of this tool (its pending previews, no saved options). */
+    private inner class ColorsHost : CurveColorsHost {
+        override val controller: EditorController get() = this@CurveTool.controller
+        override val settings: CurveSettings get() = this@CurveTool.settings
+        override val open: Boolean get() = pointCount > 0
+
+        /** The in-tool history's epoch: every path that ends or opens starts a new one (`clearHistory`). */
+        override val session: Any? get() = if (pointCount > 0) historyEpoch else null
+        override val fillPossible: Boolean get() = this@CurveTool.fillPossible
+        override val paintMode: CurvePaint? get() = this@CurveTool.paintMode
+        override val reopened: Boolean get() = this@CurveTool.reopened != null
+        override var openedColor: Int
+            get() = this@CurveTool.reopened?.openedColor ?: controller.color
+            set(value) { reopenedColors(userColor, value) }
+        override var userColor: Int
+            get() = this@CurveTool.reopened?.userColor ?: controller.color
+            set(value) { reopenedColors(value, openedColor) }
+
+        /** The reopened path's bookkeeping with the main colors [user] and [opened] (V19). */
+        private fun reopenedColors(user: Int, opened: Int) {
+            val r = this@CurveTool.reopened ?: return
+            if (r.userColor == user && r.openedColor == opened) return
+            this@CurveTool.reopened = Reopened(r.layer, r.session, r.original, r.userSettings, user, opened, r.width, r.baseline)
+        }
+
+        override fun keptGradient(): List<Int>? {
+            val r = this@CurveTool.reopened ?: return null
+            val s = this@CurveTool.settings
+            if (!s.fill || s.fillColor != null) return null
+            return when (val f = r.original.fill) {
+                is VPaint.Linear -> f.stops.map { it.color }
+                is VPaint.Radial -> f.stops.map { it.color }
+                else -> null
+            }
+        }
+
+        override val ownLook: Boolean get() = ownSettings != null
+
+        /** The open path's own options (a preview): shown and redrawn, not saved ([update] saves). */
+        override fun show(s: CurveSettings) {
+            val n = s.sanitized(fallback = this@CurveTool.settings)
+            if (n == this@CurveTool.settings) return
+            this@CurveTool.settings = n
+            changed()
+        }
+
+        override fun update(transform: (CurveSettings) -> CurveSettings) = this@CurveTool.update(transform)
+        override fun redraw() = changed()
+    }
     // endregion
 
     /** The points the pill's group edits act on: the selection with two or more selected, else every point. */

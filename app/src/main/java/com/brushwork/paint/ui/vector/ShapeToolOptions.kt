@@ -65,7 +65,6 @@ import com.brushwork.paint.tools.vector.ShapeBox
 import com.brushwork.paint.tools.vector.ShapeGeometry
 import com.brushwork.paint.tools.vector.ShapeSettings
 import com.brushwork.paint.tools.vector.ShapeStroke
-import com.brushwork.paint.tools.vector.ShapeStyle
 import com.brushwork.paint.tools.vector.ShapeTool
 import com.brushwork.paint.tools.vector.ShapeType
 import com.brushwork.paint.ui.common.BwSheet
@@ -100,6 +99,10 @@ private val MAX_LEN = ShapeSettings.MAX_LENGTH.toDouble()
 /**
  * Options strip of the shape tool: shape type, style (or line ends), stroke width, drawing
  * toggles, and the "Numbers" / settings sheets.
+ *
+ * v1.10 (R3 row 5): the app no longer shows it (the options strip is [ShapeStripItems]); only
+ * tests render it, so it stays until they move to the strip (LeadRequest), showing the same
+ * paint-mode cell as the strip.
  */
 @Composable
 fun ShapeToolOptions(tool: ShapeTool) {
@@ -134,15 +137,14 @@ fun ShapeToolOptions(tool: ShapeTool) {
             contentDescription = "Line ends",
         )
     } else {
-        DropdownChip(
-            label = s.style.label,
-            options = ShapeStyle.entries,
-            selected = s.style,
-            optionLabel = { it.label },
-            onSelect = { st -> set { it.copy(style = st) } },
-            leading = { StyleGlyph(s.style, s.fillColor ?: controller.color, Modifier.size(18.dp)) },
-            optionLeading = { StyleGlyph(it, s.fillColor ?: controller.color) },
-            contentDescription = "Shape style",
+        // v1.10 (R3): the paint mode as the options strip shows it (its glyph, icon segments in its menu).
+        PaintModeMenuCell(
+            label = ShapeStripItems.STYLE_LABEL,
+            mode = s.style.paintMode(),
+            fill = s.fillColor ?: controller.color,
+            width = ShapeStripItems.STYLE_DP.dp,
+            tag = PaintModeTags.SHAPE_STRIP,
+            onPick = { m -> set { it.copy(style = m.shapeStyle()) } },
         )
     }
     if (s.strokes) {
@@ -198,7 +200,8 @@ internal fun ShapeSettingsSheet(tool: ShapeTool, onDismiss: () -> Unit) {
 
         if (!s.type.isLineLike) {
             SectionHeader("Style")
-            ChoiceChips(ShapeStyle.entries.map { it.label }, s.style.ordinal, { i -> set { it.copy(style = ShapeStyle.entries[i]) } })
+            // v1.10 (R3): the three icon segments of every paint-mode control.
+            PaintModeSheetRow(s.style.paintMode(), PaintModeTags.SHAPE) { m -> set { it.copy(style = m.shapeStyle()) } }
         }
 
         if (s.strokes) {
@@ -245,7 +248,8 @@ internal fun ShapeSettingsSheet(tool: ShapeTool, onDismiss: () -> Unit) {
 
         if (!s.type.isLineLike && s.style.fill) {
             SectionHeader("Fill")
-            FillColorRow(s.fillColor, controller.color) { col -> set { it.copy(fillColor = col) } }
+            // v1.10 (R7): the picker previews the fill on the open shape (its Object colors editor).
+            FillColorRow(s.fillColor, controller.color, editor = tool.objectColors) { col -> set { it.copy(fillColor = col) } }
         }
 
         ShapeParamFields(tool)

@@ -1,14 +1,20 @@
 package com.brushwork.paint.ui.vector
 
-import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowRightAlt
 import androidx.compose.material.icons.filled.ArrowDropDown
@@ -32,6 +38,7 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -39,36 +46,53 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.brushwork.paint.core.Geometry
 import com.brushwork.paint.core.LengthUnit
 import com.brushwork.paint.core.Units
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.model.IncrementKind
+import com.brushwork.paint.tools.ObjectColorEditor
+import com.brushwork.paint.tools.ObjectColorTarget
+import com.brushwork.paint.tools.vector.CurvePaint
 import com.brushwork.paint.tools.vector.ShapeGeometry
 import com.brushwork.paint.tools.vector.ShapeSettings
 import com.brushwork.paint.tools.vector.ShapeStyle
 import com.brushwork.paint.tools.vector.ShapeType
 import com.brushwork.paint.ui.color.ColorPickerDialog
 import com.brushwork.paint.ui.common.ColorSwatch
+import com.brushwork.paint.ui.common.CurveLabels17
+import com.brushwork.paint.ui.common.IconLongPressScope
 import com.brushwork.paint.ui.common.IncrementStepping
 import com.brushwork.paint.ui.common.LabeledSlider
 import com.brushwork.paint.ui.common.LengthField
 import com.brushwork.paint.ui.common.LocalIncrements
 import com.brushwork.paint.ui.common.NudgePad
 import com.brushwork.paint.ui.common.NumberField
+import com.brushwork.paint.ui.common.PaintMode
+import com.brushwork.paint.ui.common.PaintModeGlyph
+import com.brushwork.paint.ui.common.PaintModeSegments
 import com.brushwork.paint.ui.common.UnitSelector
+import com.brushwork.paint.ui.common.V110Tags
 import com.brushwork.paint.ui.common.closeOnSecondFinger
+import com.brushwork.paint.ui.common.iconLongPressLabel
+import com.brushwork.paint.ui.common.longPressLabel
+import com.brushwork.paint.ui.common.paintModeName
 import com.brushwork.paint.ui.theme.BrushworkColors
+import com.brushwork.paint.ui.theme.IbisColors
 import kotlin.math.cos
 import kotlin.math.ln
 import kotlin.math.pow
@@ -258,28 +282,194 @@ internal fun Hint(text: String, modifier: Modifier = Modifier) {
     Text(text, style = MaterialTheme.typography.bodySmall, color = BrushworkColors.OnChromeDim, modifier = modifier.padding(vertical = 2.dp))
 }
 
-/** Small glyph that shows a shape style (outline / filled / both) with the fill color. */
+// ---------------------------------------------------------------------- paint mode (v1.10, R3)
+// One control for one function: every place that picks Stroke, Fill or Both shows the same three
+// glyphs (PaintModeGlyph, the v1.9 Shape StyleGlyph drawing), icons only, known by CurveLabels17's
+// three names. The enums keep their names (the codecs read them); these map them.
+
+/** v1.10 (R3): the paint mode of a shape style. */
+internal fun ShapeStyle.paintMode(): PaintMode = when (this) {
+    ShapeStyle.STROKE -> PaintMode.STROKE
+    ShapeStyle.FILL -> PaintMode.FILL
+    ShapeStyle.STROKE_FILL -> PaintMode.BOTH
+}
+
+/** v1.10 (R3): the shape style of a paint mode. */
+internal fun PaintMode.shapeStyle(): ShapeStyle = when (this) {
+    PaintMode.STROKE -> ShapeStyle.STROKE
+    PaintMode.FILL -> ShapeStyle.FILL
+    PaintMode.BOTH -> ShapeStyle.STROKE_FILL
+}
+
+/** v1.10 (R3): the paint mode of a curve tool's paint (Curve, Path and Polyline). */
+internal fun CurvePaint.paintMode(): PaintMode = when (this) {
+    CurvePaint.STROKE -> PaintMode.STROKE
+    CurvePaint.FILL -> PaintMode.FILL
+    CurvePaint.BOTH -> PaintMode.BOTH
+}
+
+/** v1.10 (R3): the curve tools' paint of a paint mode. */
+internal fun PaintMode.curvePaint(): CurvePaint = when (this) {
+    PaintMode.STROKE -> CurvePaint.STROKE
+    PaintMode.FILL -> CurvePaint.FILL
+    PaintMode.BOTH -> CurvePaint.BOTH
+}
+
+/** v1.10 (R3): the tag prefixes of the paint-mode controls ([V110Tags.PAINT_MODE], one per place). */
+internal object PaintModeTags {
+    /** The Shape settings sheet. */
+    const val SHAPE = "${V110Tags.PAINT_MODE}.shape"
+    /** The Curve, Path and Polyline settings sheet. */
+    const val CURVE = "${V110Tags.PAINT_MODE}.curve"
+    /** The Shape options strip's style cell (its menu). */
+    const val SHAPE_STRIP = "${V110Tags.PAINT_MODE}.shapeStrip"
+    /** The curve strips' Stroke kind cell (its menu). */
+    const val CURVE_STRIP = "${V110Tags.PAINT_MODE}.curveStrip"
+}
+
+/**
+ * v1.10 (R3): the paint mode in a settings sheet: the three [PaintModeSegments] (icons only,
+ * tagged "$tag.<MODE>") with their long-press names (the sheet host resets the scope, so the row
+ * provides its own). With a [refusal] (the curve tools: [curvePaintRefusal]) they are drawn by
+ * [PaintModeChoices], so a refused mode is greyed and a tap hands its reason to [onRefused], as
+ * the strip's menu does.
+ */
 @Composable
-internal fun StyleGlyph(style: ShapeStyle, fillColor: Int, modifier: Modifier = Modifier) {
-    Canvas(modifier.size(22.dp)) {
-        val inset = 3.dp.toPx()
-        val r = CornerRadius(4.dp.toPx())
-        val topLeft = Offset(inset, inset)
-        val sz = Size(size.width - 2 * inset, size.height - 2 * inset)
-        if (style.fill) {
-            drawRoundRect(Color(fillColor), topLeft, sz, r)
-            if (!style.stroke) drawRoundRect(BrushworkColors.OnChromeDim, topLeft, sz, r, style = Stroke(1.dp.toPx()))
+internal fun PaintModeSheetRow(
+    selected: PaintMode?,
+    tag: String,
+    refusal: ((PaintMode) -> String?)? = null,
+    onRefused: (String) -> Unit = {},
+    onSelect: (PaintMode) -> Unit,
+) {
+    IconLongPressScope {
+        Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (refusal == null) {
+                PaintModeSegments(selected = selected, tagPrefix = tag, onSelect = onSelect)
+            } else {
+                PaintModeChoices(selected = selected, refusal = refusal, tag = tag, onSelect = onSelect, onRefused = onRefused)
+            }
         }
-        if (style.stroke) drawRoundRect(BrushworkColors.OnChrome, topLeft, sz, r, style = Stroke(2.5.dp.toPx()))
     }
 }
 
 /**
- * Fill color row: swatch (opens the color picker with alpha) and a way back to following the
- * main drawing color. [custom] is null when the fill follows the main color.
+ * v1.10 (R2, R3): the curve tools' refusal of a paint mode: Fill and Both need 3 points
+ * ([CurveLabels17.FILL_NEEDS_3]) while the path cannot be filled (`CurveTool.fillPossible`).
+ */
+internal fun curvePaintRefusal(fillPossible: Boolean): (PaintMode) -> String? =
+    { m -> if (m != PaintMode.STROKE && !fillPossible) CurveLabels17.FILL_NEEDS_3 else null }
+
+/**
+ * v1.10 (R3; the strip's v1.7 style dropdown): a cell [width] wide showing [mode]'s
+ * [PaintModeGlyph] (filled with [fill]) and ▾, known by [label] (its description and long-press
+ * label); a tap opens a menu holding the three [PaintModeSegments], icons only (tagged
+ * "$tag.<MODE>", each known by its name). A pick closes the menu. (A menu is a popup: its
+ * segments show no long-press bubble there, see [IconLongPressScope]; their descriptions stay.)
  */
 @Composable
-internal fun FillColorRow(custom: Int?, mainColor: Int, keptLabel: String? = null, onPick: (Int?) -> Unit) {
+internal fun PaintModeMenuCell(label: String, mode: PaintMode, fill: Int, width: Dp, tag: String, onPick: (PaintMode) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    val shape = RoundedCornerShape(8.dp)
+    Box(Modifier.width(width)) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .heightIn(min = SHAPE_CELL_DP)
+                .clip(shape)
+                .border(1.dp, MaterialTheme.colorScheme.outline, shape)
+                .longPressLabel(label)
+                .clickable(role = Role.Button) { open = true }
+                .semantics { contentDescription = label }
+                .padding(start = 6.dp, end = 1.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center,
+        ) {
+            Box(Modifier.size(24.dp), contentAlignment = Alignment.Center) { PaintModeGlyph(mode, Color(fill)) }
+            Icon(Icons.Filled.ArrowDropDown, contentDescription = null, tint = BrushworkColors.OnChromeDim, modifier = Modifier.size(18.dp))
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }, modifier = Modifier.closeOnSecondFinger { open = false }, containerColor = IbisColors.Menu) {
+            Box(Modifier.padding(horizontal = 8.dp)) {
+                PaintModeSegments(selected = mode, tagPrefix = tag, onSelect = { m ->
+                    open = false
+                    onPick(m)
+                })
+            }
+        }
+    }
+}
+
+/**
+ * v1.10 (R3; the curve strips' Stroke kind menu): the three paint-mode segments as
+ * [PaintModeSegments] draws them (48 x 40 dp, [PaintModeGlyph], tagged "$tag.<MODE>", known by
+ * [paintModeName]), for a place where a mode can be refused: a mode with a [refusal] is greyed and
+ * marked disabled, reads the refusal as its state, and a tap hands it to [onRefused] (v1.7: "Fill
+ * and Both greyed with 1 or 2 points, a tap says why") instead of [onSelect].
+ * (PaintModeSegments ignores a tap on a segment that is not enabled and says nothing; LeadRequest.)
+ */
+@Composable
+internal fun PaintModeChoices(
+    selected: PaintMode?,
+    refusal: (PaintMode) -> String?,
+    tag: String,
+    onSelect: (PaintMode) -> Unit,
+    onRefused: (String) -> Unit,
+) {
+    val shape = RoundedCornerShape(8.dp)
+    Row(Modifier.selectableGroup(), verticalAlignment = Alignment.CenterVertically) {
+        for (mode in PaintMode.entries) {
+            val on = mode == selected
+            val refused = refusal(mode)
+            val name = paintModeName(mode)
+            Box(
+                Modifier
+                    .size(48.dp, 40.dp)
+                    .background(if (on) BrushworkColors.AccentDim else Color.Transparent, shape)
+                    .testTag("$tag.${mode.name}")
+                    .iconLongPressLabel(name)
+                    .clickable(role = Role.RadioButton) { if (refused != null) onRefused(refused) else onSelect(mode) }
+                    .semantics {
+                        contentDescription = name
+                        this.selected = on
+                        if (refused != null) {
+                            stateDescription = refused
+                            disabled()
+                        }
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                PaintModeGlyph(mode, if (on) Color.White else BrushworkColors.OnChrome, Modifier.alpha(if (refused == null) 1f else 0.38f))
+            }
+        }
+    }
+}
+
+/**
+ * What [FillColorRow] (the Curve settings sheet) says of a reopened path's gradient fill it keeps
+ * until a color is picked; v1.10: also the Object colors sheet's Fill tab state (R2).
+ */
+internal const val GRADIENT_KEPT = "Gradient (kept)"
+
+/**
+ * Fill color row: swatch (opens the color picker with alpha) and a way back to following the
+ * main drawing color. [custom] is null when the fill follows the main color.
+ *
+ * v1.10 (R7; design 4.4 A2 step 7): with [editor], the open object's Object colors editor (the
+ * Shape or curve tool's `objectColors`), the picker previews the fill on that object live
+ * (`ObjectColorEditor.preview` of [ObjectColorTarget.FILL], no step). Cancel, Back and a picker
+ * closed any other way give back what the object showed when it opened (`cancel`). OK first gives
+ * that back too, then [onPick] sets the fill as in v1.9 (the tool's option, saved as the user's),
+ * so the tool's ✓ step keeps it and the end of the object's session does not take it back.
+ * Without [editor] (no object open) the picker only sets the option, as in v1.9.
+ */
+@Composable
+internal fun FillColorRow(
+    custom: Int?,
+    mainColor: Int,
+    keptLabel: String? = null,
+    editor: ObjectColorEditor? = null,
+    onPick: (Int?) -> Unit,
+) {
     var picking by rememberSaveable { mutableStateOf(false) }
     val shown = custom ?: mainColor
     Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -303,14 +493,49 @@ internal fun FillColorRow(custom: Int?, mainColor: Int, keptLabel: String? = nul
         TextButton(onClick = { picking = true }) { Text("Pick") }
     }
     if (picking) {
+        val live = editor
+        // Whether OK kept the color (read when the picker goes away, not by the composition).
+        val pick = remember(live) { FillPick() }
+        if (live != null) {
+            DisposableEffect(live) {
+                live.begin()
+                onDispose { if (!pick.kept) live.cancel() }
+            }
+        }
         ColorPickerDialog(
             initial = shown,
-            onPick = { onPick(it) },
+            onPick = { c ->
+                if (live != null) {
+                    pick.kept = true
+                    live.cancel()
+                }
+                onPick(c)
+            },
             onDismiss = { picking = false },
             title = "Fill color",
             showAlpha = true,
+            // The picker sends its unchanged start color only on Cancel, whose closing restores
+            // the object anyway: the start color is not previewed before a change (a kept
+            // gradient would otherwise say it is replaced).
+            onPreview = live?.let { e ->
+                { c ->
+                    if (pick.previewed || c != shown) {
+                        pick.previewed = true
+                        e.preview(ObjectColorTarget.FILL, c)
+                    }
+                }
+            },
         )
     }
+}
+
+/**
+ * One opening of [FillColorRow]'s picker on an open object: OK kept the color ([kept]), so its
+ * closing cancels nothing; a color was previewed ([previewed]).
+ */
+private class FillPick {
+    var kept = false
+    var previewed = false
 }
 
 // ====================================================================== shared by the shape and curve options (moved from VectorOptions.kt, v1.5)

@@ -2938,7 +2938,165 @@ and `qa110/Qa110OneSideUiTest` (392 and 360 dp, font scales 1, 1.3 and 2.0).
 
 <!-- v110-A2 -->
 
-(A2 writes this section.)
+Steps 1 to 8 of 8 (R2, R3 rows 1-5 and 7, the R7 consumers; J20, J21, I35).
+
+**The sheet (`ui/vector/ObjectColorsSheet.kt`).** `ObjectColorsSheet(editor, onClose)` hosts the
+frozen `ObjectColorEditor` in a non-modal `BwSheet` titled `ObjectColorLabels110.CELL`: one 48 dp
+row with the editor's two `targets` as icon tabs (each shows its swatch, `ObjectColorFace`;
+long-press names `objectColorName(t)`, tags `V110Tags.COLORS_SHEET_TAB`), then, for a non-null
+`paintMode`, the three `PaintModeSegments` glyphs; under it the embedded
+`ColorDialogBody(model, onPreview, extraAbove = 48.dp)`. A Fill or Outline tab adds the "none"
+button (`setNone`: no fill is paint mode Stroke, no outline is width 0). Every color the body
+delivers goes to `editor.preview(target, argb)`, but only a color that differs from the one the
+sheet last sent for that tab (`SheetSession.delivered`): a tab shown again restarts the body's
+watch, which would otherwise send its last color once more and undo a "none" or a paint-mode
+glyph chosen since. OK calls `commit`, Cancel and Back call `cancel`,
+a swipe or an outside touch only minimizes the sheet (the preview stays, and the object's own ✓
+or ✕ decides). A2's editors also implement `ObjectColorExtras` (`colorOf`, so a picker starts at
+a color that is not painted, and `toast`, for a refused target's reason from `unavailable`). The
+sheet opens on the first target `unavailable` does not refuse (a curve with 1 or 2 points: its
+Stroke tab) and leaves a target refused meanwhile; its mode glyphs are drawn by
+`PaintModeChoices`, so Fill and Both, refused with the fill, are greyed and a tap toasts
+`FILL_NEEDS_3` (the frozen `PaintModeSegments` drops a tap on a disabled segment silently).
+
+**The pill's cell (`ui/tools/PillColorCell.kt`, step 6).** `PillColorCell(editor)` (signature
+frozen) draws the object's colors (`ColorCellGlyph`: the fill disc in a stroke ring, a slash on
+the checker for no fill, a two-stop sweep for a gradient; text: the text color in an outline
+ring) framed by a 1 dp light outer and a 1 dp dark inner ring, 40 dp, tag `V110Tags.PILL_COLOR`,
+name `ObjectColorLabels110.CELL`. F0's `pillRow2` places it first in row 2 under the move icon
+(folded: right after it); row 1 is v1.9's. The open state lives on the editor, not in the cell:
+`ObjectColorExtras.sheet` is an `ObjectColorSheetState(scope, controller, cancel, session)`, where
+`session()` is the open object's session key (Shape: its `openCount` while a shape is open;
+Curve family: `historyEpoch` while it has points; Text: the open text's layer, id and new-text
+editor flag) or null. `open()` remembers the key; a `snapshotFlow` on `session()` closes the
+sheet when the key changes, so ✓, ✕, a tool switch and an undo at the bottom of the in-tool
+steps all drop the sheet (✓ keeps the previewed colors in its one step, ✕ gives them back with
+everything else). The cell composes the sheet in the editor's group of sheets (`LocalSheetGroup`) while the state says it is
+open, `key`ed on the session so no picker state carries over to the next object. The delegates'
+`begin` is idempotent per session: an opening neither kept nor cancelled (the sheet went away
+with the cell) keeps its start values, and Cancel restores what the first opening found.
+
+**Undo while the sheet is open (J21).** `ObjectColorSheetState.open()` puts an
+`InToolHistoryOwner` (`UndoFirst`) in front of `controller.inToolHistory` (the owner before it is
+its `next`; labels and `canUndo`/`canRedo` are `next`'s). The controller's Undo asks it first:
+with the sheet open or minimized it closes the sheet with Cancel, then hands the step to `next`
+(an in-tool step), or returns false so the controller goes on as usual (the v1.9 R17 rule closes
+an untouched reopened object, else the document's last step). One exception (review fix 8/8):
+when the open object had user changes before the Cancel and has none after it (the previews were
+its only change), `UndoFirst` itself closes it (`discard`, after the controller's flushes) and
+returns true, so the Undo that took back the colors never also takes back the document's step
+before the object (its placing); with nothing previewed v1.9's rule stands. `close()` (OK, Cancel, the
+session's end) gives `inToolHistory` back when it still holds `UndoFirst`, and calls
+`refreshDeferredWaitGuard()`. Known edges: while the sheet is open the controller's deferred-wait
+guard (an Undo that waited for a pending render) is not installed, and a session that takes
+`inToolHistory` later (a filter session, the text node editor) goes before the sheet's hook.
+
+**`FillColorRow` previews (`ui/vector/VectorWidgets.kt`, step 7).** The Shape and Curve settings
+sheets pass `editor = tool.objectColors`. With an editor the row's picker calls `begin` when it
+opens and previews each changed color on the open object (`preview(FILL, c)`, no step; the
+picker's unchanged start color is not sent first, so a kept gradient says nothing until a color
+is picked). Cancel, Back and any other closing call `cancel`. OK calls `cancel` too, then sets the
+fill option as v1.9 did (the tool's option, saved as the user's), so ✓ keeps it in one step and
+the end of the object's session does not take it back. Without an object (no editor) the row
+only sets the option. Accepted edge: with the row's picker and the Object colors sheet both open,
+they share the delegate's start values, so the row's OK or Cancel also undoes the sheet's previews.
+
+**One paint-mode control (R3).** Shape and the curve tools show the paint mode only as the
+`PaintModeGlyph` faces: `PaintModeSegments` in the sheets, a menu of them on the strips
+(regions `v110-A2 paintMode` in `ShapeStrip.kt`, `CurveStrips.kt` and `CurveToolOptions.kt`, and
+A2's own `ShapeToolOptions.kt`); the curve sheet's fill switch became the segments; `StyleGlyph` is gone.
+The curve strip's menu keeps its refusal semantics (`PaintModeChoices`: Fill and Both need 3
+points), and the curve settings sheet refuses the same way (`PaintModeSheetRow(refusal =
+curvePaintRefusal(tool.fillPossible))`, which draws `PaintModeChoices`); the curve sheet keeps
+its stroke kind chips.
+
+**The delegates.** Each tool's region `v110-A2 colors` returns its editor while an object is
+open (null otherwise, which hides the pill cell) and gives it a private inner host; the tool's
+state stays private.
+- `tools/vector/ShapeColorsDelegate.kt` (Shape; targets Fill and Stroke, a line Stroke only):
+  previews are the shape's pending options (style, `fillColor`) and the main color it is drawn
+  with; colors pass through `ObjectColorSlots.set` on a `VShape` so the fill-follows pin (C4)
+  holds. Object-only: a reopened shape moves its opened color with each stroke edit, so v1.9's
+  give-back of the user's main color still happens (a color picked meanwhile wins); a new shape
+  takes a restore point at its first edit and, when its session ends, gets back the user's
+  style, fill and color while they still hold what the editor set (a `snapshotFlow` watch on
+  `controller.scope`, so one frame after the session ends).
+- `tools/vector/CurveColorsDelegate.kt` (Curve, Polyline, Path; Fill and Stroke): fill and mode
+  are the options the open path shows (`CurveSettings` `fill`, `fillColor`, `stroke`/`lastStroke`),
+  set through `CurveColorsHost.show` (shown and redrawn, never saved, so no settings write per
+  preview frame). A reopened path, or a new one that shows a look of its own (`ownLook`: a quick
+  start, To Bézier), gets the user's options back as a whole when it ends; any other new path
+  takes a restore point at its first edit here and, when it ends, each value that still holds
+  what the sheet showed comes back through `update` (the paint mode as one value: `fill`,
+  `stroke`, `lastStroke`; then `fillColor`), as in Shape. A strip edit meanwhile (a width, the
+  stroke kind, Stroke/Fill/Both on the strip) stays the tool's setting and is saved for the next
+  path (review fix 5/8; v1.6-v1.9 behaviour). C4 goes through `ObjectColorSlots.set` on a
+  geometry-less `VPath` built from the tool's colors. Fill needs 3 points (`unavailable`:
+  `CurveLabels17.FILL_NEEDS_3`); a stroke color while Fill turns the mode to Both with the stroke
+  kind kept; a reopened gradient fill is kept until a fill color is picked (one
+  `GRADIENT_REPLACED` note per opening). A new path's main color and options come back by the
+  same one-frame watch, on `pointCount > 0` going false; known gap: a caller that commits the
+  new path and opens another in the same call (`openPath`; A6's `openObject`, reached from the
+  bars' Edit, which commits the current tool's path first) skips that frame, so `open()` takes
+  the new path's color, and the fill and paint mode the sheet showed, as the user's (untested;
+  the end-of-path hook in `CurveTool` is deferred to Gate 2).
+- `tools/text/TextColorsDelegate.kt` (Text; targets Text and Outline, no paint mode): previews
+  are `updateSpec` changes of the open text (`color`, `strokeColor`); the drawing color is never
+  touched. An outline color at width 0 brings `defaultOutlineWidth(sizePx)` = max(1, 6 % of the
+  font size, the box presets' border ratio) through `TextSpec.withOutlineColor`, which the text
+  editor's Outline color picker uses too. Text has no single-slot setter in `ObjectColorSlots`
+  (`mapText` maps every slot together), so text colors go straight to `updateSpec`. The start
+  values belong to the text's session (`TextColorsHost.session`: the open text's layer, its id
+  there, and whether a just-created text's editor shows), because the Text tool places the open
+  text and opens the next one in one call (a tap away, the next text of a layer); Cancel in
+  another session does nothing.
+
+No preview is an undo step: the object's ✓ step carries the colors; Cancel restores what
+`begin` found; once the object is closed every call does nothing (C13).
+
+**Text editor (`ui/placement/TextEditorDialog.kt`).** The four color pickers (text, outline, box
+background, box border) pass `onPreview` (live on the open text) through `LiveColorPicker`:
+OK keeps the color; Cancel and Back give the start color back and also restore what the first
+preview set beside it (the outline width, a box background turned on); the editor's own Cancel
+still reverts the whole edit from its backup.
+
+Tests (`app/src/test/java/com/brushwork/paint/v110/a2/`): `ObjectColorSheetFitsAt873Test`,
+`ObjectColorSheetMinimizedThenCheckTest`, `ObjectColorSheetMinimizedThenCrossTest`,
+`ObjectColorSheetRefusedFillTest` (also the sheet's Cancel and Back), `PaintModeConsistencyTest`, `PaintModeSegmentsFingerTest`, `R3NoTextModeSelectorsTest`,
+`FillFollowsPinTest`, `ShapeFillLivePreviewTest`, `CurveFillLivePreviewTest`,
+`TextColorLivePreviewTest`, `TextOutlineDefaultWidthTest`, `ObjectColorSheetTabSwitchTest` (360 dp
+at font scale 1.3 and 2.0; a tab shown again sends nothing), `ObjectColorsRedoAndReloadTest`
+(✓, Undo, Redo, save and load of a shape, a path and a text), `CurveStripEditAfterColorsTest` (a
+strip edit after the sheet stays the tool's; the sheet's fill, mode and line color come back),
+`ObjectColorSheetOnToolsTest` (the sheet on the real Shape, Polyline and Text editors at 360 dp,
+font scale 2.0: live, Cancel, OK then ✓ as one step, Undo, Redo), `PillColorPlacementTest`,
+`PillColorRestoresMainColorTest`, `PillColorSwatchOnDarkTest`, `ObjectColorsUndoTest` (✓ one step
+with the colors; an in-tool undo keeps them; the bottom of the steps closes without them; Undo
+with the sheet open closes it with Cancel first; on a Shape, a Text and a Polyline whose only
+change was the previews, that Undo closes the object and undoes no document step),
+`ObjectColorsSheetCancelTest` (Cancel, Back, a
+filter started under the sheet), `GradientKeptTest` (both pickers), `NoFillSetsStrokeModeTest`,
+`ColorPreviewFrameTimingTest` (Timing); `qa110/Qa110ObjectColorsUiTest` (the real editor at 392
+and 360 dp, font scale 1.3 and 2.0, every tap a finger's); kits `A2ToolRig`, `A2FakeColorEditor`,
+`A2SheetKit` (the sheet hosted as the editor hosts it).
+
+**Known gaps (lead requests in the progress file).**
+- The color preview budget (R2 (c), section 5: 5.5 ms / 33 ms a frame) holds for the fill
+  (`ColorPreviewFrameTimingTest`: 0.76 ms, x6 4.5 ms) and for a plain outline (1.1 ms, x6 6.8 ms),
+  but not for the stroke color of a brush-outlined shape with 8 copies: 29.9 ms (x6 179 ms). The
+  brush preview's key holds `controller.color`, so a stroke color is a replay from scratch, and
+  `BrushTool.beginPath` replays a stroke with copies exactly (it ignores the draft budget). That
+  is what a drag frame of the same shape costs in the harness (30.1 ms), as R2 (c) says, and the
+  test holds the preview to 1.25 drag frames; on the phone a canvas drag holds such a replay back
+  until the finger rests, a color preview does not (it is spaced by 1.5 times its cost). Lead
+  request: `tools/vector/BrushStroking.kt` / `brush/BrushTool.kt` (re-tint the live coverage on a
+  color-only key change, or a draft budget for strokes with copies).
+- At font scale 2.0 the sheet's title ("Object colors", ellipsized on one line by `BwSheet`'s
+  header beside the picker's Cancel and OK) and the color body's "Previous" / "Current"
+  (`CompareSwatch`, one line each; v1.9's own picker cuts them the same) are cut; the QA test
+  excepts only these at 2.0. v1.9's pill row 1 cuts a worst-case value beside "Select several"
+  at font scale 2.0 ("101.6 mm" at 392 dp, "−1,329.5" at 360 dp) and with a long Length step;
+  COLOR adds no cut (`PillColorPlacementTest`).
 
 <!-- /v110-A2 -->
 
