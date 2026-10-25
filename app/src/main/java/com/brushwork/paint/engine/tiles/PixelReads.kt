@@ -17,19 +17,25 @@ import com.brushwork.paint.model.Layer
  * v1.10 (F1, design 2.3 C-REG; signatures frozen, bodies A9): reads of a layer that may be
  * inactive (parked), for the tools that sample other layers. The F1 bodies read the store as it
  * is (a flat bitmap, or the tiles under the region), so they never materialize a parked layer.
- * Main thread (a parked layer's tiles are read on main, `Tile` rule 5).
+ * Main thread (a parked layer's tiles are read on main, `Tile` rule 5). v1.10 A9: a tiled layer is
+ * pinned for the read ([pinned]); `region` reads only the tiles under the region.
  */
 object PixelReads {
     /** Allocations from this size on ask `admitNative` first. */
     private const val ADMIT_FROM = 4L shl 20
 
     /** The color at ([x], [y]) as `layer.bitmap.getPixel` gives it (unpremultiplied ARGB); 0 outside the layer. */
-    fun sample(layer: Layer, x: Int, y: Int): Int = TileOps.sample(layer.pixels, x, y)
+    fun sample(layer: Layer, x: Int, y: Int): Int = pinned(layer) { TileOps.sample(it, x, y) }
 
     /** The pixels of [r] (document px; transparent outside the layer) at (0, 0) of [out] (r-sized ARGB, else allocated). */
     fun region(layer: Layer, r: Rect, out: Bitmap? = null): Bitmap {
         val dst = out ?: allocate(r)
-        TileOps.readRegion(layer.pixels, r, dst)
+        try {
+            pinned(layer) { TileOps.readRegion(it, r, dst) }
+        } catch (e: Throwable) {
+            if (dst !== out) dst.recycle()
+            throw e
+        }
         return dst
     }
 
@@ -59,6 +65,18 @@ object PixelReads {
         c.translate(-r.left.toFloat(), -r.top.toFloat())
         Compositor(doc) { null }.drawDocument(c, r, useOverrides = false, target = CompositeTarget.translate(dst, r.left, r.top))
         return dst
+    }
+
+    /**
+     * v1.10 A9: runs [read] on [layer]'s content store with the layer pinned when the store is
+     * tiled (a non-resident pin: nothing parks, swaps out or recycles its tiles during the read,
+     * and nothing is swapped in; a non-resident tile is read through `withPixels`). A flat, blank or
+     * folder store needs no pin.
+     */
+    private inline fun <T> pinned(layer: Layer, read: (PixelStore) -> T): T {
+        val p = layer.pixels
+        if (p !is TiledPixels) return read(p)
+        return layer.pin().use { read(p) }
     }
 
     private fun allocate(r: Rect): Bitmap {

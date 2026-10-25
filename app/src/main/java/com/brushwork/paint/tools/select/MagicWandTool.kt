@@ -50,7 +50,7 @@ class MagicWandTool(controller: EditorController) : Tool(controller) {
         if (ix !in 0 until doc.width || iy !in 0 until doc.height) return
         val s = settings
         val snapshot: Bitmap = try {
-            PixelSnapshot.take(controller, s.source, controller.activeLayer.bitmap)
+            PixelSnapshot.take(controller, s.source, controller.activeLayer)
         } catch (e: OutOfMemoryError) {
             controller.toast("Not enough memory for the magic wand")
             return

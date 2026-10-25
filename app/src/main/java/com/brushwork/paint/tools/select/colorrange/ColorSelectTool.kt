@@ -13,6 +13,7 @@ import com.brushwork.paint.diagnostics.CrashLog
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.CompositeTarget
 import com.brushwork.paint.engine.RenderScaled
+import com.brushwork.paint.engine.tiles.PixelReads
 import com.brushwork.paint.engine.ViewTransform
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.SelectionMode
@@ -122,7 +123,8 @@ class ColorSelectTool(controller: EditorController) : Tool(controller) {
     private data class ProxyKey(
         val source: SampleSource,
         val layer: Layer?,
-        val bitmap: Bitmap?,
+        // v1.10 A9 step 4: the layer's pixelGeneration (bumped when its store is replaced), never its bitmap.
+        val generation: Long,
         val pixels: Long,
         val layersVersion: Int,
         val width: Int,
@@ -211,7 +213,7 @@ class ColorSelectTool(controller: EditorController) : Tool(controller) {
         val c = controller
         val p = params()
         val snapshot = try {
-            PixelSnapshot.take(c, settings.source, c.activeLayer.bitmap)
+            PixelSnapshot.take(c, settings.source, c.activeLayer)
         } catch (e: OutOfMemoryError) {
             c.toast("Not enough memory for \"${ToolId.COLOR_SELECT.label}\"")
             return
@@ -272,11 +274,11 @@ class ColorSelectTool(controller: EditorController) : Tool(controller) {
         val source = settings.source
         val layer = c.activeLayer
         return if (source == SampleSource.LAYER && !layer.isFolder) {
-            ProxyKey(source, layer, layer.bitmap, layer.contentVersion, 0, c.doc.width, c.doc.height)
+            ProxyKey(source, layer, layer.pixelGeneration, layer.contentVersion, 0, c.doc.width, c.doc.height)
         } else {
             var sum = 0L
             for (l in c.doc.layers) sum += l.contentVersion
-            ProxyKey(SampleSource.CANVAS, null, null, sum, c.layersVersion, c.doc.width, c.doc.height)
+            ProxyKey(SampleSource.CANVAS, null, 0L, sum, c.layersVersion, c.doc.width, c.doc.height)
         }
     }
 
@@ -334,8 +336,9 @@ class ColorSelectTool(controller: EditorController) : Tool(controller) {
 
     /** What [key] names, to render off the main thread: the layer's pixels or the canvas. Main thread. */
     private fun sourceOf(key: ProxyKey): RenderScaled.Source {
-        val bitmap = key.bitmap
-        return if (bitmap != null) RenderScaled.Source.layer(bitmap) else RenderScaled.Source.canvas(controller.doc)
+        // v1.10 A9 step 4: the layer's store (the active layer is FLAT at every level, P1), never a materialized bitmap.
+        val layer = key.layer
+        return if (layer != null) RenderScaled.Source.layer(layer.pixels) else RenderScaled.Source.canvas(controller.doc)
     }
 
     /**
@@ -436,7 +439,7 @@ class ColorSelectTool(controller: EditorController) : Tool(controller) {
         if (ix !in 0 until doc.width || iy !in 0 until doc.height) return null
         val layer = controller.activeLayer
         val argb = if (settings.source == SampleSource.LAYER && !layer.isFolder) {
-            layer.bitmap.getPixel(ix, iy)
+            PixelReads.sample(layer, ix, iy)
         } else {
             renderPixel(ix, iy)
         }

@@ -13,6 +13,8 @@ import com.brushwork.paint.EditorController
 import com.brushwork.paint.engine.CompositeTarget
 import com.brushwork.paint.engine.PaperBackdrop
 import com.brushwork.paint.engine.ViewTransform
+import com.brushwork.paint.engine.tiles.FlatPixels
+import com.brushwork.paint.engine.tiles.PixelReads
 import com.brushwork.paint.tools.Tool
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
@@ -121,7 +123,14 @@ class EyedropperTool(controller: EditorController) : Tool(controller) {
         if (!r.intersect(0, 0, doc.width, doc.height)) return null
         val w = r.width(); val h = r.height()
         if (layerSource) {
-            controller.activeLayer.bitmap.getPixels(pixels, 0, w, r.left, r.top, w, h)
+            // v1.10 A9 (C-REG): a flat store's bitmap as before, else a region read (never materializes).
+            val layer = controller.activeLayer
+            when (val p = layer.pixels) {
+                is FlatPixels -> p.bitmap.getPixels(pixels, 0, w, r.left, r.top, w, h)
+                else -> PixelReads.region(layer, r).let { b ->
+                    try { b.getPixels(pixels, 0, w, 0, 0, w, h) } finally { b.recycle() }
+                }
+            }
         } else {
             // Outside a gesture nothing guarantees the cached patch is current.
             if (!active) patchValid = false

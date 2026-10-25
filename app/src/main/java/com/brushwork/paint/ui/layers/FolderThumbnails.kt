@@ -82,7 +82,9 @@ internal class FolderThumbnails(private val maxSize: Int = FOLDER_THUMB_PX) {
          * What the picture of the folder at flat index [index] of [layers] depends on, hashed: for
          * every layer of its block (the folder's own row too, for its pass-through flag; its own
          * opacity, blend and eye are not drawn in it but cost nothing to include) the id, parent,
-         * pixels (bitmap identity and `contentVersion`), mask, adjustment and properties.
+         * pixels (`pixelGeneration`, bumped when the content or mask store is replaced, and
+         * `contentVersion`), mask (`hasMask`, the switch), adjustment and properties. v1.10 A9: never
+         * `identityHashCode(bitmap)`: reading a parked layer's `bitmap` would materialize it.
          */
         fun key(layers: List<Layer>, index: Int): Long {
             var h = 1125899906842597L
@@ -91,9 +93,9 @@ internal class FolderThumbnails(private val maxSize: Int = FOLDER_THUMB_PX) {
                 val l = layers[i]
                 mix(l.id)
                 mix(l.parentId)
-                mix(System.identityHashCode(l.bitmap).toLong())
+                mix(l.pixelGeneration)
                 mix(l.contentVersion)
-                mix(System.identityHashCode(l.mask).toLong())
+                mix(if (l.hasMask) 1 else 0)
                 mix(if (l.maskEnabled) 1 else 0)
                 mix(l.adjustment?.hashCode()?.toLong() ?: 0)
                 mix(l.opacity.toRawBits().toLong())

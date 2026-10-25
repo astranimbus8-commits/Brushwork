@@ -148,7 +148,8 @@ class MagneticLassoTool(controller: EditorController) : Tool(controller), PillPo
     private data class MapKey(
         val source: SampleSource,
         val layer: Layer?,
-        val bitmap: Bitmap?,
+        // v1.10 A9 step 4: the layer's pixelGeneration (bumped when its store is replaced), never its bitmap.
+        val generation: Long,
         val pixels: Long,
         val layersVersion: Int,
         val width: Int,
@@ -209,11 +210,11 @@ class MagneticLassoTool(controller: EditorController) : Tool(controller), PillPo
         val c = controller
         val layer = c.activeLayer
         return if (settings.source == SampleSource.LAYER && !layer.isFolder) {
-            MapKey(SampleSource.LAYER, layer, layer.bitmap, layer.contentVersion, 0, c.doc.width, c.doc.height)
+            MapKey(SampleSource.LAYER, layer, layer.pixelGeneration, layer.contentVersion, 0, c.doc.width, c.doc.height)
         } else {
             var sum = 0L
             for (l in c.doc.layers) sum += l.contentVersion
-            MapKey(SampleSource.CANVAS, null, null, sum, c.layersVersion, c.doc.width, c.doc.height)
+            MapKey(SampleSource.CANVAS, null, 0L, sum, c.layersVersion, c.doc.width, c.doc.height)
         }
     }
 
@@ -278,8 +279,9 @@ class MagneticLassoTool(controller: EditorController) : Tool(controller), PillPo
 
     /** What [key] names, to render off the main thread: the layer's pixels or the canvas. Main thread. */
     private fun sourceOf(key: MapKey): RenderScaled.Source {
-        val bitmap = key.bitmap
-        return if (key.source == SampleSource.LAYER && bitmap != null) RenderScaled.Source.layer(bitmap) else RenderScaled.Source.canvas(controller.doc)
+        // v1.10 A9 step 4: the layer's store (the active layer is FLAT at every level, P1), never a materialized bitmap.
+        val layer = key.layer
+        return if (key.source == SampleSource.LAYER && layer != null) RenderScaled.Source.layer(layer.pixels) else RenderScaled.Source.canvas(controller.doc)
     }
 
     /**

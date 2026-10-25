@@ -5,6 +5,11 @@ import com.brushwork.paint.EditorController
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.Compositor
 import com.brushwork.paint.engine.FolderComposite
+import com.brushwork.paint.engine.tiles.BandAssembler
+import com.brushwork.paint.engine.tiles.FlatPixels
+import com.brushwork.paint.engine.tiles.PixelStore
+import com.brushwork.paint.engine.tiles.TileOps
+import com.brushwork.paint.engine.tiles.TiledPixels
 import com.brushwork.paint.filters.FilterSessionMath
 import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.Layer
@@ -29,14 +34,19 @@ object AdjustmentHistogram {
         // included; a layer whose folder is not copied (a pass-through folder the adjustment is
         // in, which draws as if it were not there) moves to the top level, unclipped when it was
         // the bottom of its folder.
+        // v1.10 A9 (C-REG): the views take `snapshot()`s of the tiled stores (CoW, no copy; a flat,
+        // blank or folder store is shared as v1.9 shared the bitmap), never `bitmap`, which would
+        // materialize a parked layer; the temporary document composites tile-native.
         val start = FolderComposite.effectStart(layers, idx)
         val views = HashMap<Long, Long>()
+        val snapshots = ArrayList<TiledPixels>()
+        fun view(p: PixelStore): PixelStore = if (p is TiledPixels) p.snapshot().also { snapshots += it } else p
         for (i in start until idx) if (layers[i].isFolder) views[layers[i].id] = viewId(i)
         for (i in start until idx) {
             val l = layers[i]
-            tmp.layers += Layer(viewId(i), l.name, l.bitmap).also { v ->
+            tmp.layers += Layer(viewId(i), l.name, view(l.pixels)).also { v ->
                 v.copyPropsFrom(l.props())
-                v.mask = l.mask
+                v.maskPixels = l.maskPixels?.let { view(it) }
                 v.maskSpec = l.maskSpec
                 v.adjustment = l.adjustment
                 v.folder = l.folder
@@ -48,17 +58,18 @@ object AdjustmentHistogram {
                 }
             }
         }
-        if (tmp.layers.isEmpty()) return null
         var thumb: Bitmap? = null
         var mask: Bitmap? = null
         return try {
+            if (tmp.layers.isEmpty()) return null
             val t = Compositor(tmp) { null }.renderThumbnail(SIZE)
             thumb = t
             val buf = BitmapUtils.toPixelBuffer(t)
-            val m = if (layer.maskEnabled) layer.mask else null
+            val m = if (layer.maskEnabled) layer.maskPixels else null
             val sel = m?.let { src ->
-                val scaled = Bitmap.createScaledBitmap(src, t.width, t.height, true)
-                mask = scaled.takeIf { it !== src }
+                // A flat mask as v1.9 scaled it; a tiled one through the bands (never materialized).
+                val scaled = if (src is FlatPixels && src.bitmap.width == t.width && src.bitmap.height == t.height) src.bitmap else BandAssembler.scaled(src, t.width, t.height)
+                mask = scaled.takeIf { src !is FlatPixels || it !== src.bitmap }
                 BitmapUtils.maskToBytes(scaled)
             }
             FilterSessionMath.luminanceHistogram(buf, sel)
@@ -67,6 +78,7 @@ object AdjustmentHistogram {
         } finally {
             thumb?.recycle()
             mask?.recycle()
+            snapshots.forEach { TileOps.releaseStore(it) }
         }
     }
 
