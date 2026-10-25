@@ -8,6 +8,7 @@ import android.util.Log
 import com.brushwork.paint.engine.EngineConfig
 import com.brushwork.paint.engine.EngineLevel
 import com.brushwork.paint.engine.budget.StorageProbe
+import com.brushwork.paint.engine.check.AutoCheckRunner
 import java.io.File
 import java.io.IOException
 import java.io.RandomAccessFile
@@ -40,6 +41,9 @@ import java.util.zip.CRC32
  * the session ([writesOff]) and throws, so the tile stays resident. A failed read or a CRC
  * mismatch throws `IOException`; the caller restores the layer from its last save (design 2.8).
  *
+ * **Slow reads (design 2.10).** Every read is timed; when the p95 of the last 50 exceeds 40 ms,
+ * [slowReads] turns on and the installed store records `slowSwapReads` (TILES at the next open).
+ *
  * **Threads.** [write] on the worker (it records the slot in `tile.slot` under the tile's lock and
  * leaves the bitmap: dropping it is main's commit, the `Tile.kt` rules); [read] on the worker or a
  * reader; [free] and [close] on main. [close] closes the slab files at once and deletes [dir] on its
@@ -50,8 +54,17 @@ class SlabSwapStore internal constructor(
     private val storage: StorageProbe,
     private val clock: () -> Long = { SystemClock.elapsedRealtime() },
     private val slabBytes: Long = SLAB_BYTES,
+    private val onSlowReads: (() -> Unit)? = null,
 ) : SwapStore {
     private val pagesPerSlab = (slabBytes / PAGE).toInt()
+
+    /** The last [SLOW_WINDOW] read times in ms, a ring ([reads] in all). */
+    private val latencies = LongArray(SLOW_WINDOW)
+    private var reads = 0
+
+    /** True once the p95 of the last [SLOW_WINDOW] reads exceeded [SLOW_READ_MS] this session ([onSlowReads] was called). */
+    @Volatile var slowReads = false
+        private set
 
     /** This session's directory name (a random UUID). */
     val sessionId: String = UUID.randomUUID().toString()
@@ -131,6 +144,40 @@ class SlabSwapStore internal constructor(
 
     @Throws(IOException::class)
     override fun read(tile: Tile): Bitmap {
+        val t0 = clock()
+        try {
+            return readSlot(tile)
+        } finally {
+            recordRead(clock() - t0)
+        }
+    }
+
+    /**
+     * Slow swap reads in use (design 2.10): every read's time joins a ring of the last
+     * [SLOW_WINDOW] (50); once it is full and its p95 (nearest rank: the 48th of 50) exceeds
+     * [SLOW_READ_MS] (40 ms), [onSlowReads] runs once for the session (the next sessions run at
+     * TILES).
+     */
+    private fun recordRead(ms: Long) {
+        val fire = synchronized(latencies) {
+            latencies[reads % SLOW_WINDOW] = ms
+            reads++
+            if (slowReads || reads < SLOW_WINDOW) return@synchronized false
+            val p95 = latencies.sortedArray()[P95_RANK - 1]
+            if (p95 > SLOW_READ_MS) slowReads = true
+            slowReads
+        }
+        if (fire) {
+            try {
+                onSlowReads?.invoke()
+            } catch (e: Exception) {
+                Log.w(TAG, "slow swap reads not recorded", e)
+            }
+        }
+    }
+
+    @Throws(IOException::class)
+    private fun readSlot(tile: Tile): Bitmap {
         val slot = synchronized(tile.lock) { tile.slot } ?: throw IOException("tile ${tile.w}x${tile.h} is not swapped")
         if (closed) throw IOException("swap store closed")
         val slab = synchronized(lock) { slabs.getOrNull(slot.slab) } ?: throw IOException("no slab ${slot.slab}")
@@ -281,6 +328,15 @@ class SlabSwapStore internal constructor(
         /** The capacity is read again after 60 s. */
         const val CAP_REFRESH_MS = 60_000L
 
+        /** Slow swap reads: the reads the p95 is taken over. */
+        const val SLOW_WINDOW = 50
+
+        /** Slow swap reads: the nearest rank of the p95 in [SLOW_WINDOW] reads (ceil(0.95 x 50)). */
+        const val P95_RANK = 48
+
+        /** Slow swap reads: a p95 above this many ms. */
+        const val SLOW_READ_MS = 40L
+
         /** `swapCap = min(16 GiB, (free - 1 GiB) / 2)`, never negative (J10, UQ13). */
         fun capOf(free: Long): Long = minOf(MAX_CAP, ((free - MIN_FREE) / 2).coerceAtLeast(0L))
 
@@ -301,7 +357,13 @@ class SlabSwapStore internal constructor(
         fun installIfFull(context: Context): SlabSwapStore? {
             if (EngineConfig.level != EngineLevel.FULL || EngineConfig.swapStore !== NoSwap) return null
             if (Build.FINGERPRINT == "robolectric" && !installUnderRobolectric) return null
-            val store = SlabSwapStore(SwapJanitor.root(context), EngineConfig.storageProbe)
+            val app = context.applicationContext
+            val store = SlabSwapStore(SwapJanitor.root(app), EngineConfig.storageProbe, onSlowReads = {
+                Thread({ AutoCheckRunner.markSlowSwapReads(app) }, "swap-slow-reads").apply {
+                    isDaemon = true
+                    start()
+                }
+            })
             EngineConfig.swapStore = store
             return store
         }

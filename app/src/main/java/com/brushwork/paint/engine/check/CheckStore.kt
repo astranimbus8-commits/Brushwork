@@ -2,8 +2,11 @@ package com.brushwork.paint.engine.check
 
 import android.content.Context
 import android.util.Log
+import com.brushwork.paint.engine.EngineLevel
 import com.brushwork.paint.storage.ProjectFormat
+import com.brushwork.paint.storage.engine.CheckReasons
 import com.brushwork.paint.storage.engine.EngineCheckResult
+import com.brushwork.paint.storage.engine.EngineStateStore
 import kotlinx.serialization.json.Json
 import java.io.File
 
@@ -29,8 +32,16 @@ object CheckStore {
         coerceInputValues = true
     }
 
-    /** The result sessions and the gallery run with: the stored one ([readStored]). */
-    fun read(context: Context): EngineCheckResult? = readStored(context)
+    /**
+     * The result sessions and the gallery run with: the stored one ([readStored]), except that a
+     * FULL result runs at TILES with [CheckReasons.SLOW_STORAGE] while `engine-state.json` records
+     * slow swap reads in use (`slowSwapReads`, design 2.10), which the next check clears.
+     */
+    fun read(context: Context): EngineCheckResult? {
+        val stored = readStored(context) ?: return null
+        if (stored.level != EngineLevel.FULL || !EngineStateStore.read(context).slowSwapReads) return stored
+        return stored.copy(level = EngineLevel.TILES, reason = CheckReasons.SLOW_STORAGE)
+    }
 
     /** The result file. */
     fun file(context: Context): File = File(context.noBackupFilesDir, FILE_NAME)

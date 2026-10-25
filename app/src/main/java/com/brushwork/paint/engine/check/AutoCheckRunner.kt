@@ -398,6 +398,17 @@ class AutoCheckRunner(context: Context, private val env: CheckEnv, private val s
             if (!state.engineCheckPending) EngineStateStore.write(context, state.copy(engineCheckPending = true))
         }
 
+        /**
+         * Slow swap reads in use (design 2.10; `SlabSwapStore` calls it once per session): sets
+         * `slowSwapReads`, so the next sessions run at TILES ([CheckStore.read]) until the next check
+         * clears it. Blocking (one small file), off the main thread.
+         */
+        fun markSlowSwapReads(context: Context) {
+            val state = EngineStateStore.read(context)
+            if (!state.slowSwapReads) EngineStateStore.write(context, state.copy(slowSwapReads = true))
+            Log.w(TAG, "slow swap reads: the next sessions run at TILES until the next check")
+        }
+
         /** The process's runner for [app] (a new one for a new app, as in each Robolectric test). */
         fun of(app: BrushworkApp): AutoCheckRunner = synchronized(this) {
             shared?.takeIf { it.context === app } ?: AutoCheckRunner(app, envOf(app)).also { shared = it }

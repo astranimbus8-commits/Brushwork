@@ -34,7 +34,10 @@ internal object SwapKit {
         clock: FakeClock = FakeClock(),
         slabBytes: Long = SlabSwapStore.SLAB_BYTES,
         root: File = this.root,
-    ): SlabSwapStore = SlabSwapStore(root, storage, clock.millis, slabBytes).also { synchronized(opened) { opened += it } }
+    ): SlabSwapStore = track(SlabSwapStore(root, storage, clock.millis, slabBytes))
+
+    /** [store], which [cleanUp] closes (a store a test made itself). */
+    fun track(store: SlabSwapStore): SlabSwapStore = store.also { synchronized(opened) { opened += it } }
 
     /** A tile of [src]'s pixels (its own copy) and [src]. */
     fun tileOf(src: Bitmap): Pair<Tile, Bitmap> = Tile.of(src.copy(Bitmap.Config.ARGB_8888, true)) to src

@@ -31,7 +31,8 @@ object EngineStartup {
         val check = CheckStore.read(app)
         val mode = brush.settings.layerStorageMode
         if (check != null) EngineConfig.applyIdle(mode, check, Budgets.compute(EngineConfig.memoryProbe, check.stepDown))
-        CheckNotices.atStart(app, check, mode)
+        // The notice tells the check's choice, not the slow-reads fallback of CheckStore.read.
+        CheckNotices.atStart(app, if (check == null) null else CheckStore.readStored(app), mode)
         app.registerComponentCallbacks(TrimCallbacks(brush))
         if (Build.FINGERPRINT == "robolectric") return
         Thread({ atStart(brush) }, "engine-start").apply { isDaemon = true }.start()
