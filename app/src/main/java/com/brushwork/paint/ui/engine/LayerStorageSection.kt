@@ -14,7 +14,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -24,6 +23,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import com.brushwork.paint.AppSettings
 import com.brushwork.paint.BrushworkApp
+import com.brushwork.paint.diagnostics.rememberSupervisedScope
 import com.brushwork.paint.engine.EngineConfig
 import com.brushwork.paint.engine.EngineLevel
 import com.brushwork.paint.engine.EngineStats
@@ -63,7 +63,7 @@ fun LayerStorageSection() {
     val context = LocalContext.current
     val app = context.applicationContext
     val settings = remember(app) { (app as? BrushworkApp)?.settings ?: AppSettings(app) }
-    val scope = rememberCoroutineScope()
+    val scope = rememberSupervisedScope()
     var mode by remember { mutableStateOf(settings.layerStorageMode) }
     var stored by remember { mutableStateOf<Stored?>(null) }
     var reads by remember { mutableIntStateOf(0) }
