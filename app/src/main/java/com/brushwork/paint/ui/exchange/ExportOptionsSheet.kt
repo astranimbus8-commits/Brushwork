@@ -24,13 +24,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import com.brushwork.paint.engine.FolderComposite
 import com.brushwork.paint.exchange.VectorFormat
 import com.brushwork.paint.exchange.export.ExportSceneBuilder
 import com.brushwork.paint.exchange.export.PdfPage
 import com.brushwork.paint.exchange.export.StrokeExport
 import com.brushwork.paint.exchange.export.TextExportMode
 import com.brushwork.paint.model.LayerBlendMode
+import com.brushwork.paint.model.LayerTree
 import com.brushwork.paint.ui.common.BwSheet
 import com.brushwork.paint.ui.common.CanvasLabels19
 import com.brushwork.paint.ui.common.ChoiceChips
@@ -55,17 +55,18 @@ internal fun ExportOptionsSheet(state: ExchangeUiState) {
         derivedStateOf {
             c.layersVersion
             val layers = c.doc.layers
+            // v1.10 (A7): the eyes and clip groups through one LayerTree.Index (O(n), not O(n) per layer).
+            val tree = LayerTree.index(layers)
             val out = ArrayList<String>()
-            if (pdf && layers.any { it.folder?.passThrough != true && c.doc.effectiveVisible(it) && it.blendMode == LayerBlendMode.ADD }) out += "Add (Glow) is exported as Screen in PDF"
-            if (layers.any { it.isAdjustmentLayer && c.doc.effectiveVisible(it) }) out += "Layers below an adjustment layer are exported as one picture"
+            if (pdf && layers.any { it.folder?.passThrough != true && tree.effectiveVisible(it) && it.blendMode == LayerBlendMode.ADD }) out += "Add (Glow) is exported as Screen in PDF"
+            if (layers.any { it.isAdjustmentLayer && tree.effectiveVisible(it) }) out += "Layers below an adjustment layer are exported as one picture"
             // v1.7 (item 8): a folder clips (and is clipped) like a layer.
-            if (layers.any { it.clipping && !it.isAdjustmentLayer && c.doc.effectiveVisible(it) }) out += "Clipping groups are exported as pictures"
+            if (layers.any { it.clipping && !it.isAdjustmentLayer && tree.effectiveVisible(it) }) out += "Clipping groups are exported as pictures"
             // A pass-through folder below 100 % (drawn as itself: not in a clip group): exact in
             // PDF, isolated in SVG.
             if (!pdf && layers.indices.any { i ->
                     val l = layers[i]
-                    l.folder?.passThrough == true && l.opacity > 0f && l.opacity < 1f && c.doc.effectiveVisible(l) &&
-                        !FolderComposite.isClipBase(layers, i) && !FolderComposite.isClipped(layers, i)
+                    l.folder?.passThrough == true && l.opacity > 0f && l.opacity < 1f && tree.effectiveVisible(l) && !tree.isClipBase(i) && !tree.isClipped(i)
                 }
             ) out += ExportSceneBuilder.PASS_THROUGH_SVG_NOTE
             out

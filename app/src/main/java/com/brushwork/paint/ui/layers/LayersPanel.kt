@@ -54,6 +54,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextRange
@@ -64,6 +65,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import com.brushwork.paint.EditorController
+import com.brushwork.paint.engine.LayerBudget
+import com.brushwork.paint.engine.budget.LayerBudgetV110
 import com.brushwork.paint.model.IncrementKind
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.LayerTree
@@ -72,6 +75,7 @@ import com.brushwork.paint.model.TransparencyDisplay
 import com.brushwork.paint.ui.common.BwDialog
 import com.brushwork.paint.ui.common.FolderLabels
 import com.brushwork.paint.ui.common.LayerLabels19
+import com.brushwork.paint.ui.common.LayersLabels110
 import com.brushwork.paint.ui.editor.EditorPanel
 import com.brushwork.paint.ui.editor.SliderMath
 import com.brushwork.paint.ui.editor.ValueInputDialog
@@ -85,6 +89,8 @@ import kotlin.math.roundToInt
  * The ibisPaint layer window (v1.6, design §3.7.7): a translucent floating panel that is not
  * modal — the canvas around it keeps working. Top to bottom:
  * - the header: "Layer", the "n / max" count (red at the limit) and the ✕ ("Close layers");
+ *   v1.10 (A7, design 2.13): the count alone ("12", read "12 layers") where only the 10,000-layer
+ *   guard limits (FULL with a swap store; [headerCount]);
  * - the main block: the left column (the flattened canvas preview over six buttons: add — long
  *   press for the special layers —, the canvas flips, duplicate, import picture, new special
  *   layer), the bottom-aligned list (the Selection Layer row, then the 80 dp layer rows top layer
@@ -161,6 +167,8 @@ fun LayersPanel(
     // v1.7 (I14): the header's "n / max" counts what maxLayers counts (folders 0, array sources
     // added); without folders and arrays it is the number of layers, as in v1.6.
     val usedLayers = controller.effectiveLayerCount
+    // v1.10 (A7, design 2.13): FULL with the session's swap store has no limit to show.
+    val countOnly = (LayerBudget.current as? LayerBudgetV110)?.noFixedLimit == true
 
     var renameId by rememberSaveable { mutableStateOf<Long?>(null) }
     var opacityId by rememberSaveable { mutableStateOf<Long?>(null) }
@@ -249,7 +257,7 @@ fun LayersPanel(
                 )
             }
             Column(Modifier.fillMaxSize()) {
-                WindowHeader(usedLayers, maxLayers, canAddLayer, onDismiss, Modifier.height(m.header.dp))
+                WindowHeader(headerCount(usedLayers, maxLayers, canAddLayer, countOnly), onDismiss, Modifier.height(m.header.dp))
                 if (m.sideBySide) {
                     // Short, wide window (a phone in landscape): the list beside the controls.
                     Row(Modifier.fillMaxWidth().height(m.main.dp).padding(start = m.padStart.dp, end = m.padEnd.dp, bottom = m.bottomPad.dp)) {
@@ -395,11 +403,11 @@ fun LayersPanel(
 }
 
 /**
- * "Layer", the layer count ("n / max", red at the limit; v1.7: `effectiveLayerCount`) and the ✕
- * (kept: tests and V10).
+ * "Layer", the layer [count] ([headerCount]: "n / max", red at the limit; v1.7:
+ * `effectiveLayerCount`) and the ✕ (kept: tests and V10).
  */
 @Composable
-private fun WindowHeader(layerCount: Int, maxLayers: Int, canAddLayer: Boolean, onDismiss: () -> Unit, modifier: Modifier) {
+private fun WindowHeader(count: HeaderCount, onDismiss: () -> Unit, modifier: Modifier) {
     Row(
         modifier.fillMaxWidth().testTag(LayerWindowTags.HEADER).padding(start = 12.dp, end = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -407,16 +415,36 @@ private fun WindowHeader(layerCount: Int, maxLayers: Int, canAddLayer: Boolean, 
         Text(LayerLabels.TITLE, color = Color.White, fontSize = IbisDims.LayerHeaderText, fontWeight = FontWeight.SemiBold, maxLines = 1)
         Spacer(Modifier.weight(1f))
         Text(
-            "$layerCount / $maxLayers",
-            color = if (canAddLayer) BrushworkColors.OnChromeDim else BrushworkColors.Danger,
+            count.text,
+            color = if (count.danger) BrushworkColors.Danger else BrushworkColors.OnChromeDim,
             fontSize = 12.sp,
             maxLines = 1,
+            modifier = Modifier.testTag(HEADER_COUNT_TAG).semantics { count.description?.let { contentDescription = it } },
         )
         IconButton(onClick = onDismiss, modifier = Modifier.size(IbisDims.LayerClose)) {
             Icon(Icons.Filled.Close, contentDescription = LayerLabels.CLOSE, tint = Color.White)
         }
     }
 }
+
+/**
+ * v1.10 (A7): the header's layer count: its [text], whether it is red ([danger]) and what TalkBack
+ * reads ([description]; null: the text).
+ */
+internal data class HeaderCount(val text: String, val danger: Boolean, val description: String?)
+
+/**
+ * v1.10 (A7, design 2.13): v1.9's "n / max" ([used] of [max], `effectiveLayerCount` units, red
+ * once nothing more can be added) wherever a limit remains: Classic, TILES and FULL without a swap
+ * store. [countOnly] (FULL with the session's swap store, where only the 10,000-layer guard
+ * limits): "n" alone, read "n layers", never red.
+ */
+internal fun headerCount(used: Int, max: Int, canAdd: Boolean, countOnly: Boolean): HeaderCount =
+    if (countOnly) HeaderCount("$used", danger = false, description = LayersLabels110.count(used))
+    else HeaderCount("$used / $max", danger = !canAdd, description = null)
+
+/** v1.10 (A7): the test tag of the header's count. */
+internal const val HEADER_COUNT_TAG = "layerWindowCount"
 
 /**
  * The bottom-aligned list: the Selection Layer row (item 0) and the saved selections (item 1, one

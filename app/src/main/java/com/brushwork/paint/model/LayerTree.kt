@@ -8,9 +8,10 @@ package com.brushwork.paint.model
  * `MAX_DEPTH − 1` ancestors) and a document has at most [MAX_FOLDERS].
  *
  * Pure (reads only `id`, `parentId` and the folder / visible / locked / opacity / clipping
- * fields; never a bitmap); O(n) per query (n ≤ 164). Queries take flat indices; -1 means "top
- * level". Structural edits are [Plan]s the controller applies with ONE `LayerTreeAction`
- * (`engine/LayerStructure.kt`, F2).
+ * fields; never a bitmap); O(n) per query. v1.10 (A7): n ≤ 10,000 (the structural guard), so code that
+ * asks about every layer builds an [Index] once (O(n)) and asks it in O(1). Queries take flat
+ * indices; -1 means "top level". Structural edits are [Plan]s the controller applies with ONE
+ * `LayerTreeAction` (`engine/LayerStructure.kt`, F2).
  */
 object LayerTree {
     const val MAX_DEPTH = 8
@@ -129,6 +130,156 @@ object LayerTree {
         while (j < layers.size && layers[j].parentId != pid && layers[j].id != pid) j++
         return j < layers.size && layers[j].parentId == pid && layers[j].clipping && !layers[j].isAdjustmentLayer
     }
+
+    // ------------------------------------------------------------------ the index (v1.10)
+
+    /**
+     * v1.10 (A7, design 3.10 and 4.4 step 5): the tree of [layers] for code that asks about every
+     * layer (a loop over the layers, a frame list): one O(n) build, then every query O(1). The
+     * per-index queries above walk the ancestors, O(n) each, which made such loops O(n²) at the
+     * 10,000 layers v1.10 allows. The build happens at the first query that needs it: the eye and
+     * the lock of a top-level layer ([effectiveVisible] and [effectiveLocked] of a [Layer]) need
+     * none, so a document without folders never builds. [index] makes one per call (the document
+     * keeps no structure version to cache it on): make it once per loop, never inside one.
+     *
+     * Each answer equals the query above of the same name on a list that holds I11 (every
+     * document's does: the load repairs it, [Plan]s are checked; `LayerTreeIndexTest` compares
+     * them on 1,000 random trees). Reads the same fields, never a bitmap; the list must not change
+     * while the index is in use.
+     */
+    class Index internal constructor(private val layers: List<Layer>) {
+        /** The number of layers indexed. */
+        val size: Int = layers.size
+
+        private val tree by lazy(LazyThreadSafetyMode.NONE) { Tree(layers) }
+
+        /** [parentOf] of every flat index (-1 = top level). */
+        val parent: IntArray get() = tree.parent
+
+        /** [depth] of every flat index. */
+        val depth: IntArray get() = tree.depth
+
+        /** `Document.effectiveVisible` of every flat index: its own eye and every folder's above it. */
+        val effectiveVisible: BooleanArray get() = tree.effectiveVisible
+
+        /** `Document.effectiveLocked` of every flat index: its own lock or any folder's above it. */
+        val effectiveLocked: BooleanArray get() = tree.effectiveLocked
+
+        /** The flat index of [layer] (by identity), -1 when it is not in the indexed list. */
+        fun indexOf(layer: Layer): Int = tree.position[layer] ?: -1
+
+        /** `Document.effectiveVisible`, without a build for a top-level layer. */
+        fun effectiveVisible(layer: Layer): Boolean =
+            layer.visible && (layer.parentId == Layer.ROOT_ID || indexOf(layer).let { it < 0 || tree.shown[it] })
+
+        /** `Document.effectiveLocked`, without a build for a top-level layer. */
+        fun effectiveLocked(layer: Layer): Boolean =
+            layer.locked || (layer.parentId != Layer.ROOT_ID && indexOf(layer).let { it >= 0 && tree.lockedAbove[it] })
+
+        /** [LayerTree.parentOf]. */
+        fun parentOf(index: Int): Int = if (index in 0 until size) tree.parent[index] else -1
+
+        /** [LayerTree.depth]. */
+        fun depth(index: Int): Int = if (index in 0 until size) tree.depth[index] else 0
+
+        /** [LayerTree.descendantCount]. */
+        fun descendantCount(index: Int): Int = if (index in 0 until size && layers[index].isFolder) index - tree.start[index] else 0
+
+        /** [LayerTree.block]. */
+        fun block(index: Int): IntRange = (index - descendantCount(index))..index
+
+        /** [LayerTree.shownByAncestors]. */
+        fun shownByAncestors(index: Int): Boolean = index !in 0 until size || tree.shown[index]
+
+        /** [LayerTree.lockedByAncestor]. */
+        fun lockedByAncestor(index: Int): Boolean = index in 0 until size && tree.lockedAbove[index]
+
+        /** [LayerTree.showsAsIs]. */
+        fun showsAsIs(index: Int): Boolean = index !in 0 until size || tree.asIs[index]
+
+        /** [LayerTree.isClipped]. */
+        fun isClipped(index: Int): Boolean = tree.clipped[index]
+
+        /** [LayerTree.isClipBase]. */
+        fun isClipBase(index: Int): Boolean = tree.clipBase[index]
+    }
+
+    /** The arrays of an [Index]: passes down and up the list, O(n). */
+    private class Tree(layers: List<Layer>) {
+        val parent = IntArray(layers.size)
+        val depth = IntArray(layers.size)
+        val effectiveVisible = BooleanArray(layers.size)
+        val effectiveLocked = BooleanArray(layers.size)
+
+        /** The flat index of the bottom of each index's [block]. */
+        val start = IntArray(layers.size)
+        val shown = BooleanArray(layers.size)
+        val lockedAbove = BooleanArray(layers.size)
+        val clipped = BooleanArray(layers.size)
+        val clipBase = BooleanArray(layers.size)
+        val asIs = BooleanArray(layers.size)
+        val position = java.util.IdentityHashMap<Layer, Int>(layers.size * 2)
+
+        init {
+            val size = layers.size
+            // Down from the top: the nearest layer above with each id ([parentOf]) and the nearest
+            // above with each parent (the top of [isClipBase]'s sibling unit above).
+            val nearestById = HashMap<Long, Int>(size * 2)
+            val nearestByParent = HashMap<Long, Int>(size * 2)
+            val above = IntArray(size)
+            for (i in size - 1 downTo 0) {
+                val l = layers[i]
+                val pid = l.parentId
+                parent[i] = if (pid == Layer.ROOT_ID) -1 else nearestById[pid]?.takeIf { layers[it].isFolder } ?: -1
+                above[i] = minOf(nearestByParent[pid] ?: size, nearestById[pid] ?: size)
+                nearestById[l.id] = i
+                nearestByParent[pid] = i
+                position[l] = i
+                start[i] = i
+            }
+            // Up from the bottom: each block starts at its lowest descendant (children lie below
+            // their folder, so a folder is reached after all of them).
+            for (i in 0 until size) {
+                val p = parent[i]
+                if (p >= 0 && start[i] < start[p]) start[p] = start[i]
+            }
+            for (i in 0 until size) {
+                val l = layers[i]
+                val below = start[i] - 1
+                clipped[i] = l.clipping && !l.isAdjustmentLayer && below >= 0 &&
+                    layers[below].parentId == l.parentId && !layers[below].isAdjustmentLayer
+            }
+            for (i in 0 until size) {
+                val l = layers[i]
+                val j = above[i]
+                clipBase[i] = !l.isAdjustmentLayer && !clipped[i] && j < size &&
+                    layers[j].parentId == l.parentId && layers[j].clipping && !layers[j].isAdjustmentLayer
+            }
+            // Down again: what a layer inherits from its folders (parents lie above).
+            for (i in size - 1 downTo 0) {
+                val l = layers[i]
+                val p = parent[i]
+                if (p < 0) {
+                    shown[i] = true
+                    asIs[i] = true
+                } else {
+                    val f = layers[p]
+                    depth[i] = depth[p] + 1
+                    shown[i] = shown[p] && f.visible
+                    lockedAbove[i] = lockedAbove[p] || f.locked
+                    asIs[i] = asIs[p] && f.folder?.passThrough == true && f.visible && f.opacity == 1f && !clipped[p] && !clipBase[p]
+                }
+                effectiveVisible[i] = l.visible && shown[i]
+                effectiveLocked[i] = l.locked || lockedAbove[i]
+            }
+        }
+    }
+
+    /** v1.10 (A7): the [Index] of [layers] (built at its first query that needs it; see there). */
+    fun index(layers: List<Layer>): Index = Index(layers)
+
+    /** v1.10 (A7): the [Index] of [doc]'s layers. */
+    fun index(doc: Document): Index = Index(doc.layers)
 
     // ------------------------------------------------------------------ plans
 

@@ -57,6 +57,12 @@ class LayerBudgetV110(private val budget: MemoryBudget, private val level: Engin
     /** FULL with the session's swap store: no layer limit but the guard and free storage. */
     private val swapping: Boolean get() = level == EngineLevel.FULL && EngineConfig.swapStore.capacityBytes > 0L
 
+    /**
+     * Section 2.13: memory known, at FULL with the session's swap store: no layer limit but the
+     * 10,000-layer guard, so the layers panel shows the count alone ("12", read "12 layers").
+     */
+    val noFixedLimit: Boolean get() = known && swapping
+
     private fun per(doc: Document): Long = max(1L, doc.layerBytes)
 
     private fun arrayBytes(doc: Document): Long = doc.layers.sumOf { it.array?.pixels?.bytes ?: 0L }
