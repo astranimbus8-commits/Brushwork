@@ -3171,7 +3171,8 @@ image") and the CDC consumer of R7 (the canvas previews a color while it is bein
   `colorMapper`, named). The panel's " · applying rasterizes it" covers every data layer except
   in object mode, which shows `CdcLabels110.OBJECTS` at the top of the settings, plus
   `CdcLabels110.SELECTION_WHOLE` under `Rule.SELECTION`. The banner texts other than v1.9's
-  vector one are private stand-ins until `FilterLabels110` exists (lead request).
+  vector one are `FilterLabels110`'s (`RASTERIZES_TEXT`, `RASTERIZES_SHAPE`, `RASTERIZES_ARRAY`,
+  `KEEPS_EDITABLE`), added to `LabelsV110.kt` by the lead at the merge (the area's request).
 - **Live color (R7).** `ColorControl` passes `onPreview = { host.update(key, it) }`: each frame's
   color updates the session's values (no step; a pending change of another control is recorded
   first, as any update does) and the canvas re-previews; Cancel's `onPreview(start)` restores

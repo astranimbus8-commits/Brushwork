@@ -101,6 +101,7 @@ import com.brushwork.paint.masks.AdjustmentLayerOps
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.ui.common.BwSheet
 import com.brushwork.paint.ui.common.CdcLabels110
+import com.brushwork.paint.ui.common.FilterLabels110
 import com.brushwork.paint.ui.common.SectionHeader
 import com.brushwork.paint.ui.common.SheetBackground
 import com.brushwork.paint.ui.theme.BrushworkColors
@@ -218,12 +219,6 @@ private fun LayerKindBanner(controller: EditorController, onDismiss: () -> Unit)
     }
 }
 
-// v1.10 (R6): stand-ins for FilterLabels110 constants (lead request; LabelsV110 is frozen).
-private const val RASTERIZES_TEXT = "Applying rasterizes this text layer"
-private const val RASTERIZES_SHAPE = "Applying rasterizes this shape layer"
-private const val RASTERIZES_ARRAY = "Applying rasterizes this array layer"
-private const val KEEPS_EDITABLE = "%s keeps it editable"
-
 /** v1.10 (R6): the filters that recolor a layer's objects instead of its pixels (Change Drawing Color). */
 private val objectRecolorFilters: List<Filter> by lazy { FilterRegistry.all.filter { it.colorMapper(it.defaultValues()) != null } }
 
@@ -235,14 +230,14 @@ private val objectRecolorFilters: List<Filter> by lazy { FilterRegistry.all.filt
  */
 internal fun rasterizeWarning(layer: Layer): String? {
     val kind = when {
-        layer.isTextLayer -> RASTERIZES_TEXT
-        layer.isShapeLayer -> RASTERIZES_SHAPE
+        layer.isTextLayer -> FilterLabels110.RASTERIZES_TEXT
+        layer.isShapeLayer -> FilterLabels110.RASTERIZES_SHAPE
         layer.isVectorLayer -> "Applying rasterizes this vector layer"
-        layer.array != null -> RASTERIZES_ARRAY
+        layer.array != null -> FilterLabels110.RASTERIZES_ARRAY
         else -> return null
     }
     if (objectRecolorFilters.isEmpty() || !ObjectColorTargets.hasObjects(layer.dataSnapshot())) return kind
-    return kind + "; " + KEEPS_EDITABLE.format(objectRecolorFilters.joinToString(" and ") { it.name })
+    return kind + "; " + FilterLabels110.KEEPS_EDITABLE.format(objectRecolorFilters.joinToString(" and ") { it.name })
 }
 
 @Composable
