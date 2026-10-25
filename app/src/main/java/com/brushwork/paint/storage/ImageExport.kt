@@ -15,7 +15,9 @@ import android.os.Environment
 import android.provider.MediaStore
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import com.brushwork.paint.engine.EngineConfig
 import com.brushwork.paint.engine.MemoryGovernor
+import com.brushwork.paint.engine.budget.NativePurpose
 import com.brushwork.paint.ui.common.StabilityLabels19
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
@@ -52,11 +54,20 @@ internal object ImageExport {
             ExportFormat.JPEG -> {
                 // v1.9 (design 2.4.13): the white copy must fit (A7b's policy; DefaultPolicy admits
                 // everything). Refused, the export fails like any other (ProjectRepository logs it).
-                if (!MemoryGovernor.admit(bitmap.width.toLong() * bitmap.height * 4, "Export JPG")) {
+                val bytes = bitmap.width.toLong() * bitmap.height * 4
+                if (!MemoryGovernor.admit(bytes, "Export JPG")) {
                     throw NotEnoughMemoryException("Export JPG")
                 }
-                val flat = flattenOnWhite(bitmap)
-                try { flat.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, out) } finally { flat.recycle() }
+                // v1.10 (A11, design 2.4): a native bitmap, so it is also reserved on R before it is
+                // allocated (TRANSIENT, returned once it is recycled); a refusal is the same failure.
+                val budget = EngineConfig.budget
+                if (!budget.admitNative(bytes, NativePurpose.TRANSIENT)) throw NotEnoughMemoryException("Export JPG")
+                try {
+                    val flat = flattenOnWhite(bitmap)
+                    try { flat.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, out) } finally { flat.recycle() }
+                } finally {
+                    budget.release(bytes, NativePurpose.TRANSIENT)
+                }
             }
             ExportFormat.WEBP -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 bitmap.compress(Bitmap.CompressFormat.WEBP_LOSSLESS, 100, out)

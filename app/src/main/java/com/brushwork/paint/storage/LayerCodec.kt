@@ -503,6 +503,18 @@ internal object LayerCodec {
     }
 
     /**
+     * v1.10 (A11, design 2.9): writes a transparent [width] x [height] pixel file (atomically) as
+     * its [blankEncoding], byte-identical to [write]'s of zero rows (X6), without a buffer of the
+     * layer's size. Blocking: call on IO.
+     */
+    fun writeBlank(file: File, width: Int, height: Int) {
+        val bytes = blankEncoding(width, height)
+        PerfTrace.span(PerfTrace.SAVE_LAYER) {
+            ProjectFormat.writeAtomically(file) { it.write(bytes) }
+        }
+    }
+
+    /**
      * v1.10 (A11, design 2.9): the blank fast path. True only when [file] has exactly the length
      * of [blankEncoding] and every byte equal to it (a prefix is not enough: above about 12 Mpx
      * the encoding is longer than 64 KiB, and content in the last rows leaves a prefix unchanged).

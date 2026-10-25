@@ -12,6 +12,7 @@ import com.brushwork.paint.engine.MemoryGovernor
 import com.brushwork.paint.engine.budget.NativePurpose
 import com.brushwork.paint.engine.tiles.BlankPixels
 import com.brushwork.paint.engine.tiles.FlatPixels
+import com.brushwork.paint.engine.tiles.FolderPixels
 import com.brushwork.paint.engine.tiles.PixelStore
 import com.brushwork.paint.engine.tiles.TILE_SIZE
 import com.brushwork.paint.engine.tiles.Tile
@@ -37,6 +38,7 @@ import kotlinx.coroutines.withContext
 import java.io.BufferedInputStream
 import java.io.File
 import java.io.FileInputStream
+import java.nio.ByteBuffer
 import kotlin.math.max
 import kotlin.math.min
 
@@ -512,6 +514,11 @@ internal object LayerEntries {
      * folder's files when the save started; [previous] is the `project.json` being replaced.
      * Pixels are copied on the calling (main) thread, one layer at a time, and compressed and
      * written on IO; v1.9 (A7b step 4): copied natively and written in bands ([BAND_BYTES]).
+     *
+     * v1.10 (A11, design 2.9): written from each layer's stores, never through the facade: a
+     * FLAT store as v1.9, a tiled one from a `snapshot()` and a non-resident pin taken on main
+     * (its bands assembled from the tiles on IO), a blank one as the canonical blank encoding.
+     * Equal pixels write equal bytes whatever the store (X6).
      */
     class Writer(
         private val dir: File,
@@ -573,16 +580,24 @@ internal object LayerEntries {
                     parentId = layer.parentId, array = arrayText, arrayFile = if (arrayed) prevArray else null,
                 )
             }
-            if (!fits(layer.bitmap)) return null
+            // v1.10 (A11, design 2.9): written from the stores, never through the facade.
+            val content = layer.pixels
+            if (!fits(content)) return null
+            val maskStore = if (hasMask) layer.maskPixels ?: return null else null
+            if (maskStore != null && !fits(maskStore)) return null
             val version = layer.contentVersion
             val contentName = ProjectFormat.layerFile(layer.id, revision)
-            writePixels(File(dir, contentName), layer.bitmap)
             var maskName: String? = null
-            if (hasMask) {
-                val mask = layer.mask ?: return null
-                if (!fits(mask)) return null
-                maskName = ProjectFormat.maskFile(layer.id, revision)
-                writePixels(File(dir, maskName), mask)
+            // A tiled store's tiles stay where they are for the write: pinned here (main), not made resident.
+            val held = if (content is TiledPixels || maskStore is TiledPixels) TileOps.pin(layer, resident = false) else null
+            try {
+                writeStore(File(dir, contentName), content)
+                if (maskStore != null) {
+                    maskName = ProjectFormat.maskFile(layer.id, revision)
+                    writeStore(File(dir, maskName), maskStore)
+                }
+            } finally {
+                if (held != null) TileOps.unpin(layer, held)
             }
             // The vector content is immutable: encoded off the main thread, written atomically.
             var vectorName: String? = null
@@ -652,6 +667,69 @@ internal object LayerEntries {
             }
         }
 
+        /**
+         * v1.10 (A11, design 2.9): writes [store] (a layer's pixels or its mask) as the pixel file
+         * [file], byte-identical whatever the store (X6): FLAT as v1.9 ([writePixels]); BLANK as
+         * the cached canonical blank encoding; tiled from a `snapshot()` taken here (main), whose
+         * tiles the IO writer assembles into bands ([writeTiles]).
+         */
+        private suspend fun writeStore(file: File, store: PixelStore) {
+            when (store) {
+                is FlatPixels -> writePixels(file, store.bitmap) // I28: one layer
+                is TiledPixels -> writeTiles(file, store)
+                is BlankPixels, FolderPixels -> withContext(Dispatchers.IO) { LayerCodec.writeBlank(file, w, h) }
+            }
+        }
+
+        /**
+         * A tiled store: main takes a `snapshot()` (copy on write: the tiles stay as they are while
+         * the layer is edited meanwhile) and lets go of it after the write; the IO writer reads
+         * 256-row bands of it ([TileOps.readRegion], inflating a packed or swapped tile into a copy
+         * of its own) into a band bitmap, admitted as TRANSIENT first, and encodes them as
+         * [LayerCodec.writeRows]. An EVICTED store (unchanged, A8) is its saved file, copied.
+         */
+        private suspend fun writeTiles(file: File, store: TiledPixels) {
+            val ref = store.evictedTo
+            if (ref != null) {
+                withContext(Dispatchers.IO) {
+                    val src = File(ref.projectDir, ref.file)
+                    ProjectFormat.writeAtomically(file) { out -> FileInputStream(src).use { it.copyTo(out) } }
+                }
+                return
+            }
+            val rows = minOf(LayerCodec.bandRows(w, bandBytes), h)
+            val buffer = scratch?.takeIf { it.size >= rows * w * 4 } ?: ByteArray(rows * w * 4).also { scratch = it }
+            val snap = store.snapshot()
+            try {
+                withContext(Dispatchers.IO) { writeBandsOf(file, snap, rows, buffer) }
+            } finally {
+                TileOps.releaseStore(snap)
+            }
+        }
+
+        /** IO: [snap] written band by band ([rows] rows, through a band bitmap and [buffer]). */
+        private fun writeBandsOf(file: File, snap: TiledPixels, rows: Int, buffer: ByteArray) {
+            val bytes = w.toLong() * rows * 4
+            val budget = EngineConfig.budget
+            if (!budget.admitNative(bytes, NativePurpose.TRANSIENT)) throw OutOfMemoryError("No room for a ${w}x$rows band while saving")
+            try {
+                val band = BitmapUtils.createLayerBitmap(w, rows).apply { density = Bitmap.DENSITY_NONE }
+                try {
+                    val r = Rect()
+                    LayerCodec.writeRows(file, w, h, buffer) { y, n, into ->
+                        r.set(0, y, w, y + n)
+                        TileOps.readRegion(snap, r, band)
+                        // The whole band (rows x w x 4 bytes, at most the buffer); the encoder takes its first n rows.
+                        band.copyPixelsToBuffer(ByteBuffer.wrap(into))
+                    }
+                } finally {
+                    band.recycle()
+                }
+            } finally {
+                budget.release(bytes, NativePurpose.TRANSIENT)
+            }
+        }
+
         /** v1.9 (A7b step 4): the Java scratch this save holds (a band, or v1.8's whole layer). */
         internal val scratchBytes: Int get() = scratch?.size ?: 0
 
@@ -660,8 +738,12 @@ internal object LayerEntries {
             scratch = null
         }
 
-        private fun fits(bitmap: Bitmap): Boolean =
-            doc.width == w && doc.height == h && !bitmap.isRecycled && bitmap.width == w && bitmap.height == h
+        /** v1.10 (A11): [store] is the document's size, which has not changed since the save started (a recycled FLAT bitmap does not fit). */
+        private fun fits(store: PixelStore): Boolean = doc.width == w && doc.height == h && when (store) {
+            is FlatPixels -> !store.bitmap.isRecycled && store.width == w && store.height == h // I28: one layer
+            FolderPixels -> true
+            else -> store.width == w && store.height == h
+        }
     }
 
     /**
