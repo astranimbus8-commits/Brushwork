@@ -1,6 +1,7 @@
 package com.brushwork.paint.v19.a7b
 
 import com.brushwork.paint.engine.GovernorPolicies
+import com.brushwork.paint.engine.GovernorPolicyV110
 import com.brushwork.paint.engine.GovernorPolicyV19
 import com.brushwork.paint.engine.MemoryGovernor
 import com.brushwork.paint.engine.MemoryPressure
@@ -52,8 +53,10 @@ class GovernorPolicyTest {
 
     @Test
     fun theAppRunsWithIt() {
-        assertSame(GovernorPolicyV19, GovernorPolicies.current())
-        assertSame("BrushworkApp.onCreate set it", GovernorPolicyV19, MemoryGovernor.policy)
+        // v1.10 (A7 step 2): the app runs GovernorPolicyV110, which keeps these levels and, while
+        // memory is unknown (as here), this undo trim.
+        assertSame(GovernorPolicyV110, GovernorPolicies.current())
+        assertSame("BrushworkApp.onCreate set it", GovernorPolicyV110, MemoryGovernor.policy)
     }
 
     @Test
