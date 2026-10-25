@@ -276,11 +276,6 @@ internal class WaitingTiles(
         }
 
         /**
-         * True when a chunk may end before layer [k]: the compositor's split rule
-         * (`Compositor.isSplitBoundary`) and, with folders, every folder [k] is in draws its
-         * children as is and [k] is not clipped (the `StrokeBelowCache.splitFor` rule).
-         */
-        /**
          * True when compositing document part [d] would read a tile that is not resident: some
          * layer shown there holds a PACKED or SWAPPED tile (content or enabled mask) inside [d].
          * Always false at CLASSIC, where nothing parks.
@@ -295,6 +290,11 @@ internal class WaitingTiles(
             return false
         }
 
+        /**
+         * True when a chunk may end before layer [k]: the compositor's split rule
+         * (`Compositor.isSplitBoundary`) and, with folders, every folder [k] is in draws its
+         * children as is and [k] is not clipped (the `StrokeBelowCache.splitFor` rule).
+         */
         fun cutAt(doc: Document, k: Int): Boolean {
             val layers = doc.layers
             val n = layers.size
