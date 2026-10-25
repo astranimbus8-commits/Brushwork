@@ -9,7 +9,6 @@ import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.EngineConfig
 import com.brushwork.paint.engine.EngineLevel
 import com.brushwork.paint.engine.LayerStorageMode
-import com.brushwork.paint.engine.MemoryGovernor
 import com.brushwork.paint.engine.budget.NativePurpose
 import com.brushwork.paint.engine.tiles.BlankPixels
 import com.brushwork.paint.engine.tiles.FlatPixels
@@ -318,9 +317,6 @@ internal object LayerEntries {
     /** v1.10 (A11, design 2.9): the rows of one band of a streamed load: one row of tiles. */
     const val BAND_ROWS = TILE_SIZE
 
-    /** v1.10 (A11): the purpose a load's Java band is admitted for ([MemoryGovernor.admit]). */
-    private const val OPEN_PURPOSE = "Open"
-
     /**
      * Test seam (v1.10, A11): the largest Java buffer a [readLayers] allocated since it was last
      * set to 0 (the band; `StreamedLoadNoScratchTest`).
@@ -332,8 +328,8 @@ internal object LayerEntries {
      * v1.10 (A11, design 2.9): the pixel files of one [readLayers], read on its (IO) thread into
      * stores of a [w] x [h] canvas: [tiled] at TILES and FULL. One [LayerCodec.Band] serves every
      * entry; it is made at the first entry that needs decoding (a document of blank layers never
-     * makes one) and admitted first, the Java bytes by [MemoryGovernor.admit] and the bitmap twin
-     * as TRANSIENT. Every FLAT bitmap is admitted as LAYER (F1's rule: admitted, then not kept in
+     * makes one) and reserved first (`tryReserve`, TRANSIENT, for its bitmap twin; the Java band is
+     * not asked of the memory policy, as v1.9's whole-layer scratch was not). Every FLAT bitmap is admitted as LAYER (F1's rule: admitted, then not kept in
      * the ledger) and every tile reserved under TILES before it is allocated; a refusal throws
      * [OutOfMemoryError]. The stores are unpublished until [readLayers] returns, so the tiles'
      * holder counts and the releases on failure ([releaseAll]) happen on this thread with no other
@@ -483,7 +479,6 @@ internal object LayerEntries {
             band?.let { return it }
             val rows = min(BAND_ROWS, h)
             val bytes = LayerCodec.byteLength(w, rows).toLong()
-            if (!MemoryGovernor.admit(bytes, OPEN_PURPOSE)) throw OutOfMemoryError("No room for a ${w}x$rows band while opening")
             val budget = EngineConfig.budget
             if (!budget.admitNative(bytes, NativePurpose.TRANSIENT)) throw OutOfMemoryError("No room for a ${w}x$rows band while opening")
             bandReserved = bytes
