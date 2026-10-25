@@ -2247,6 +2247,8 @@ class EditorController(
 
     // region v110-A11 canvasOps
     private fun flipLayerNow(layer: Layer, horizontal: Boolean) = editScope {
+        // v1.10 (A11, design 2.3): a whole-layer write on any layer; the layer admits it first.
+        if (!layer.admitWrite()) { toast(EngineLabels110.PAINT_REFUSED); return@editScope }
         val flip: (EditorController) -> Unit = { c ->
             c.structural {
                 // In place (self-inverse): the layer keeps its bitmaps, so an earlier step that
@@ -2354,6 +2356,9 @@ class EditorController(
                 toast("Transparency is locked on \"${layer.name}\""); return@withToolPaused
             }
             val sel = selection
+            // v1.10 (A11, design 2.3): the whole content cleared is a blank store swapped in, in
+            // one step; the old store goes into the step by reference and nothing is materialized.
+            if (target == EditTarget.CONTENT && sel == null) { clearToBlank(layer, label); return@withToolPaused }
             val rec = beginEdit(layer, target)
             rec.touch(sel?.bounds ?: doc.bounds)
             val bmp = if (target == EditTarget.MASK) layer.mask!! else layer.bitmap
@@ -2362,10 +2367,49 @@ class EditorController(
                 if (sel == null) bmp.eraseColor(0xFF000000.toInt())
                 else c.drawBitmap(sel.mask, 0f, 0f, Paint().apply { color = 0xFF000000.toInt() })
             } else {
-                if (sel == null) bmp.eraseColor(0)
-                else c.drawBitmap(sel.mask, 0f, 0f, Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT) })
+                c.drawBitmap(sel!!.mask, 0f, 0f, Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT) })
             }
             commitEdit(rec, label)
+        }
+    }
+
+    /** [clearLayer] of [layer]'s whole content: a [com.brushwork.paint.engine.tiles.BlankPixels] swapped in (one step [label]). */
+    private fun clearToBlank(layer: Layer, label: String) = editScope {
+        val swap = StoreSwapAction(label, layer, com.brushwork.paint.engine.tiles.BlankPixels(doc.width, doc.height))
+        swap.redo(this)
+        // Clearing an editable layer turns it into a normal layer (undo restores the data), as any pixel edit.
+        val rasterize = rasterizeDataAction(layer, EditTarget.CONTENT, false)
+        pushUndo(if (rasterize == null) swap else CompositeAction(label, listOf(swap, rasterize)))
+        val rect = doc.bounds
+        EditInvalidation.afterCommit(rect, false)?.let { invalidateDoc(it) }
+        queueEdit(EditEvent(layer, EditTarget.CONTENT, rect, label))
+    }
+
+    /**
+     * v1.10 (A11): puts [other] in [layer] in place of its content store, which it then holds
+     * (self-inverse: undo and redo swap again, so a store the residency policy parked or
+     * unparked meanwhile is the one kept). [dispose] lets go of the held store's tiles.
+     */
+    private class StoreSwapAction(
+        override val label: String,
+        private val layer: Layer,
+        private var other: com.brushwork.paint.engine.tiles.PixelStore,
+    ) : UndoAction {
+        override val byteSize: Long = layer.pixels.residentBytes()
+
+        private fun swap(c: EditorController) = c.structural {
+            val held = layer.pixels
+            layer.pixels = other
+            other = held
+            layer.markChanged()
+        }
+
+        override fun undo(c: EditorController) = swap(c)
+        override fun redo(c: EditorController) = swap(c)
+
+        override fun dispose() {
+            val p = other
+            if (p is com.brushwork.paint.engine.tiles.TiledPixels && p !== layer.pixels) com.brushwork.paint.engine.tiles.TileOps.releaseStore(p)
         }
     }
     // endregion
@@ -2441,13 +2485,17 @@ class EditorController(
     // region v110-A11 canvasOps
     /** Bakes the mask into the layer's pixels and removes it. */
     fun applyMask(layer: Layer = activeLayer) {
-        val m = layer.mask ?: return
+        // v1.10 (A11, design 2.3): the layer admits the write first; the mask is read through
+        // its store (a parked mask draws from its tiles, as the canvas shows it) and goes into
+        // the step by reference.
+        val m = layer.maskPixels ?: return
+        if (!layer.admitWrite()) { toast(EngineLabels110.PAINT_REFUSED); return }
         editScope {
             val rec = beginEdit(layer, EditTarget.CONTENT)
             rec.touchAll()
-            Canvas(layer.bitmap).drawBitmap(m, 0f, 0f, BitmapUtils.newMaskApplyPaint())
+            compositor.drawMaskPixels(Canvas(layer.bitmap), layer, BitmapUtils.newMaskApplyPaint())
             val pix = rec.finish("Apply mask")
-            val maskAction = MaskChangeAction(layer, m, null, "Apply mask")
+            val maskAction = MaskStoreAction(layer, m, "Apply mask")
             maskAction.redo(this)
             // New pixels and no mask: the content data and the mask spec no longer match (I1).
             val dataBefore = layer.dataSnapshot()
@@ -2459,6 +2507,44 @@ class EditorController(
             layer.markChanged()
             pushUndo(CompositeAction("Apply mask", listOfNotNull(pix, maskAction, dataAction)))
             queueEdit(EditEvent(layer, EditTarget.CONTENT, null, "Apply mask"))
+        }
+    }
+
+    /**
+     * v1.10 (A11): [layer]'s mask store [mask] removed (redo) or put back (undo), as
+     * [MaskChangeAction] does with a bitmap; the store is taken from the layer at each redo, so
+     * one the residency policy rehoused meanwhile is the one kept. [dispose] lets go of its tiles.
+     */
+    private class MaskStoreAction(
+        private val layer: Layer,
+        private var mask: com.brushwork.paint.engine.tiles.PixelStore,
+        override val label: String,
+    ) : UndoAction {
+        private val enabledBefore = layer.maskEnabled
+        override val byteSize: Long = mask.residentBytes()
+
+        /** True while the mask is removed. */
+        private var applied = false
+
+        override fun undo(c: EditorController) = c.structural {
+            layer.maskPixels = mask
+            layer.maskEnabled = enabledBefore
+            layer.markChanged()
+            applied = false
+        }
+
+        override fun redo(c: EditorController) = c.structural {
+            layer.maskPixels?.let { mask = it }
+            layer.maskPixels = null
+            layer.editingMask = false
+            layer.maskEnabled = true
+            layer.markChanged()
+            applied = true
+        }
+
+        override fun dispose() {
+            val p = mask
+            if (applied && p is com.brushwork.paint.engine.tiles.TiledPixels && p !== layer.maskPixels) com.brushwork.paint.engine.tiles.TileOps.releaseStore(p)
         }
     }
     // endregion
