@@ -3872,7 +3872,103 @@ The layers panel is A9's.
 
 <!-- v110-A9 -->
 
-(A9 writes this section.)
+R13 ("an unlimited amount of layers, regardless of ppi and size"; "Full engine, auto-check"):
+the compositor, the display and every reader of a layer that may be inactive work on parked
+layers (TILED stores) exactly as on flat ones, and never materialize them. Code:
+`engine/tiles/BandAssembler.kt` (new), `engine/Compositor.kt`, `engine/FolderComposite.kt`,
+`engine/AdjustmentStage.kt`, `engine/RenderScaled.kt`, `engine/DisplayTiles.kt`,
+`engine/live/WaitingTiles.kt`, `ProjectionRules.kt`, `BelowProjection.kt` (new),
+`StrokeBelowCache.kt`, `LiveAdjust.kt`, `engine/tiles/PixelReads.kt`, `ui/editor/CanvasView.kt`,
+the C-REG readers and `ui/layers/LayerThumbnails.kt`, `FolderThumbnails.kt`. No document change.
+
+**Bands (X2, step 1).** `BandAssembler` draws a tiled store onto a scaled canvas (thumbnails, the
+proxies, a folder's small composite) bit for bit as `drawBitmap(full, 0, 0, paint)` draws the
+full bitmap, without making it.
+- Target rows are cut into bands of at most `BAND_ROWS` (fewer past `MAX_BAND_BYTES`). Each
+  band's source rows, plus a 2 px apron and the bilinear neighbour, are copied out of the tiles
+  (`copyRegion`) into one transient bitmap, admitted under TRANSIENT and freed after its draw.
+- `exactOffset` picks a band offset for which every target row and column maps, in Skia's float
+  arithmetic, to the full draw's coordinate minus the offset; so filtering rounds as the full draw
+  does. A band reaches past the clip on every side that is not the store's edge.
+- `drawMask` sends masks the same way (a null tile is transparent, so DST_IN clears there).
+  `drawStore` / `drawMaskStore` / `readPixels` / `nonBlackBounds` / `scaled` dispatch on the store.
+  `flatBitmap(store)` gives the bitmap of a flat, usable store or null; the C-TILE readers use it
+  instead of reading `FlatPixels.bitmap` themselves (rule P).
+- `Compositor.drawLayerPixels` draws tiles directly on an integer-translate canvas (X1) and
+  through `BandAssembler.draw` otherwise; masks go through `drawMaskPixels` on the store, and
+  `AdjustmentStage` and `FolderComposite` read `maskPixels`. `renderFlattened` and
+  `FolderComposite.renderBlock` composite in bands of `Compositor.flattenBand` rows
+  (`FLATTEN_BAND` = `FolderComposite.TILE`): every `saveLayer` is then at most a band.
+- API 26-28 (`BlendModes.clearsOnTransparent`: MULTIPLY clears under a transparent source): a
+  blank or empty parked layer is never skipped there, and null tiles draw as transparent rects.
+
+**Waiting tiles (P4, step 2).** A display update never blocks on a tile that is not resident.
+- `DisplayTiles.render` asks `WaitingTiles.needsReads(compositor, part)`: any visible layer or
+  enabled mask with PACKED or SWAPPED tiles inside the part (never at CLASSIC). The part is then
+  queued as waiting: its layers composite bottom-up into a per-tile accumulator, in chunks cut
+  only where the compositor can split (`cutAt`), so the result is the plain render bit for bit.
+- Only the current chunk's layers are pinned (`Layer.pin()`); the worker thread
+  (`bw-waiting-tiles`) reads their tiles in unit order with `Tile.bitmapForRead()`, never
+  making them resident. The copies are lent to their tiles while the chunk draws on main
+  (`BandAssembler.lend` / `unlend`) and recycled after.
+- Until it completes, the tile keeps what it showed and `isExact(index)` is false; `hasWaiting`
+  says some tile waits. The finished accumulator replaces the part, and `onWaitingDone` asks the
+  canvas for a frame. An invalidation cancels the job and the part is dirty again.
+
+**Below projection (X4, J7, step 3).** At TILES and FULL (`ProjectionRules.on`) the display's
+`BelowRenderer` is `LiveAdjust.belowProjection`, installed by `attachProjection` before each
+canvas update while no stroke uses Classic's `StrokeBelowCache`.
+- The split of the active layer is `StrokeBelowCache`'s rule (`ProjectionRules.splitFor`). The
+  projection applies when at least `ProjectionRules.MIN_LAYERS` = 8 visible units lie below it
+  (`belowEligible`), never while a render override draws below the split, and never for the
+  first update after a gesture lifts (`DisplayTiles.projectionsOff`, set by `CanvasView`).
+- It is built lazily, a whole display tile at 1:1 at a time (`Compositor.drawSplit(0, k)`). A
+  render is then the projection copied in plus `drawSplit(k, n)` of the dirty part; `[0, k)` then
+  `[k, n)` onto one target is the full draw (I8), so frames are exact.
+- `BelowKey` covers every layer and mask below (identity, `pixelGeneration`, `contentVersion`,
+  eye, opacity, blend, clipping, mask switch, parent, folder state), the split, the colour mode
+  and safe compositing. Any mismatch drops the whole projection; it is never patched.
+- At most `min(displayHeld, R / 8)` bytes; registered with `MemoryGovernor` at priority 20, so
+  any pressure above NORMAL frees it first (P5).
+- At CLASSIC, `StrokeBelowCache` runs when `EngineConfig.strokeBelowMinLayers` (from the check)
+  is set and the units below reach it; null keeps v1.9's behaviour. Its test hooks force it on.
+- `CanvasView` records `EngineStat.COMPOSITE` (each update that rendered) and
+  `INPUT_TO_COMPOSITE` (the first input of the frame to the end of that update).
+
+**Readers (C-REG, step 4).** `PixelReads.sample` / `region` pin a TILED layer for the read only and
+read resident, packed or swapped tiles without making them resident. Through them, or through
+stores and `snapshot()`s:
+- the selection tools' snapshot: `PixelSnapshot.take(controller, source, layer)` (Magic wand,
+  Object select, Color select; the canvas and folders through `renderFlattened`);
+- the eyedropper's "This layer", the Content-aware fill layer source, and the Color select and
+  Magnetic lasso proxies and samples (`RenderScaled.Source.layer(store)`, `PixelReads.sample`);
+- the text wrap outline: `WrapContours` keys on `pixelGeneration`, so a park keeps its cache;
+- the Adjust sheet's histogram: `AdjustmentHistogram.below` composites `snapshot()`s, released
+  in `finally`, with masks through `BandAssembler.scaled`.
+- `PixelSnapshot.take(controller, source, bitmap)` stays for its v1.9 callers.
+- `LayerOps`' one site (`recordedEdit`: Clear and Fill from the layer menu) writes the layer, so
+  it keeps the facade getter: a write materializes the layer once (it is rehoused flat), and the
+  residency policy parks it again later.
+
+**Thumbnails (step 4).** `LayerThumbnails` keys on (id, `contentVersion`, `pixelGeneration`). It
+downscales only a flat store; otherwise it keeps the picture of the same key, or shows a
+placeholder of the thumbnail's size, exact for a blank store. A park leaves the key unchanged,
+so a picture made while the layer was flat stays. `FolderThumbnails.key` mixes the children's
+`pixelGeneration`, `contentVersion` and `hasMask`, and a folder's picture renders from the tiles.
+Not built (cuts 3 and 2, empty commits 6/7 and 7/7):
+- thumbnails made at park (`ThumbnailCache` LRU under THUMBNAILS): it needs a park notification
+  from A8's `ResidencyPolicy` (LeadRequest);
+- the above projection (X5): `EngineConfig.aboveProjection` is read by nothing in the engine,
+  and stroke frames draw the layers above the split on the plain path.
+
+Tests: `test:v110/a9/` (`TiledCompositeGoldenTest`, `BlankSkipExactTest`, `Api28BlendParityTest`,
+`WaitingTileOverTileRamTest`, `BelowProjectionExactTest`, `PixelReadsTiledTest`,
+`CRegToolsParkedLayerTest`, `PanelNoMaterializeTest`, and the Timing classes
+`BandAssemblerTimingTest`, `FullRerender500TimingTest`, `FirstCompositeEvictedTimingTest`,
+`StrokeFrame200TimingTest`, `StrokeFrame100PlainTimingTest`, `BelowRebuildTimingTest`) and
+`test:qa110/Qa110TiledCanvasUiTest`. That UI test runs 200 layers at TILES (parked, then packed
+after an eye toggle) on the canvas, bit-equal to Classic, at 392 and 360 dp and font scale 1,
+1.3 and 2.0.
 
 <!-- /v110-A9 -->
 
