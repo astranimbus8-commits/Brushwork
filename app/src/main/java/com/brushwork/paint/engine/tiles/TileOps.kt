@@ -13,7 +13,6 @@ import com.brushwork.paint.engine.budget.LedgerCategory
 import com.brushwork.paint.engine.budget.NativePurpose
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.recycleUnlessShared
-import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 import java.util.zip.Deflater
 import java.util.zip.Inflater
@@ -22,15 +21,23 @@ import kotlin.math.min
 
 /**
  * v1.10 (F1 reference implementation, design 3.3; A8 owns and tunes): the bodies behind [Tile],
- * [TiledPixels] and [PixelPin], which only delegate here. Correct, not tuned: tiles are cut and
- * drawn on the calling thread, and every copy is exact (SRC at integer offsets). F1c: a tile's
- * bitmap carries no density ([Bitmap.DENSITY_NONE]), and a tile is cut onto a canvas that carries
- * none, so no draw scales a tile: a tile, and above all a shared [SolidTiles] bitmap, can outlive
- * the default density it was made under, which `drawBitmap(b, x, y, paint)` scales by the ratio.
+ * [TiledPixels] and [PixelPin], which only delegate here. Every copy is exact (SRC at integer
+ * offsets). F1c: a tile's bitmap carries no density ([Bitmap.DENSITY_NONE]), and a tile is cut
+ * onto a canvas that carries none, so no draw scales a tile: a tile, and above all a shared
+ * [SolidTiles] bitmap, can outlive the default density it was made under, which
+ * `drawBitmap(b, x, y, paint)` scales by the ratio.
  *
  * References: a store or an undo map holding a tile counts one [Tile.refs]; [release] frees the
  * tile when the last holder lets go and no pin holds it. Main thread throughout (the `Tile`
- * threading rules), except [inflate], [pack] and the reads of a leased tile.
+ * threading rules), except [inflate], [pack], [cutPieces] and the reads of a
+ * leased tile.
+ *
+ * v1.10 (A8 step 1, design 2.0 and 2.7, J8): tuned. [cut] reuses one canvas and one pixel array
+ * for every tile; [pack] and [inflate] reuse their Deflater, Inflater and buffers per thread (the
+ * worker packs every tile it swaps out); a solid tile lets go of its [SolidTiles] count however it
+ * is freed (F1 review gap 2) and is never packed or swapped (it owns no pixels). The swap-out
+ * commits of the `Tile.kt` rule (2) are [commitPacked] and [commitWritten]; the frame epoch of
+ * that rule is [frameEpoch], and a tile drawn on main is marked used in it ([drawTo]).
  */
 internal object TileOps {
     /** Copies pixels exactly: the premultiplied values, no blending, no filtering. */
@@ -71,19 +78,24 @@ internal object TileOps {
         if (t.refs <= 0 && t.pins == 0) free(t)
     }
 
-    /** Recycles [t]'s own bitmap (or lets go of its [SolidTiles] color) and its packed bytes and slot. Main only. */
+    /**
+     * Recycles [t]'s own bitmap (or lets go of its [SolidTiles] color) and its packed bytes and
+     * slot. Main only. A8 (F1 review gap 2): a solid tile's color count goes whatever its state,
+     * and a [free] of a freed tile does nothing ([Tile.solid] is cleared with the first).
+     */
     private fun free(t: Tile) {
         synchronized(t.lock) {
             val b = t.bitmap
             val color = t.solid
             if (color != null) {
-                if (b != null) SolidTiles.release(color)
+                SolidTiles.release(color)
             } else if (b != null && !b.isRecycled) {
                 b.recycle()
                 EngineConfig.budget.ledger.sub(LedgerCategory.TILES, t.bytes.toLong())
             }
             t.bitmap = null
             t.solid = null
+            t.packed?.let { PackedPool.release(it.size.toLong()) }
             t.packed = null
             t.slot?.let { EngineConfig.swapStore.free(it) }
             t.slot = null
@@ -93,18 +105,116 @@ internal object TileOps {
     /** Makes [t] RESIDENT (inflating its packed bytes or reading its slot). Main only, outside a frame. */
     fun makeResident(t: Tile) {
         if (t.bitmap != null) return
-        val b = t.bitmapForRead()
-        synchronized(t.lock) {
-            t.bitmap = b
-            t.packed = null
-            t.slot?.let { EngineConfig.swapStore.free(it) }
-            t.slot = null
-        }
-        EngineConfig.budget.ledger.add(LedgerCategory.TILES, t.bytes.toLong())
+        adoptRead(t, t.bitmapForRead())
     }
 
-    /** Runs [block] with [t]'s pixels: its bitmap, or an inflated copy recycled afterwards. */
+    /**
+     * Main only: [b], a read of [t]'s packed bytes or slot (on main or by the worker under a
+     * lease), becomes [t]'s bitmap: RESIDENT again, its packed bytes and slot let go. False (and
+     * [b] recycled) when [t] is resident already or was freed meanwhile.
+     */
+    fun adoptRead(t: Tile, b: Bitmap): Boolean {
+        val adopted = synchronized(t.lock) {
+            if (t.bitmap != null || (t.packed == null && t.slot == null)) {
+                false
+            } else {
+                b.density = Bitmap.DENSITY_NONE
+                t.bitmap = b
+                t.packed?.let { PackedPool.release(it.size.toLong()) }
+                t.packed = null
+                t.slot?.let { EngineConfig.swapStore.free(it) }
+                t.slot = null
+                true
+            }
+        }
+        if (adopted) EngineConfig.budget.ledger.add(LedgerCategory.TILES, t.bytes.toLong()) else b.recycle()
+        return adopted
+    }
+
+    // ---------------------------------------------------------------- swap-out commits (Tile.kt rule 2)
+
+    /**
+     * Main only: the frame epoch of the commit rule. [nextEpoch] starts a new one (the compositor
+     * at each frame, and `ResidencyPolicy` at each idle tick); a tile drawn on main in the current
+     * epoch ([Tile.lastUse] == [frameEpoch]) is not swapped out in it.
+     */
+    var frameEpoch = 1L
+        private set
+
+    /** Main only: a new frame epoch. */
+    fun nextEpoch(): Long = ++frameEpoch
+
+    /** True while the current thread is the main looper's (where [Tile.lastUse] may be written). */
+    private fun onMain(): Boolean = android.os.Looper.getMainLooper()?.isCurrentThread == true
+
+    /**
+     * Main only: may [t], leased by the worker with [leasedRefs] references (its lease included),
+     * leave RESIDENT now? Rule (2): no pin, the same references as at the lease, not used in this
+     * frame epoch; never a solid tile (it owns no pixels).
+     */
+    private fun mayLeave(t: Tile, leasedRefs: Int): Boolean =
+        t.pins == 0 && t.refs == leasedRefs && t.lastUse < frameEpoch && t.solid == null
+
+    /**
+     * Main, in the task the worker posted: [bytes] packed from [t] (leased with [leasedRefs]
+     * references) become its pixels (RESIDENT -> PACKED) when the commit rule allows and
+     * [PackedPool] admits them; otherwise they are dropped. Releases the lease either way.
+     * True when [t] is PACKED now.
+     */
+    fun commitPacked(t: Tile, bytes: ByteArray, leasedRefs: Int): Boolean {
+        val ok = t.bitmap != null && t.slot == null && mayLeave(t, leasedRefs) && PackedPool.tryAdmit(bytes.size.toLong())
+        if (ok) {
+            val b = synchronized(t.lock) {
+                val b = t.bitmap
+                t.packed = bytes
+                t.bitmap = null
+                b
+            }
+            if (b != null && !b.isRecycled) b.recycle()
+            EngineConfig.budget.ledger.sub(LedgerCategory.TILES, t.bytes.toLong())
+        }
+        release(t)
+        return ok
+    }
+
+    /**
+     * Main, in the task the worker posted after writing [t] (leased with [leasedRefs] references)
+     * to [slot]: the slot becomes its only copy (RESIDENT or PACKED -> SWAPPED) when the commit
+     * rule allows; otherwise the slot is freed and [t] stays as it was. A failed write ([slot]
+     * null) changes nothing. Releases the lease either way. True when [t] is SWAPPED now.
+     */
+    fun commitWritten(t: Tile, slot: SwapSlot?, leasedRefs: Int): Boolean {
+        if (slot == null) {
+            release(t)
+            return false
+        }
+        val ok = t.slot === slot && mayLeave(t, leasedRefs)
+        if (ok) {
+            val b = synchronized(t.lock) {
+                val b = t.bitmap
+                t.bitmap = null
+                t.packed?.let { PackedPool.release(it.size.toLong()) }
+                t.packed = null
+                b
+            }
+            if (b != null) {
+                if (!b.isRecycled) b.recycle()
+                EngineConfig.budget.ledger.sub(LedgerCategory.TILES, t.bytes.toLong())
+            }
+        } else {
+            synchronized(t.lock) { if (t.slot === slot) t.slot = null }
+            EngineConfig.swapStore.free(slot)
+        }
+        release(t)
+        return ok
+    }
+
+    /**
+     * Runs [block] with [t]'s pixels: its bitmap, or an inflated copy recycled afterwards. A read
+     * on main marks [t] used in this frame epoch (the commit rule then keeps it resident).
+     */
     private inline fun withPixels(t: Tile, block: (Bitmap) -> Unit) {
+        if (onMain()) t.lastUse = frameEpoch
         val b = t.bitmap
         if (b != null) {
             block(b)
@@ -134,46 +244,70 @@ internal object TileOps {
 
     // ---------------------------------------------------------------- packing (Deflate level 1, nowrap)
 
+    /**
+     * A8: what one thread reuses between packs and inflates (the worker packs every tile it swaps
+     * out): its Deflater and Inflater (reset before each use) and the buffers of one full tile.
+     * Each lives as long as its thread (the main thread and the `tile-swapper`, both for good).
+     */
+    private class Zip {
+        val deflater = Deflater(1, true)
+        val inflater = Inflater(true)
+        val raw: ByteBuffer = ByteBuffer.allocate(TILE_SIZE * TILE_SIZE * 4)
+        var out = ByteArray(TILE_SIZE * TILE_SIZE + 64)
+        val one = ByteArray(1)
+    }
+
+    private val zip = object : ThreadLocal<Zip>() {
+        override fun initialValue() = Zip()
+    }
+
     /** The raw premultiplied pixels of [b] as Deflate level 1 bytes (nowrap). Any thread. */
     fun pack(b: Bitmap): ByteArray {
-        val raw = ByteBuffer.allocate(b.byteCount)
+        val n = b.byteCount
+        val z = zip.get()!!
+        val raw = if (n <= z.raw.capacity()) z.raw.apply { clear() } else ByteBuffer.allocate(n)
         b.copyPixelsToBuffer(raw)
-        val def = Deflater(1, true)
-        try {
-            def.setInput(raw.array())
-            def.finish()
-            val out = ByteArrayOutputStream(b.byteCount / 4 + 64)
-            val buf = ByteArray(64 * 1024)
-            while (!def.finished()) {
-                val n = def.deflate(buf)
-                out.write(buf, 0, n)
-            }
-            return out.toByteArray()
-        } finally {
-            def.end()
+        val def = z.deflater
+        def.reset()
+        def.setInput(raw.array(), 0, n)
+        def.finish()
+        var out = z.out
+        var len = 0
+        while (!def.finished()) {
+            if (len == out.size) out = out.copyOf(out.size * 2)
+            len += def.deflate(out, len, out.size - len)
         }
+        // Keeps a grown buffer up to two tiles' worth (noise packs larger than it was).
+        if (out.size <= TILE_SIZE * TILE_SIZE * 8) z.out = out
+        return out.copyOf(len)
     }
 
     /** A new [w] x [h] bitmap (no density, as every tile's) from bytes [pack] made. Any thread. */
     fun inflate(packed: ByteArray, w: Int, h: Int): Bitmap {
-        val raw = ByteArray(w * h * 4)
-        val inf = Inflater(true)
-        try {
-            // nowrap streams may need one byte past the end (java.util.zip.Inflater).
-            inf.setInput(packed.copyOf(packed.size + 1))
-            var n = 0
-            while (n < raw.size) {
-                val k = inf.inflate(raw, n, raw.size - n)
-                if (k == 0 && (inf.finished() || inf.needsInput() || inf.needsDictionary())) break
-                n += k
+        val size = w * h * 4
+        val z = zip.get()!!
+        val raw = if (size <= z.raw.capacity()) z.raw.array() else ByteArray(size)
+        val inf = z.inflater
+        inf.reset()
+        inf.setInput(packed)
+        var n = 0
+        var padded = false
+        while (n < size) {
+            val k = inf.inflate(raw, n, size - n)
+            n += k
+            if (k > 0) continue
+            // nowrap streams may need one byte past the end (java.util.zip.Inflater): fed once.
+            if (inf.needsInput() && !inf.finished() && !padded) {
+                padded = true
+                inf.setInput(z.one)
+                continue
             }
-            check(n == raw.size) { "a packed ${w}x$h tile holds $n of ${raw.size} bytes" }
-        } finally {
-            inf.end()
+            break
         }
+        check(n == size) { "a packed ${w}x$h tile holds $n of $size bytes" }
         return BitmapUtils.createLayerBitmap(w, h).apply {
             density = Bitmap.DENSITY_NONE
-            copyPixelsFromBuffer(ByteBuffer.wrap(raw))
+            copyPixelsFromBuffer(ByteBuffer.wrap(raw, 0, size))
         }
     }
 
@@ -190,40 +324,99 @@ internal object TileOps {
         require(t.w == w && t.h == h) { "a ${t.w}x${t.h} tile in a ${w}x$h slot ($i)" }
     }
 
-    fun cut(b: Bitmap, detectBlank: Boolean): TiledPixels {
+    /** Main only: [b] cut into tiles ([cutPieces], then [adoptPieces]); each tile held once by the new store. */
+    fun cut(b: Bitmap, detectBlank: Boolean): TiledPixels = adoptPieces(cutPieces(b, detectBlank)!!)
+
+    /**
+     * A8: the pieces [cutPieces] cut from a bitmap, not yet tiles: per tile slot nothing (fully
+     * transparent), one uniform opaque color ([solids]), or an exact copy ([bitmaps], no density).
+     * Made on any thread (the park cut runs on the `tile-swapper`); [adoptPieces] turns them into
+     * tiles on main, or [recycle] lets them go.
+     */
+    class CutPieces internal constructor(val width: Int, val height: Int) {
+        val cols = (width + TILE_SIZE - 1) / TILE_SIZE
+        val rows = (height + TILE_SIZE - 1) / TILE_SIZE
+        internal val bitmaps = arrayOfNulls<Bitmap>(cols * rows)
+        internal val solids = arrayOfNulls<Int>(cols * rows)
+
+        /** Recycles the copies (a cut that was not adopted). Main only (rule 3). */
+        fun recycle() {
+            for (i in bitmaps.indices) {
+                bitmaps[i]?.recycle()
+                bitmaps[i] = null
+            }
+        }
+    }
+
+    /**
+     * [b] cut into [CutPieces] on the calling thread, any thread: it reads only [b] (which the
+     * caller keeps alive and unchanged) and touches no tile, ledger or count. With [detectBlank],
+     * a fully transparent piece is nothing and a uniform opaque one a color, else every piece is a
+     * copy. One canvas and one pixel array serve every piece. Null when [cancelled] said so
+     * between two pieces (what was cut is recycled, which is why the worker never cancels: it
+     * hands its pieces to main to recycle).
+     */
+    fun cutPieces(b: Bitmap, detectBlank: Boolean, cancelled: () -> Boolean = { false }): CutPieces? {
         val w = b.width
         val h = b.height
         require(w > 0 && h > 0) { "nothing to cut (${w}x$h)" }
-        val cols = (w + TILE_SIZE - 1) / TILE_SIZE
-        val rows = (h + TILE_SIZE - 1) / TILE_SIZE
-        val tiles = arrayOfNulls<Tile>(cols * rows)
+        val pieces = CutPieces(w, h)
+        val cols = pieces.cols
         val px = if (detectBlank) IntArray(TILE_SIZE * TILE_SIZE) else null
+        val canvas = Canvas()
         try {
-            for (row in 0 until rows) for (col in 0 until cols) {
+            for (row in 0 until pieces.rows) for (col in 0 until cols) {
+                if (cancelled()) {
+                    pieces.recycle()
+                    return null
+                }
                 val x = col * TILE_SIZE
                 val y = row * TILE_SIZE
                 val tw = min(TILE_SIZE, w - x)
                 val th = min(TILE_SIZE, h - y)
-                val tile = if (px == null) {
-                    copyTile(b, x, y, tw, th)
+                val i = row * cols + col
+                val kind = if (px == null) {
+                    OTHER
                 } else {
                     b.getPixels(px, 0, tw, x, y, tw, th)
-                    when (classify(px, tw * th)) {
-                        BLANK -> null
-                        UNIFORM_OPAQUE -> solidTile(px[0], tw, th)
-                        else -> copyTile(b, x, y, tw, th)
-                    }
+                    classify(px, tw * th)
                 }
-                if (tile != null) {
-                    tile.refs = 1
-                    tiles[row * cols + col] = tile
+                when (kind) {
+                    BLANK -> Unit
+                    UNIFORM_OPAQUE -> pieces.solids[i] = px!![0]
+                    else -> pieces.bitmaps[i] = copyPiece(canvas, b, x, y, tw, th)
                 }
             }
         } catch (e: Throwable) {
-            for (t in tiles) if (t != null) release(t)
+            pieces.recycle()
             throw e
         }
-        return TiledPixels(w, h, tiles)
+        return pieces
+    }
+
+    /** Main only: [p] as a store, each tile held once by it; [p] is spent (its copies belong to the tiles). */
+    fun adoptPieces(p: CutPieces): TiledPixels {
+        val tiles = arrayOfNulls<Tile>(p.cols * p.rows)
+        try {
+            for (i in tiles.indices) {
+                val col = i % p.cols
+                val row = i / p.cols
+                val tw = min(TILE_SIZE, p.width - col * TILE_SIZE)
+                val th = min(TILE_SIZE, p.height - row * TILE_SIZE)
+                val color = p.solids[i]
+                val tile = when {
+                    color != null -> solidTile(color, tw, th)
+                    else -> p.bitmaps[i]?.let { b -> p.bitmaps[i] = null; tileOf(b) }
+                } ?: continue
+                tile.refs = 1
+                tiles[i] = tile
+            }
+        } catch (e: Throwable) {
+            for (t in tiles) if (t != null) release(t)
+            p.recycle()
+            throw e
+        }
+        return TiledPixels(p.width, p.height, tiles)
     }
 
     private const val BLANK = -1
@@ -245,17 +438,22 @@ internal object TileOps {
         return if (uniform && first ushr 24 == 0xFF) UNIFORM_OPAQUE else OTHER
     }
 
-    /** An exact copy of [tw] x [th] pixels of [b] at ([x], [y]) as an ordinary tile (its canvas carries no density, so [b]'s is never scaled). */
-    private fun copyTile(b: Bitmap, x: Int, y: Int, tw: Int, th: Int): Tile {
+    /**
+     * An exact copy of [tw] x [th] pixels of [b] at ([x], [y]), drawn through [canvas] (reused
+     * from piece to piece; it takes the copy's density, none, so [b]'s is never scaled).
+     */
+    private fun copyPiece(canvas: Canvas, b: Bitmap, x: Int, y: Int, tw: Int, th: Int): Bitmap {
         val out = BitmapUtils.createLayerBitmap(tw, th)
         try {
             out.density = Bitmap.DENSITY_NONE
-            Canvas(out).drawBitmap(b, -x.toFloat(), -y.toFloat(), copyPaint)
+            canvas.setBitmap(out)
+            canvas.drawBitmap(b, -x.toFloat(), -y.toFloat(), copyPaint)
+            canvas.setBitmap(null)
         } catch (e: Throwable) {
             out.recycle()
             throw e
         }
-        return tileOf(out)
+        return out
     }
 
     fun materialize(s: TiledPixels): Bitmap {
@@ -462,10 +660,13 @@ internal object TileOps {
     }
 
     private fun unpinTiles(held: List<Tile>) {
-        for (t in held) {
-            t.pins--
-            if (t.pins == 0 && t.refs <= 0) free(t)
-        }
+        for (t in held) unpinTile(t)
+    }
+
+    /** One pin fewer on [t]; frees it when no pin and no holder is left. Main only. */
+    fun unpinTile(t: Tile) {
+        t.pins--
+        if (t.pins == 0 && t.refs <= 0) free(t)
     }
 
     // ---------------------------------------------------------------- compositor and reads
