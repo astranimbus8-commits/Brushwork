@@ -8,6 +8,7 @@ import android.util.Log
 import com.brushwork.paint.BrushworkApp
 import com.brushwork.paint.engine.budget.Budgets
 import com.brushwork.paint.engine.check.AutoCheckRunner
+import com.brushwork.paint.engine.check.CheckNotices
 import com.brushwork.paint.engine.check.CheckStore
 
 /**
@@ -16,8 +17,8 @@ import com.brushwork.paint.engine.check.CheckStore
  * `EngineConfig.applyIdle`). F1: nothing, so the app starts as v1.9.
  *
  * A10, on the main thread (cheap: one small file): the gallery's budget from the stored check
- * result ([CheckStore]; none stored, nothing changes), and `onTrimMemory` stopping the check and
- * deleting its marker. Then, on a background thread and never under Robolectric (one JVM, many
+ * result ([CheckStore]; none stored, nothing changes), its notice if it was raised and never shown
+ * ([CheckNotices.atStart]), and `onTrimMemory` stopping the check and deleting its marker. Then, on a background thread and never under Robolectric (one JVM, many
  * apps; the tests call the parts themselves): the launch's look at an interrupted check
  * ([AutoCheckRunner.atLaunch]).
  */
@@ -25,7 +26,9 @@ object EngineStartup {
     fun onAppCreate(app: Application) {
         val brush = app as? BrushworkApp ?: return
         val check = CheckStore.read(app)
-        if (check != null) EngineConfig.applyIdle(brush.settings.layerStorageMode, check, Budgets.compute(EngineConfig.memoryProbe, check.stepDown))
+        val mode = brush.settings.layerStorageMode
+        if (check != null) EngineConfig.applyIdle(mode, check, Budgets.compute(EngineConfig.memoryProbe, check.stepDown))
+        CheckNotices.atStart(app, check, mode)
         app.registerComponentCallbacks(TrimCallbacks(brush))
         if (Build.FINGERPRINT == "robolectric") return
         Thread({ atStart(brush) }, "engine-start").apply { isDaemon = true }.start()

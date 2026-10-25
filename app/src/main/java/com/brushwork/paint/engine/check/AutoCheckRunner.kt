@@ -24,7 +24,7 @@ import java.util.concurrent.TimeUnit
 
 /** v1.10 (A10, design 2.10 "When it runs"): why a run of the check is due. */
 enum class CheckTrigger {
-    /** "Check again" in Settings (`engineCheckPending`): clears `stepDown` and `lmkDeathsAt`. */
+    /** `EngineLabels110.CHECK_AGAIN` in Settings (`engineCheckPending`): clears `stepDown` and `lmkDeathsAt`. */
     MANUAL,
 
     /** No result yet (or an unreadable or newer one). */
@@ -73,9 +73,10 @@ class CheckEnv(
  * ([launchIfDue]), each step within its cap (about 2.7 s in all). Before every step it stops when
  * asked ([requestStop]: the gallery left, the app stopped) or when an editor is open; the steps it
  * finished are kept in memory and the next run resumes with the rest. The decision is
- * [AutoCheck.decide] against this phone's previous result; a manual check starts from
- * `stepDown = 0` and no closings, every other run carries them. The result is written with
- * `engineCheckPending` and `slowSwapReads` cleared, and the gallery's budget follows it
+ * [AutoCheck.decide] against this phone's previous result; a manual check (`EngineLabels110.CHECK_AGAIN`) starts
+ * from `stepDown = 0` and no closings (the user asked for a fresh decision), every other run
+ * carries them. The result is written with `engineCheckPending` and `slowSwapReads` cleared, its
+ * gallery notice is raised or settled ([CheckNotices]), and the gallery's budget follows it
  * (`EngineConfig.applyIdle`, on main, so it never races an opening session).
  *
  * **Cold starts.** One instance per process ([of]): a provisional result or an interrupted run
@@ -282,7 +283,7 @@ class AutoCheckRunner(context: Context, private val env: CheckEnv, private val s
         )
         val d = AutoCheck.decide(inputs, previous)
         val result = resultOf(inputs, d, (p.nanos / 1_000_000L), carry)
-        store(result, manual = p.trigger == CheckTrigger.MANUAL)
+        store(result, manual = p.trigger == CheckTrigger.MANUAL, previous = previous, announce = true)
         progress = null
     }
 
@@ -325,13 +326,18 @@ class AutoCheckRunner(context: Context, private val env: CheckEnv, private val s
         val carry = if (manual) null else previous(m1, stored)
         val inputs = CheckInputs(m1.totalMem, m1.availMem, m1.threshold, m1.isLowRamDevice, m1.is64Bit, m1.javaMax, stepDown = carry?.stepDown ?: 0)
         val d = Decision(EngineLevel.CLASSIC, CheckReasons.LOW_MEMORY, provisional = false, inconclusiveRuns = 0, aboveProjection = false)
-        store(resultOf(inputs, d, 0L, carry), manual)
+        store(resultOf(inputs, d, 0L, carry), manual, previous(m1, stored), announce = false)
         return true
     }
 
-    /** Writes [result], clears the state's flags, notes the fingerprint and applies the gallery's budget. */
-    private fun store(result: EngineCheckResult, manual: Boolean) {
+    /**
+     * Writes [result], clears the state's flags, notes the fingerprint, raises or settles the
+     * gallery's notice against [previous] ([CheckNotices]; [announce] false for an interrupted
+     * run) and applies the gallery's budget.
+     */
+    private fun store(result: EngineCheckResult, manual: Boolean, previous: EngineCheckResult?, announce: Boolean) {
         CheckStore.write(context, result)
+        CheckNotices.afterCheck(context, result, previous, env.mode(), announce)
         val now = EngineStateStore.read(context)
         if ((manual && now.engineCheckPending) || now.slowSwapReads) {
             EngineStateStore.write(context, now.copy(engineCheckPending = now.engineCheckPending && !manual, slowSwapReads = false))
@@ -380,6 +386,17 @@ class AutoCheckRunner(context: Context, private val env: CheckEnv, private val s
 
         /** The gallery may start the check: always on a phone, under Robolectric only when a test asks. */
         val galleryRuns: Boolean get() = runUnderRobolectric || Build.FINGERPRINT != "robolectric"
+
+        /**
+         * `EngineLabels110.CHECK_AGAIN` (design 2.11): sets `engineCheckPending`, so the check runs at
+         * the next gallery as a manual one (fresh: no step-down or closings carried). Blocking (one
+         * small file), off the main thread. The check never runs while an editor is open, where the
+         * settings are, so nothing writes the state meanwhile.
+         */
+        fun requestCheck(context: Context) {
+            val state = EngineStateStore.read(context)
+            if (!state.engineCheckPending) EngineStateStore.write(context, state.copy(engineCheckPending = true))
+        }
 
         /** The process's runner for [app] (a new one for a new app, as in each Robolectric test). */
         fun of(app: BrushworkApp): AutoCheckRunner = synchronized(this) {

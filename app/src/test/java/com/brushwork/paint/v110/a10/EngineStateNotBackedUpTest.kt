@@ -3,6 +3,7 @@ package com.brushwork.paint.v110.a10
 import android.content.Context
 import com.brushwork.paint.AppSettings
 import com.brushwork.paint.R
+import com.brushwork.paint.UiPrefs
 import com.brushwork.paint.engine.EngineLevel
 import com.brushwork.paint.engine.check.AutoCheckRunner
 import com.brushwork.paint.engine.check.CheckMarker
@@ -51,11 +52,13 @@ class EngineStateNotBackedUpTest {
             assertEquals(name, f.name)
             assertEquals("$name lies directly in noBackupFilesDir", noBackup, f.canonicalFile.parentFile)
         }
-        // A run writes there and nowhere else in the app's data.
+        // A run writes there and nowhere else in the app's data, but for the notice's "shown once" mark in
+        // UiPrefs (design 2.11: the `ranAtMillis` of the result last announced; on another phone its later
+        // check is newer, so a restored mark never hides that phone's notice).
         EngineStateStore.write(app, EngineState(engineCheckPending = true))
         val before = dataFiles()
         assertEquals(AutoCheckRunner.Outcome.DONE, A10Kit.runner(app, A10Kit.Env()).runIfDue { false })
-        val written = dataFiles() - before
+        val written = dataFiles() - before - File(app.dataDir, "shared_prefs/${UiPrefs.FILE}.xml").canonicalFile
         assertTrue("written: $written", written.isNotEmpty())
         for (f in written) assertTrue("$f is under noBackupFilesDir", f.canonicalPath.startsWith(noBackup.path + File.separator))
         assertEquals(EngineLevel.FULL, CheckStore.read(app)!!.level)
