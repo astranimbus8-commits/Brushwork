@@ -65,7 +65,6 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -581,29 +580,6 @@ private fun eraseCellItem(tool: CurveTool, f: CurveStripFacts, ui: CurveStripUi)
     return VectorEraseChooser.modeCell(StripContext(selectionBarShown = false, vectorMode = true), layer, mode, onMode = { VectorEraserModes.setMode(c, it) }) {
         ui.pixels = layer
     }
-}
-
-/** One paint mode of the Stroke kind dropdown: [text] shown, known by [description] alone (I10). */
-@Composable
-private fun PaintModeEntry(text: String, description: String, selected: Boolean, available: Boolean, onClick: () -> Unit) {
-    DropdownMenuItem(
-        text = {
-            Text(
-                text,
-                color = if (available) BrushworkColors.OnChrome else BrushworkColors.OnChromeDim.copy(alpha = 0.5f),
-            )
-        },
-        onClick = onClick,
-        leadingIcon = { CheckMark(selected) },
-        modifier = Modifier.semantics(mergeDescendants = true) {
-            contentDescription = description
-            this.selected = selected
-            if (!available) {
-                stateDescription = CurveLabels17.FILL_NEEDS_3
-                disabled()
-            }
-        },
-    )
 }
 
 @Composable
