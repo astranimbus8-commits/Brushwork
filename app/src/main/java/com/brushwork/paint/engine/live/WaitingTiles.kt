@@ -39,8 +39,10 @@ import kotlin.math.min
  *   chunk's layers are pinned (`Layer.pin()`: a "requested" pin, so neither park nor swap-out takes
  *   them before the chunk is drawn), and their tiles are read off main in unit order (bottom-up)
  *   by [worker] with `Tile.bitmapForRead()`, never made resident. The read copies are lent to
- *   their tiles while the chunk composites on main (`BandAssembler.lend`) and recycled right
- *   after, so a waiting tile completes even when its sources together exceed the tile RAM.
+ *   their tiles while the chunk composites on main (`BandAssembler.lend`) and dropped right
+ *   after (a lent copy is left to the GC, since a reader off main may hold it; a copy never lent
+ *   is recycled; a tile's own bitmap, when it became resident meanwhile, is never touched), so a
+ *   waiting tile completes even when its sources together exceed the tile RAM.
  * - Until it completes, the display tile keeps its previous content (stale after an invalidation,
  *   blank when never shown) and is never presented as exact ([DisplayTiles.isExact] is false); the
  *   finished accumulator replaces the dirty part in one draw, and [DisplayTiles.onWaitingDone]
@@ -191,15 +193,16 @@ internal class WaitingTiles(
                 if (need.size > before) pins += l.pin()
             }
             if (need.isEmpty()) {
-                if (!composite(job, from, until, emptyList())) return
+                if (!composite(job, from, until)) return
                 continue
             }
             worker.execute {
-                val read = ArrayList<Pair<Tile, Bitmap>>(need.size)
+                val read = ArrayList<Read>(need.size)
                 var failure: Throwable? = null
                 for (t in need) {
                     try {
-                        read += t to t.bitmapForRead()
+                        val (b, own) = BandAssembler.readOff(t)
+                        read += Read(t, b, own)
                     } catch (e: Throwable) {
                         failure = e
                         break
@@ -211,10 +214,18 @@ internal class WaitingTiles(
         }
     }
 
-    private fun readDone(job: Job, from: Int, until: Int, read: List<Pair<Tile, Bitmap>>, pins: List<PixelPin>, failure: Throwable?) {
+    /**
+     * One tile read by [worker]: [bitmap] is the reader's [own] copy, or the bitmap the tile held
+     * at the read (resident meanwhile, or lent by another job): that one is never recycled here.
+     */
+    private class Read(val tile: Tile, val bitmap: Bitmap, val own: Boolean) {
+        var lent = false
+    }
+
+    private fun readDone(job: Job, from: Int, until: Int, read: List<Read>, pins: List<PixelPin>, failure: Throwable?) {
         reads += read.size
         var held = 0L
-        for ((t, _) in read) held += t.bytes
+        for (r in read) held += r.tile.bytes
         if (held > peakChunkBytes) peakChunkBytes = held
         try {
             if (job.cancelled) return
@@ -225,15 +236,17 @@ internal class WaitingTiles(
                 drop(job)
                 return
             }
-            val lent = ArrayList<Pair<Tile, Bitmap>>(read.size)
             try {
-                for (p in read) if (BandAssembler.lend(p.first, p.second)) lent += p
-                if (!composite(job, from, until, lent)) return
+                for (r in read) r.lent = BandAssembler.lend(r.tile, r.bitmap)
+                if (!composite(job, from, until)) return
             } finally {
-                for ((t, b) in lent) BandAssembler.unlend(t, b)
+                for (r in read) if (r.lent) BandAssembler.unlend(r.tile, r.bitmap)
             }
         } finally {
-            for ((_, b) in read) if (!b.isRecycled) b.recycle()
+            // Only an own copy that was never lent is recycled: a lent copy may have been handed
+            // to a reader off main by `bitmapForRead` meanwhile (the GC frees it), and a bitmap
+            // that is not the reader's own is a tile's.
+            for (r in read) if (r.own && !r.lent && !r.bitmap.isRecycled) r.bitmap.recycle()
             for (p in pins) p.close()
         }
         step(job)
@@ -249,7 +262,7 @@ internal class WaitingTiles(
     }
 
     /** Composites layers [from, until) onto the job's accumulator; false when the job ended. */
-    private fun composite(job: Job, from: Int, until: Int, lent: List<Pair<Tile, Bitmap>>): Boolean {
+    private fun composite(job: Job, from: Int, until: Int): Boolean {
         val c = accCanvas(job)
         val acc = job.acc!!
         val region = job.regionFor(from)

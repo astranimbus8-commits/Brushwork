@@ -3911,7 +3911,11 @@ full bitmap, without making it.
 - Only the current chunk's layers are pinned (`Layer.pin()`); the worker thread
   (`bw-waiting-tiles`) reads their tiles in unit order with `Tile.bitmapForRead()`, never
   making them resident. The copies are lent to their tiles while the chunk draws on main
-  (`BandAssembler.lend` / `unlend`) and recycled after.
+  (`BandAssembler.lend` / `unlend`). `BandAssembler.readOff` tells the worker whether it got its
+  own copy or the bitmap the tile held at that moment (resident meanwhile, or lent by another
+  reader). Only an own copy that was never lent is recycled. A lent copy is left to the GC,
+  since `bitmapForRead` may have handed it to another reader during the loan, and a tile's own
+  bitmap is never touched.
 - Until it completes, the tile keeps what it showed and `isExact(index)` is false; `hasWaiting`
   says some tile waits. The finished accumulator replaces the part, and `onWaitingDone` asks the
   canvas for a frame. An invalidation cancels the job and the part is dirty again.
@@ -3946,7 +3950,9 @@ canvas update while no stroke uses Classic's `StrokeBelowCache`.
 - At CLASSIC, `StrokeBelowCache` runs when `EngineConfig.strokeBelowMinLayers` (from the check)
   is set and the units below reach it; null keeps v1.9's behaviour. Its test hooks force it on.
 - `CanvasView` records `EngineStat.COMPOSITE` (each update that rendered) and
-  `INPUT_TO_COMPOSITE` (the first input of the frame to the end of that update).
+  `INPUT_TO_COMPOSITE`: from the time of the first input event since the last composite (its
+  oldest batched sample, `MotionEvent.eventTime` otherwise) to the end of that update. A frame
+  drawn by the live adjustment ends that wait without a sample.
 
 **Readers (C-REG, step 4).** `PixelReads.sample` / `region` pin a TILED layer for the read only and
 read resident, packed or swapped tiles without making them resident. Through them, or through
@@ -3965,22 +3971,35 @@ stores and `snapshot()`s:
   it keeps the facade getter: a write materializes the layer once (it is rehoused flat), and the
   residency policy parks it again later.
 
-**Thumbnails (step 4).** `LayerThumbnails` keys on (id, `contentVersion`, `pixelGeneration`). It
-downscales only a flat store; otherwise it keeps the picture of the same key, or shows a
-placeholder of the thumbnail's size, exact for a blank store. A park leaves the key unchanged,
-so a picture made while the layer was flat stays. `FolderThumbnails.key` mixes the children's
-`pixelGeneration`, `contentVersion` and `hasMask`, and a folder's picture renders from the tiles.
-Not built (cuts 3 and 2, empty commits 6/7 and 7/7):
-- thumbnails made at park (`ThumbnailCache` LRU under THUMBNAILS): it needs a park notification
-  from A8's `ResidencyPolicy` (LeadRequest);
-- the above projection (X5): `EngineConfig.aboveProjection` is read by nothing in the engine,
-  and stroke frames draw the layers above the split on the plain path.
+**Thumbnails (steps 4 and 6).** `LayerThumbnails` keys on (id, `contentVersion`,
+`pixelGeneration`). A park leaves the key unchanged, so a picture made while the layer was flat
+stays. `FolderThumbnails.key` mixes the children's `pixelGeneration`, `contentVersion` and
+`hasMask`, and a folder's picture renders from the tiles.
+- A flat store is downscaled at once. A blank store, or a tiled one without tiles, shows an exact
+  transparent placeholder.
+- A tiled store without a picture of its key (a layer first seen parked, after an undo that
+  restored a parked store, after an open) shows the picture it had, or a placeholder, and
+  **requests** its picture (step 6): one request at a time on the main looper. Resident tiles
+  are drawn on main. The others are read by the waiting tiles' worker under a `Layer.pin()`
+  (`BandAssembler.readOff`, never made resident) and drawn there into the request's own bitmap,
+  tile by tile at the thumbnail's scale (through 3x the size for big reductions, as
+  `downscale`). The picture lands only when the store and key are unchanged.
+- `content` and `mask` read an observable revision, so the rows recompose when a picture lands.
+  A failed read keeps the placeholder until the key changes. An EVICTED store keeps the
+  placeholder (F1 has no reload). Pictures from tiles hold at most `TILE_PICTURES_BYTES`
+  (16 MiB) per panel; the oldest go first.
+- No park notification exists before A8's `ResidencyPolicy`, so the picture is made when a row
+  first shows a parked layer without one, not at park time.
+Not built (cut 2, empty commit 7/7): the above projection (X5). `EngineConfig.aboveProjection`
+is read by nothing in the engine, and stroke frames draw the layers above the split on the plain
+path.
 
 Tests: `test:v110/a9/` (`TiledCompositeGoldenTest`, `BlankSkipExactTest`, `Api28BlendParityTest`,
 `WaitingTileOverTileRamTest`, `BelowProjectionExactTest`, `PixelReadsTiledTest`,
-`CRegToolsParkedLayerTest`, `PanelNoMaterializeTest`, and the Timing classes
-`BandAssemblerTimingTest`, `FullRerender500TimingTest`, `FirstCompositeEvictedTimingTest`,
-`StrokeFrame200TimingTest`, `StrokeFrame100PlainTimingTest`, `BelowRebuildTimingTest`) and
+`CRegToolsParkedLayerTest`, `PanelNoMaterializeTest`, `BelowProjectionWaitingTest`, `WaitingReadOwnershipTest`,
+`ThumbnailFromTilesTest`, and the Timing classes `BandAssemblerTimingTest`,
+`FullRerender500TimingTest`, `FirstCompositeEvictedTimingTest`, `StrokeFrame200TimingTest`,
+`StrokeFrame100PlainTimingTest`, `BelowRebuildTimingTest`, `ThumbnailAtParkTimingTest`) and
 `test:qa110/Qa110TiledCanvasUiTest`. That UI test runs 200 layers at TILES (parked, then packed
 after an eye toggle) on the canvas, bit-equal to Classic, at 392 and 360 dp and font scale 1,
 1.3 and 2.0, with no text overflowing in either editor.

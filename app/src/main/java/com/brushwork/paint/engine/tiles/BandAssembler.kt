@@ -382,11 +382,26 @@ internal object BandAssembler {
     fun isResident(t: Tile): Boolean = t.bitmap != null
 
     /**
+     * A read of [t] (`Tile.bitmapForRead`: off main, or on main for a resident tile, which reads
+     * nothing) and whether the bitmap is the reader's own
+     * copy: true for a copy inflated or read from the swap; false when it is the bitmap [t] held
+     * at that moment (it became resident after the caller collected it, or a copy is lent to it).
+     * Only an own copy that nobody else has seen may be recycled; a tile's bitmap never.
+     */
+    fun readOff(t: Tile): Pair<Bitmap, Boolean> = synchronized(t.lock) {
+        val held = t.bitmap
+        val b = t.bitmapForRead()
+        b to (b !== held)
+    }
+
+    /**
      * Lends [b], a copy of [t]'s pixels read off main (`Tile.bitmapForRead`) under a pin, to [t]
      * while one chunk of a waiting display tile composites on main (`engine/live/WaitingTiles`), so
      * the compositor draws it without reading again. False when [t] became resident meanwhile (then
      * its own bitmap is drawn). The tile's state, slot, packed bytes and ledger are untouched: the
-     * loan is not a swap-in. Main only; [unlend] in the same task.
+     * loan is not a swap-in. Main only; [unlend] in the same task. While lent, [b] is what
+     * `bitmapForRead` returns to any reader off main, so a lent copy is never recycled after
+     * [unlend]: the GC frees it once no reader holds it.
      */
     fun lend(t: Tile, b: Bitmap): Boolean = synchronized(t.lock) {
         if (t.bitmap != null) {
@@ -398,7 +413,7 @@ internal object BandAssembler {
         }
     }
 
-    /** Ends a [lend] of [b] to [t] (the caller recycles [b]). Main only. */
+    /** Ends a [lend] of [b] to [t] (the caller leaves [b] to the GC, see [lend]). Main only. */
     fun unlend(t: Tile, b: Bitmap) {
         synchronized(t.lock) { if (b === t.bitmap) t.bitmap = null }
     }

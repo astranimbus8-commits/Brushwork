@@ -165,6 +165,17 @@ class CanvasView(context: Context, private val controller: EditorController) : V
     /** v1.10 A9: uptime of the first input event since the last composite (0: none). */
     private var inputAt = 0L
 
+    /**
+     * v1.10 A9: when [e]'s first sample happened (its oldest batched sample, else its own time, in
+     * `uptimeMillis`), so input-to-composite includes the wait for the event's dispatch; now when
+     * the event carries no usable time.
+     */
+    private fun inputTime(e: MotionEvent): Long {
+        val now = SystemClock.uptimeMillis()
+        val t = if (e.historySize > 0) e.getHistoricalEventTime(0) else e.eventTime
+        return if (t in 1..now) t else now
+    }
+
     /** v1.10 A9: a gesture lifted since the last composite; that composite uses no projection. */
     private var liftPending = false
 
@@ -473,6 +484,9 @@ class CanvasView(context: Context, private val controller: EditorController) : V
             canvas.concat(t.matrix)
             tiles.draw(canvas, visible, smooth)
             canvas.restoreToCount(save)
+        } else {
+            // The live adjustment drew this frame: its input is not the next composite's.
+            inputAt = 0L
         }
         if (controller.liveAdjust.wantsFrame) postInvalidateOnAnimation()
 
@@ -610,7 +624,7 @@ class CanvasView(context: Context, private val controller: EditorController) : V
         watchTouchSpan(e)
         // v1.10 A9 (design 4.4 A9, section 7): input-to-composite starts at the first unrendered event;
         // the first frame after a lift renders on the plain path, never through a projection.
-        if (inputAt == 0L) inputAt = SystemClock.uptimeMillis()
+        if (inputAt == 0L) inputAt = inputTime(e)
         if (e.actionMasked == MotionEvent.ACTION_UP || e.actionMasked == MotionEvent.ACTION_CANCEL) liftPending = true
         if (!viewport.hasSize) return true
         val action = e.actionMasked
