@@ -46,9 +46,11 @@ import kotlin.math.min
 class TileOpsParityTest {
     private val made = mutableListOf<Bitmap>()
 
+    private val baseline = A8Kit.Baseline()
+
     @After
     fun tearDown() {
-        A8Kit.drain()
+        baseline.assertBack(emptyList())
         F1Pixels.resetEngine()
         made.forEach { if (!it.isRecycled) it.recycle() }
     }

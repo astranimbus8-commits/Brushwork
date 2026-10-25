@@ -1494,6 +1494,25 @@ class EditorController(
     }
 
     // region v110-A8 activate
+    /**
+     * v1.10 (A8, design 2.0, 2.7): where the layers' pixels live while this editor is open at
+     * TILES or FULL (installed as the session's residency; null at CLASSIC, P6).
+     */
+    private val residencyPolicy: com.brushwork.paint.engine.tiles.ResidencyPolicy? =
+        com.brushwork.paint.engine.tiles.ResidencyPolicy.attach(this)
+
+    /** The session's policy, this editor's or one a test installed; null at CLASSIC. */
+    private val policy: com.brushwork.paint.engine.tiles.ResidencyPolicy?
+        get() = residencyPolicy?.takeIf { EngineConfig.residency === it } ?: EngineConfig.residency as? com.brushwork.paint.engine.tiles.ResidencyPolicy
+
+    /**
+     * v1.10 (A8, design 2.7): the press on a layer row, before the release selects it: starts
+     * making [layer] FLAT now, so the switch finds it ready. Nothing at CLASSIC.
+     */
+    fun prepareLayer(layer: Layer) {
+        policy?.prepare(layer)
+    }
+
     fun selectLayer(layer: Layer) {
         if (layer === activeLayer) return
         // An Object bar action waiting for a vector render is made on its layer first (v1.5; it
@@ -1503,10 +1522,16 @@ class EditorController(
         currentTool.onDeactivate()
         val idx = doc.indexOf(layer)
         if (idx < 0) return
+        // v1.10 (A8, P1): the new layer is FLAT before the tool sees it when its tiles are resident;
+        // otherwise the worker reads them while `activating` holds input (the setter's activation
+        // at the end of the task finds the read in flight).
+        val start = System.nanoTime()
+        policy?.prepare(layer)
         doc.activeLayerIndex = idx
         layersVersion++
         currentTool.onActivate()
         invalidateOverlay()
+        com.brushwork.paint.engine.EngineStats.record(com.brushwork.paint.engine.EngineStat.SWITCH, (System.nanoTime() - start) / 1e6f)
     }
     // endregion
 

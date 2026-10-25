@@ -11,6 +11,7 @@ import com.brushwork.paint.testing.EngineRule
 import com.brushwork.paint.testing.FakeSwapStore
 import com.brushwork.paint.v110.lead.F1Pixels
 import org.junit.After
+import org.junit.Before
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -36,10 +37,16 @@ class SwapOutRacesFrameTest {
     val engine = EngineRule(EngineLevel.FULL, swap = swap)
 
     private val made = ArrayList<Bitmap>()
+    private lateinit var baseline: A8Kit.Baseline
+
+    @Before
+    fun setUp() {
+        baseline = A8Kit.Baseline()
+    }
 
     @After
     fun tearDown() {
-        A8Kit.drain()
+        baseline.assertBack(emptyList())
         made.forEach { if (!it.isRecycled) it.recycle() }
     }
 

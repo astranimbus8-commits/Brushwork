@@ -456,14 +456,34 @@ internal object TileOps {
         return out
     }
 
-    fun materialize(s: TiledPixels): Bitmap {
+    /**
+     * A transparent flat bitmap of [s]'s size, admitted as a layer like [materialize]'s (A8: the
+     * activation fills one with [drawIfResident] while the worker reads the rest, section 2.7).
+     * Throws [OutOfMemoryError] when the budget or the heap has no room.
+     */
+    fun newFlatFor(s: TiledPixels): Bitmap {
         check(s.evictedTo == null) { "an evicted store reloads from its saved file (A11)" }
         val bytes = s.width.toLong() * s.height * 4
         val budget = EngineConfig.budget
         if (!budget.admitNative(bytes, NativePurpose.LAYER)) throw OutOfMemoryError("No room for a ${s.width}x${s.height} layer")
         // F1: a flat bitmap is admitted but not kept in the ledger (v1.9 code recycles flat bitmaps anywhere).
         budget.release(bytes, NativePurpose.LAYER)
-        val out = BitmapUtils.createLayerBitmap(s.width, s.height)
+        return BitmapUtils.createLayerBitmap(s.width, s.height)
+    }
+
+    /**
+     * Main only (A8): draws tile [i] of [s] at its place through [c] (a canvas over a bitmap of
+     * [s]'s size) when it needs no read, that is when it is resident or solid; true when drawn.
+     */
+    fun drawIfResident(c: Canvas, s: TiledPixels, i: Int): Boolean {
+        val t = s.tiles[i] ?: return false
+        if (t.bitmap == null) return false
+        drawTile(c, t, (i % s.cols) * TILE_SIZE, (i / s.cols) * TILE_SIZE, copyPaint)
+        return true
+    }
+
+    fun materialize(s: TiledPixels): Bitmap {
+        val out = newFlatFor(s)
         try {
             val c = Canvas(out)
             for (i in s.tiles.indices) {

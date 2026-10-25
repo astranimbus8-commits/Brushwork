@@ -8,13 +8,16 @@ import com.brushwork.paint.engine.UndoAction
 import com.brushwork.paint.engine.UndoManager
 import com.brushwork.paint.engine.TileHolder
 import com.brushwork.paint.engine.budget.LedgerCategory
+import com.brushwork.paint.engine.tiles.PackedPool
 import com.brushwork.paint.engine.tiles.ResidencyPolicy
+import com.brushwork.paint.engine.tiles.SolidTiles
 import com.brushwork.paint.engine.tiles.Tile
 import com.brushwork.paint.engine.tiles.TileWorker
 import com.brushwork.paint.engine.tiles.TiledPixels
 import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.v110.lead.F1Pixels
+import org.junit.Assert.assertEquals
 import org.junit.Assert.fail
 import org.robolectric.Shadows.shadowOf
 import java.time.Duration
@@ -52,6 +55,26 @@ internal object A8Kit {
 
     /** The bytes the ledger counts under TILES now. */
     fun tiles(): Long = EngineConfig.budget.ledger.of(LedgerCategory.TILES)
+
+    /**
+     * The engine state every test of the fork shares, as it was when made (in `@Before`): the TILES
+     * ledger, the [SolidTiles] colors and the [PackedPool] bytes. [assertBack] drains the worker,
+     * lets every store of the test's documents go (`Layer.recycleBitmaps`) and asserts all three
+     * are back, so no test leaves tiles to the next one.
+     */
+    class Baseline {
+        private val tiles = tiles()
+        private val colors = SolidTiles.colors()
+        private val pool = PackedPool.heldBytes
+
+        fun assertBack(docs: List<Document>) {
+            drain()
+            for (d in docs) for (l in d.layers) l.recycleBitmaps()
+            assertEquals("the TILES ledger is back", tiles, tiles())
+            assertEquals("the solid colors are back", colors, SolidTiles.colors())
+            assertEquals("the packed pool is back", pool, PackedPool.heldBytes)
+        }
+    }
 
     /**
      * The policy's view of an editor: a document, a busy flag, the activation hold, a history.

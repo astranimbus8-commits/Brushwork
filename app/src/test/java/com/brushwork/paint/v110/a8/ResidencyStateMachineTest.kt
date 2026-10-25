@@ -23,6 +23,7 @@ import com.brushwork.paint.model.PixelFacade
 import com.brushwork.paint.testing.EngineRule
 import com.brushwork.paint.v110.lead.F1Pixels
 import org.junit.After
+import org.junit.Before
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -53,12 +54,24 @@ class ResidencyStateMachineTest {
     val engine = EngineRule(EngineLevel.TILES)
 
     private val made = ArrayList<Bitmap>()
+    private val docs = ArrayList<Document>()
+    private lateinit var baseline: A8Kit.Baseline
+
+    @Before
+    fun setUp() {
+        baseline = A8Kit.Baseline()
+    }
+
     private var started: ResidencyPolicy? = null
+    private val histories = ArrayList<UndoManager>()
 
     @After
     fun tearDown() {
         started?.stop()
         A8Kit.drain()
+        // The histories dispose their steps (their tiles go).
+        histories.forEach { it.trimOldest(keepAtLeast = 0) { false } }
+        baseline.assertBack(docs)
         made.forEach { if (!it.isRecycled) it.recycle() }
     }
 
@@ -76,7 +89,7 @@ class ResidencyStateMachineTest {
 
     @Test
     fun anInactiveLayerParksTwoSecondsAfterItsDeactivation() {
-        val d = A8Kit.doc(3, made)
+        val d = A8Kit.doc(3, made).also { docs += it }
         val (p, _) = A8Kit.policy(d)
         activate(d, 0)
         activate(d, 1)
@@ -107,7 +120,7 @@ class ResidencyStateMachineTest {
 
     @Test
     fun switchingBackWithinTwoSecondsParksNothing() {
-        val d = A8Kit.doc(2, made)
+        val d = A8Kit.doc(2, made).also { docs += it }
         val (p, _) = A8Kit.policy(d)
         activate(d, 0)
         activate(d, 1)
@@ -133,7 +146,7 @@ class ResidencyStateMachineTest {
 
     @Test
     fun itsOwnTickParksEveryHalfSecond() {
-        val d = A8Kit.doc(2, made)
+        val d = A8Kit.doc(2, made).also { docs += it }
         val (p, _) = A8Kit.policy(d, start = true)
         started = p
         activate(d, 0)
@@ -154,7 +167,7 @@ class ResidencyStateMachineTest {
 
     @Test
     fun activatingAParkedLayerUnparksItAtOnceWhenItsTilesAreResident() {
-        val d = A8Kit.doc(2, made)
+        val d = A8Kit.doc(2, made).also { docs += it }
         val (p, host) = A8Kit.policy(d)
         activate(d, 0)
         activate(d, 1)
@@ -189,7 +202,7 @@ class ResidencyStateMachineTest {
 
     @Test
     fun activatingALayerWithPackedTilesHoldsInputUntilTheyAreRead() {
-        val d = A8Kit.doc(2, made)
+        val d = A8Kit.doc(2, made).also { docs += it }
         val (p, host) = A8Kit.policy(d, tileRam = { 0L })
         activate(d, 0)
         activate(d, 1)
@@ -216,7 +229,7 @@ class ResidencyStateMachineTest {
 
     @Test
     fun aSwitchAwayDuringTheReadsEndsTheHold() {
-        val d = A8Kit.doc(3, made)
+        val d = A8Kit.doc(3, made).also { docs += it }
         val (p, host) = A8Kit.policy(d, tileRam = { 0L })
         activate(d, 0)
         activate(d, 1)
@@ -250,7 +263,7 @@ class ResidencyStateMachineTest {
 
     @Test
     fun blankAndFolderLayersNeverPark() {
-        val d = Document("a8", "a8", 512, 300)
+        val d = Document("a8", "a8", 512, 300).also { docs += it }
         d.layers += Layer(d.newLayerId(), "Active", F1Pixels.mixed(512, 300, 3L).also { made += it })
         d.layers += Layer(d.newLayerId(), "Blank", BlankPixels(512, 300))
         d.layers += Layer(d.newLayerId(), "Folder", FolderPixels).apply { folder = FolderSpec() }
@@ -269,7 +282,7 @@ class ResidencyStateMachineTest {
 
     @Test
     fun nothingParksWhileTheEditorIsBusy() {
-        val d = A8Kit.doc(2, made)
+        val d = A8Kit.doc(2, made).also { docs += it }
         val (p, host) = A8Kit.policy(d)
         activate(d, 0)
         activate(d, 1)
@@ -297,7 +310,7 @@ class ResidencyStateMachineTest {
 
     @Test
     fun aParkWhoseLayerChangedDuringTheCutIsDropped() {
-        val d = A8Kit.doc(2, made)
+        val d = A8Kit.doc(2, made).also { docs += it }
         val (p, _) = A8Kit.policy(d)
         activate(d, 0)
         activate(d, 1)
@@ -329,7 +342,7 @@ class ResidencyStateMachineTest {
 
     @Test
     fun lowPressureParksEveryEligibleLayerAtOnceColdestFirst() {
-        val d = A8Kit.doc(4, made)
+        val d = A8Kit.doc(4, made).also { docs += it }
         val (p, _) = A8Kit.policy(d, start = true)
         started = p
         val order = ArrayList<String>()
@@ -357,7 +370,7 @@ class ResidencyStateMachineTest {
 
     @Test
     fun criticalPressureParksEveryEligibleLayer() {
-        val d = A8Kit.doc(3, made)
+        val d = A8Kit.doc(3, made).also { docs += it }
         val (p, _) = A8Kit.policy(d)
         activate(d, 0)
         p.pressure(MemoryPressure.CRITICAL)
@@ -369,7 +382,7 @@ class ResidencyStateMachineTest {
 
     @Test
     fun parkAndUnparkKeepThePixelsTheGenerationAndTheRender() {
-        val d = A8Kit.doc(5, made)
+        val d = A8Kit.doc(5, made).also { docs += it }
         val (p, _) = A8Kit.policy(d)
         activate(d, 0)
         val golden = F1Pixels.flatten(d).also { made += it }
@@ -411,8 +424,8 @@ class ResidencyStateMachineTest {
 
     @Test
     fun p3SendsUndoOnlyTilesOldestStepFirstThenColdParkedTiles() {
-        val d = A8Kit.doc(3, made)
-        val history = UndoManager(1L shl 40)
+        val d = A8Kit.doc(3, made).also { docs += it }
+        val history = UndoManager(1L shl 40).also { histories += it }
         var budget = Long.MAX_VALUE
         val (p, _) = A8Kit.policy(d, history, tileRam = { budget })
         activate(d, 0)
@@ -450,13 +463,11 @@ class ResidencyStateMachineTest {
         assertTrue("then the next step's", t2.all { it.state == TileState.PACKED })
         assertEquals("then one cold parked tile", 1, parkedOwn.count { it.state == TileState.PACKED })
         assertTrue("never the active layer's newest steps", t1.all { it.state == TileState.RESIDENT })
-        // The history disposes its steps (their tiles go).
-        history.trimOldest(keepAtLeast = 0) { false }
     }
 
     @Test
     fun aPinnedParkedLayerIsNotAColdTile() {
-        val d = A8Kit.doc(3, made)
+        val d = A8Kit.doc(3, made).also { docs += it }
         val (p, _) = A8Kit.policy(d)
         activate(d, 0)
         p.pressure(MemoryPressure.LOW)

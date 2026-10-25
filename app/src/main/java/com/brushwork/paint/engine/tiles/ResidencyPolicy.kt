@@ -1,5 +1,7 @@
 package com.brushwork.paint.engine.tiles
 
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -47,8 +49,8 @@ import java.util.IdentityHashMap
  */
 class ResidencyPolicy internal constructor(
     private val host: Host,
-    /** P3's budget for resident tiles (bytes); `MemoryBudget.tileRam()` of the session. */
-    private val tileRam: () -> Long = { EngineConfig.budget.tileRam() },
+    /** P3's budget for resident tiles (bytes); `MemoryBudget.tileRam()` of the session (a test sets its own). */
+    internal var tileRam: () -> Long = { EngineConfig.budget.tileRam() },
 ) : ResidencyHooks {
     /** What the policy needs of the editor (main thread). */
     interface Host {
@@ -97,10 +99,13 @@ class ResidencyPolicy internal constructor(
         if (EngineConfig.residency !== this) return false
         if (started) return true
         started = true
+        // One residency per process: a policy that never saw its replacement (its editor went
+        // without a tick) gives up its registration here.
+        liveRegistration?.close()
         registration = MemoryGovernor.register(MEMORY_NAME, MEMORY_PRIORITY, { residentTileBytes() }) { p ->
             if (EngineConfig.residency === this) pressure(p)
             0L
-        }
+        }.also { liveRegistration = it }
         schedule()
         return true
     }
@@ -110,6 +115,7 @@ class ResidencyPolicy internal constructor(
         if (!started) return
         started = false
         registration?.close()
+        if (liveRegistration === registration) liveRegistration = null
         registration = null
         Looper.getMainLooper()?.let { Handler(it).removeCallbacks(tick) }
     }
@@ -175,6 +181,8 @@ class ResidencyPolicy internal constructor(
      * false while an asynchronous unpark holds input.
      */
     fun prepare(layer: Layer): Boolean {
+        // The user moved on from a layer still being read: its hold ends (its reads land, unused).
+        activatingLayer?.let { if (it !== layer) endActivation(it) }
         if (!inDocument(layer)) return true
         inactiveSince.remove(layer.id)
         return unpark(layer)
@@ -204,19 +212,23 @@ class ResidencyPolicy internal constructor(
      * as a last resort); the tiles they held are released. False when out of memory (it stays
      * parked; the bitmap getter tries again) or the layer moved on meanwhile.
      */
-    private fun materialize(layer: Layer): Boolean {
+    private fun materialize(layer: Layer, builds: List<FlatBuild> = emptyList()): Boolean {
         val readContent = layer.pixels
         val readMask = layer.maskPixels
         val content = (readContent as? TiledPixels)?.takeIf { isParkedStore(it) }
         val mask = (readMask as? TiledPixels)?.takeIf { isParkedStore(it) }
+        val builtContent = content?.let { s -> builds.firstOrNull { it.store === s }?.take() }
+        val builtMask = mask?.let { s -> builds.firstOrNull { it.store === s }?.take() }
+        for (b in builds) b.drop()
         if (content == null && mask == null) return true
         val c = try {
-            content?.let { FlatPixels(it.materialize()) }
+            content?.let { FlatPixels(builtContent ?: it.materialize()) }
         } catch (e: OutOfMemoryError) {
+            builtMask?.recycle()
             return false
         }
         val m = try {
-            mask?.let { FlatPixels(it.materialize()) }
+            mask?.let { FlatPixels(builtMask ?: it.materialize()) }
         } catch (e: OutOfMemoryError) {
             c?.bitmap?.recycle()
             return false
@@ -237,33 +249,106 @@ class ResidencyPolicy internal constructor(
     }
 
     /**
+     * An activation's flat copy of one parked [store], filled on main tile by tile: the resident
+     * and solid tiles at once, each read tile as its read lands (so the worker's inflates and
+     * main's copying overlap, and the switch ends with a rehouse instead of a whole copy).
+     */
+    private class FlatBuild(val store: TiledPixels, private var out: Bitmap?) {
+        private val canvas = Canvas(out!!)
+
+        /** The tile drawn at each index (null where none is yet, or the store holds none). */
+        private val drawn = arrayOfNulls<Tile>(store.tiles.size)
+
+        /** Draws every tile of [store] that is resident and not drawn yet. */
+        fun drawResident() {
+            if (out == null) return
+            for (i in drawn.indices) {
+                val t = store.tiles[i] ?: continue
+                // A new flat bitmap is transparent already: a transparent solid tile needs no copy.
+                if (drawn[i] !== t && (t.solid == 0 || TileOps.drawIfResident(canvas, store, i))) drawn[i] = t
+            }
+        }
+
+        /** Draws [t] wherever [store] holds it (just read). */
+        fun drawRead(t: Tile) {
+            if (out == null) return
+            for (i in drawn.indices) if (store.tiles[i] === t && TileOps.drawIfResident(canvas, store, i)) drawn[i] = t
+        }
+
+        /**
+         * The finished copy, handed over (the caller owns it), when every tile [store] holds now
+         * was drawn and none it no longer holds was; else null (and the copy is recycled).
+         */
+        fun take(): Bitmap? {
+            drawResident()
+            val b = out ?: return null
+            out = null
+            canvas.setBitmap(null)
+            for (i in drawn.indices) if (drawn[i] !== store.tiles[i]) {
+                b.recycle()
+                return null
+            }
+            return b
+        }
+
+        /** Recycles the copy unless it was taken. */
+        fun drop() {
+            out?.let { canvas.setBitmap(null); it.recycle() }
+            out = null
+        }
+    }
+
+    /** The flat copies [startAsync] fills for [layer]'s parked content and mask (none for a store with no room). */
+    private fun flatBuilds(layer: Layer): List<FlatBuild> {
+        val out = ArrayList<FlatBuild>(2)
+        for (s in listOfNotNull(layer.pixels as? TiledPixels, layer.maskPixels as? TiledPixels)) {
+            if (!isParkedStore(s)) continue
+            val b = try {
+                TileOps.newFlatFor(s)
+            } catch (e: OutOfMemoryError) {
+                continue
+            }
+            out += FlatBuild(s, b).also { it.drawResident() }
+        }
+        return out
+    }
+
+    /**
      * P1, section 2.7: the worker reads [missing] (READ_URGENT) while `activating` holds input;
-     * main materializes [layer] once every read ended, if it is still the one being activated.
-     * The layer is pinned meanwhile, so P3 sends none of its tiles out again.
+     * main copies each tile into [layer]'s flat bitmaps as its read lands ([FlatBuild]) and
+     * rehouses the layer once every read ended, if it is still the one being activated. The
+     * layer is pinned meanwhile, so P3 sends none of its tiles out again.
      */
     private fun startAsync(layer: Layer, missing: List<Tile>) {
         val token = ++activationToken
         activatingLayer = layer
         host.activating = layer
         val pin = layer.pin()
+        var builds: List<FlatBuild> = emptyList()
         var left = missing.size
+        var finished = false
         val finish = {
+            finished = true
             pin.close()
             if (token == activationToken && activatingLayer === layer) {
-                if (inDocument(layer)) materialize(layer)
+                if (inDocument(layer)) materialize(layer, builds)
                 endActivation(layer)
             }
+            for (b in builds) b.drop()
         }
         if (missing.isEmpty()) {
             finish()
             return
         }
         for (t in missing) {
-            val queued = TileWorker.readIn(t, TileWorker.Priority.READ_URGENT) {
+            val queued = TileWorker.readIn(t, TileWorker.Priority.READ_URGENT) { ok ->
+                if (token != activationToken) for (b in builds) b.drop() else if (ok) for (b in builds) b.drawRead(t)
                 if (--left == 0) finish()
             }
             if (!queued && --left == 0) finish()
         }
+        // The reads are queued first, so copying the resident tiles overlaps the worker's inflates.
+        if (!finished) builds = flatBuilds(layer)
     }
 
     private fun endActivation(layer: Layer) {
@@ -421,6 +506,9 @@ class ResidencyPolicy internal constructor(
 
         private const val MEMORY_NAME = "parked layers"
 
+        /** Main only: the registration of the policy started last (at most one is live). */
+        private var liveRegistration: MemoryGovernor.Registration? = null
+
         /**
          * Main only: the editor's policy at TILES and FULL, installed as `EngineConfig.residency`
          * and started; null at CLASSIC (P6), or when another residency is installed already (a
@@ -428,6 +516,8 @@ class ResidencyPolicy internal constructor(
          */
         fun attach(controller: EditorController): ResidencyPolicy? {
             if (EngineConfig.level == EngineLevel.CLASSIC || EngineConfig.residency !== ClassicResidency) return null
+            // The residency is main-thread state; an editor built elsewhere runs without one (as CLASSIC).
+            if (Looper.getMainLooper()?.isCurrentThread != true) return null
             val policy = ResidencyPolicy(ControllerHost(controller))
             EngineConfig.residency = policy
             policy.start()
@@ -448,7 +538,9 @@ class ResidencyPolicy internal constructor(
     /** The editor as a [Host]. */
     private class ControllerHost(private val c: EditorController) : Host {
         override val document: Document get() = c.doc
-        override val busy: Boolean get() = c.isInteracting || c.busyMessage != null
+        // A gesture, a busy job, or an open tool session (a filter, a tool with work not yet committed).
+        override val busy: Boolean
+            get() = c.isInteracting || c.busyMessage != null || c.filterSession != null || c.currentTool.hasPendingWork
         override var activating: Layer?
             get() = c.activating
             set(value) {

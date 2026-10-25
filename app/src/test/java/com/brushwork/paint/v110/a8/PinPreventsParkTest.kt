@@ -9,6 +9,7 @@ import com.brushwork.paint.engine.tiles.SolidTiles
 import com.brushwork.paint.model.Document
 import com.brushwork.paint.testing.EngineRule
 import org.junit.After
+import org.junit.Before
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -29,10 +30,17 @@ class PinPreventsParkTest {
     val engine = EngineRule(EngineLevel.TILES)
 
     private val made = ArrayList<Bitmap>()
+    private val docs = ArrayList<Document>()
+    private lateinit var baseline: A8Kit.Baseline
+
+    @Before
+    fun setUp() {
+        baseline = A8Kit.Baseline()
+    }
 
     @After
     fun tearDown() {
-        A8Kit.drain()
+        baseline.assertBack(docs)
         made.forEach { if (!it.isRecycled) it.recycle() }
     }
 
@@ -43,7 +51,7 @@ class PinPreventsParkTest {
 
     @Test
     fun aPinnedLayerNeverParksUntilThePinCloses() {
-        val d = A8Kit.doc(2, made)
+        val d = A8Kit.doc(2, made).also { docs += it }
         val (p, _) = A8Kit.policy(d)
         activate(d, 0)
         activate(d, 1)
@@ -64,7 +72,7 @@ class PinPreventsParkTest {
 
     @Test
     fun aPinTakenDuringTheCutDropsThePark() {
-        val d = A8Kit.doc(2, made)
+        val d = A8Kit.doc(2, made).also { docs += it }
         val (p, _) = A8Kit.policy(d)
         activate(d, 0)
         activate(d, 1)
@@ -92,7 +100,7 @@ class PinPreventsParkTest {
 
     @Test
     fun aPinnedParkedLayerStaysParked() {
-        val d = A8Kit.doc(3, made)
+        val d = A8Kit.doc(3, made).also { docs += it }
         val (p, _) = A8Kit.policy(d)
         activate(d, 0)
         p.pressure(MemoryPressure.LOW)

@@ -15,6 +15,7 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
+import com.brushwork.paint.engine.tiles.PackedPool
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -31,9 +32,11 @@ import org.robolectric.RobolectricTestRunner
 class SolidTilesRefcountTest {
     private val made = mutableListOf<Bitmap>()
 
+    private val baseline = A8Kit.Baseline()
+
     @After
     fun tearDown() {
-        A8Kit.drain()
+        baseline.assertBack(emptyList())
         F1Pixels.resetEngine()
         made.forEach { if (!it.isRecycled) it.recycle() }
     }
@@ -87,8 +90,10 @@ class SolidTilesRefcountTest {
         val s = TiledPixels.fromBitmap(uniform(256, 256, color))
         val t = s.tiles[0]!!
         // A state F1's free missed (gap 2): the tile no longer points at the shared bitmap.
+        val packed = TileOps.pack(t.bitmap!!)
+        assertTrue("packed bytes are always the pool's", PackedPool.tryAdmit(packed.size.toLong()))
         synchronized(t.lock) {
-            t.packed = TileOps.pack(t.bitmap!!)
+            t.packed = packed
             t.bitmap = null
         }
         assertEquals(refs + 1, SolidTiles.refs(color))

@@ -14,6 +14,7 @@ import com.brushwork.paint.testing.EngineRule
 import com.brushwork.paint.testing.FakeSwapStore
 import com.brushwork.paint.v110.lead.F1Pixels
 import org.junit.After
+import org.junit.Before
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -40,10 +41,17 @@ class PinNeverSwapsInTest {
     val engine = EngineRule(EngineLevel.FULL, swap = swap)
 
     private val made = ArrayList<Bitmap>()
+    private val docs = ArrayList<Document>()
+    private lateinit var baseline: A8Kit.Baseline
+
+    @Before
+    fun setUp() {
+        baseline = A8Kit.Baseline()
+    }
 
     @After
     fun tearDown() {
-        A8Kit.drain()
+        baseline.assertBack(docs)
         made.forEach { if (!it.isRecycled) it.recycle() }
     }
 
@@ -51,7 +59,7 @@ class PinNeverSwapsInTest {
 
     /** A document whose layer 1 is parked with every tile of its own SWAPPED; its tiles' pixels as they were resident. */
     private fun swapped(): Swapped {
-        val d = A8Kit.doc(3, made)
+        val d = A8Kit.doc(3, made).also { docs += it }
         val (p, _) = A8Kit.policy(d, tileRam = { 0L })
         d.activeLayerIndex = 0
         A8Kit.idle()
