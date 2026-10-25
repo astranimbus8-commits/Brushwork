@@ -23,6 +23,7 @@ import com.brushwork.paint.ui.common.EngineLabels110
 import com.brushwork.paint.ui.common.V110Tags
 import com.brushwork.paint.ui.editor.EditorPrefs
 import com.brushwork.paint.ui.editor.EditorSettingsDialog
+import com.brushwork.paint.ui.engine.DETAILS_TAG
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -40,7 +41,8 @@ import org.robolectric.annotation.Config
  * [EngineLabels110.FOR_THIS_PHONE]; a tap opens the sheet over the dialog with the three radios,
  * [EngineLabels110.APPLIES_NEXT], [EngineLabels110.CHECK_AGAIN] and [EngineLabels110.COPY_DETAILS],
  * every text whole. A radio writes `AppSettings.layerStorageMode` at once (the row and the sheet
- * read it as chosen); Copy details puts the check's numbers on the clipboard; Check again writes
+ * read it as chosen); Copy details puts the check's numbers on the clipboard and the
+ * [EngineLabels110.DETAILS] row shows them on screen until a second tap (step 7); Check again writes
  * `engineCheckPending` to `engine-state.json`, the row reads [EngineLabels110.CHECK_PENDING] and the
  * button turns off.
  *
@@ -130,6 +132,17 @@ class LayerStorageSheetUiTest {
         for (part in listOf("Setting: automatic", "Check: CLASSIC (low memory)", "Native probe: 256 MiB (REACHED)", "Storage: write 120 MB/s, read 250 MB/s")) {
             assertTrue("$where: the details hold \"$part\":\n$text", text.contains(part))
         }
+
+        // Details: the same text on screen, one line per row; a second tap closes it.
+        val checkLine = "Check: CLASSIC (low memory)"
+        assertFalse("$where: the details start closed", Qa19Ui.has(checkLine, exact = false))
+        Qa19Ui.click(EngineLabels110.DETAILS, exact = true)
+        assertTrue("$where: the details open; shown ${Qa19Ui.shown()}", A10Kit.pumpUntil(10_000) { Qa19Ui.settle(1); Qa19Ui.has(checkLine, exact = false) })
+        assertTrue("$where: the list is tagged $DETAILS_TAG", Qa19Ui.tagged(DETAILS_TAG) != null)
+        assertTrue("$where: the storage line too", Qa19Ui.has("Storage: write 120 MB/s, read 250 MB/s", exact = false))
+        Qa19Ui.assertNoTextOverflow("$where, the details open")
+        Qa19Ui.click(EngineLabels110.DETAILS, exact = true)
+        assertTrue("$where: the details close", A10Kit.pumpUntil(10_000) { Qa19Ui.settle(1); !Qa19Ui.has(checkLine, exact = false) })
 
         // Check again.
         assertTrue("$where: Check again is on", SmokeUi.isEnabled(EngineLabels110.CHECK_AGAIN))

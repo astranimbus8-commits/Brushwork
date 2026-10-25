@@ -4063,7 +4063,141 @@ second paints through the above projection at 392 and 360 dp.
 
 <!-- v110-A10 -->
 
-(A10 writes this section.)
+R13 ("Full engine, auto-check") and UQ13 (swap up to 16 GB, at most half the free space above
+1 GB, no writes below 1 GB free). Code: `engine/check/` (the check), `engine/tiles/SlabSwapStore.kt`
+and `SwapJanitor.kt` (swap), `engine/NativeWatch.kt` (eviction and the pressure net),
+`engine/ExitWatch.kt` (low-memory closings and the step-down), `engine/EngineStartup.kt`,
+`engine/EngineStats.kt`, `engine/budget/AndroidStorageProbe.kt` and `AndroidExitInfo.kt`,
+`diagnostics/CrashLog.kt` (its Engine line) and `ui/engine/` (Settings > Layer storage, the
+gallery's notice card, the check's host, the editor's chrome). No document change: everything A10
+writes lives in `noBackupFilesDir` (never backed up, never restored to another phone).
+
+**The automatic check (design 2.10).** `AutoCheckRunner` (one per process, `AutoCheckRunner.of`)
+runs M1-M5 on its own `engine-check` thread through `CheckSteps` (`AndroidCheckSteps` on a phone,
+a fake with chosen numbers in tests). `AutoCheck.decide` turns `CheckInputs` into a `Decision`:
+- Rules 0 and 1 at M1 (`AutoCheck.earlyVerdict`: a step-down of 2, a low-RAM phone, under 3 GiB,
+  or a stable R under 512 MiB, `AutoCheck.rStable`) stop the run at CLASSIC; M2-M5 then keep
+  their zeros.
+- M2 is the bounded native probe (16 MiB steps up to 256 MiB, kept 768 MiB above the threshold);
+  `M2Outcome` names how it ended. A margin-limited probe under 128 MiB is inconclusive: the
+  result is provisional, capped at the previous level, and the third in a row settles CLASSIC.
+- M3 (`DeflateBench`: 48 synthetic tiles through the swap codec) and M4
+  (`AndroidStorageProbe.writeRead`: 24 MiB written, synced and read) under 20 MB/s, or under
+  2 GiB free, give TILES for slow storage. M4's read is shown only, never decides.
+- M5 (`CompositeBench`: 64 tiled 512 x 512 layers through `Compositor.drawLayerPixels`) over
+  60 ms gives CLASSIC for slow compositing; at most 30 ms turns the above-projection on. Its
+  Classic A/B gives `belowCacheMinLayers`.
+
+The result is `CheckStore` (`engine-check.json`); `CheckStore.read` runs a FULL result at TILES
+while `engine-state.json` records slow swap reads (`EngineStateStore`, `slowSwapReads`).
+`CheckMarker` (`engine-check.running`) exists only around M2's allocations; found at a launch
+(`AutoCheckRunner.atLaunch`) it means an interrupted run: run again (`CheckTrigger.INTERRUPTED`),
+or recorded as CLASSIC for low memory when an exit record shows a kill within 5 s of the marker or
+it is the second interruption in a row.
+
+**When it runs.** `CheckTrigger` names why a run is due: Check again (MANUAL), no result, another
+device key, a new `versionCode`, an interrupted run, a step-down newer than the result, a
+provisional result (each cold start, up to 3) or a new `Build.FINGERPRINT`. `EngineCheckHost`
+starts it 1 s after the gallery's first frame while the app is started
+(`AutoCheckRunner.launchIfDue`). Opening an artwork, `ON_STOP` and `onTrimMemory` stop it before its
+next step (`requestStop`, which deletes the marker); finished steps are kept and the next start
+resumes with the rest. It never measures while an editor is open. M3 and M5 have their own
+deadlines (400 and 800 ms).
+
+**Notices (design 2.11).** `CheckNotices` decides which results the gallery announces once
+(`EngineNotice.CheckChose`: Automatic, a final CLASSIC or TILES result with another level or
+reason than before). `EngineNoticeCard` draws it with one text per reason
+(`EngineLabels110.CHECK_CLASSIC_MEMORY`, `CHECK_CLASSIC_SLOW`, `CHECK_TILES`, `LMK_NOTICE`) and an OK
+button. It counts as shown when the card first draws (`UiPrefs.engineNoticeShownAt`); a notice
+raised and never shown is raised again at the next start (`CheckNotices.atStart`,
+`ExitWatch.noticeAtStart`).
+
+**Settings > Layer storage (design 2.11).** `LayerStorageSection` is one row in the editor's
+settings dialog (tag `V110Tags.LAYER_STORAGE`): `EngineLabels110.LAYER_STORAGE`, the effective
+choice (`subtitleOf`) and `EngineLabels110.FOR_THIS_PHONE`. A tap opens `LayerStorageSheet`:
+- Three radios write `AppSettings.layerStorageMode` at once (applied at the next open; the
+  gallery's budget follows through `EngineConfig.applyIdle`).
+- `EngineLabels110.CHECK_AGAIN` writes `engineCheckPending` (`AutoCheckRunner.requestCheck`); the
+  row then reads `EngineLabels110.CHECK_PENDING` and the button turns off until the check runs.
+- `EngineLabels110.COPY_DETAILS` copies `CheckDetails.text`: the choice, the level and budgets
+  running now, the check's numbers, the engine state's flags and the `EngineStats` p50 and p95.
+- Step 7: the `EngineLabels110.DETAILS` row opens the same text on screen, one line per row (tag
+  `DETAILS_TAG`), read off main again after each change; a second tap closes it.
+
+**Swap (design 2.8, J9, J10, I34).** At FULL the editor's chrome installs a `SlabSwapStore` as
+`EngineConfig.swapStore` (`SlabSwapStore.installIfFull`); `EngineConfig.closeSession` closes it.
+- Place: `noBackupFilesDir/swap/<session UUID>/slab-NNN.bin`, never `cacheDir` or a project
+  folder. Slabs of 64 MiB in 4 KiB pages; a tile's packed bytes take the first free run in the
+  lowest slab, so freed pages and slabs are reused first. Deflate level 1 on write
+  (`TileOps.pack`), CRC-32 checked and inflated on read.
+- Cap (`SlabSwapStore.capOf`): `min(16 GiB, (free - 1 GiB) / 2)`, free space read at the start and
+  again after 60 s (`CAP_REFRESH_MS`). `canWrite` is false past the cap or under 1 GiB free
+  (`MIN_FREE`); the residency then keeps parking in RAM.
+- Faults: a failed write returns its pages, turns writes off for the session and throws (the
+  tile stays resident); a failed read or a CRC mismatch throws `IOException` and the caller
+  restores the layer from its last save.
+- Slow reads: every read is timed; a p95 over 40 ms of the last 50 records `slowSwapReads`
+  (`AutoCheckRunner.markSlowSwapReads`), so the next open runs at TILES until the next check.
+- `close` closes the slab files at once and deletes the directory on its own `swap-close` thread.
+  `SwapJanitor.purge` (the start's background thread) deletes every leftover directory under the
+  root that is not a live session's (`SwapJanitor.live`, joined before the directory is made).
+- The low-storage message (step 6, `LowStorageNotice`): once per FULL session, the first time the
+  store reads less than 1.5 GiB free, the editor shows `EngineLabels110.LOW_STORAGE` as its toast
+  (checked at the start and every 60 s). CLASSIC and TILES have no store and never show it.
+
+**Eviction to the saved file (P3 order 1).** `NativeWatch.evict` drops every tile of a PARKED
+layer whose content equals its last save (`SavedFileRef`) and that was not read in the last 8 frame
+epochs, coldest first (`NativeWatch.evictionOrder`). The layer then holds an EVICTED
+`TiledPixels` (`evictedTo`, no tiles, no `pixelGeneration` change) and comes back through
+`NativeWatch.reload` (the whole Deflate stream, until A11's streamed load). The callers (the
+residency policy, A8) know the saved files.
+
+**The activation ring (design 2.7).** `EngineEditorChrome` shows a small ring with
+`EngineLabels110.PREPARING_LAYER` in the pill slot (`ChromeLayout.pillTop`) when a layer's
+asynchronous activation (`EditorController.activating`) holds the canvas for 250 ms
+(`RING_DELAY_MS`); a quicker one shows nothing.
+
+**Safety nets (design 2.12).**
+- `ExitWatch`: while an editor shows, the marker `editor-open` holds the level, the layer count,
+  the canvas size, the foreground state and `BOOT_COUNT`; the chrome keeps it current and deletes
+  it when the editor goes. `EngineStartup` takes it on main at the next start. `ExitWatch.atStart`
+  reads the exits since `lastExitSeen` (`AndroidExitInfo`, API 30+): `REASON_LOW_MEMORY` is a sure
+  closing; a foreground SIGKILL on a phone without low-memory reports, or (API 26-29) a foreground
+  marker with the same boot count and no crash report since (`CrashLog.closedAppSince`), is a
+  probable one. Probable closings count from the second within 30 days
+  (`engine-closings.txt`). Each counted closing joins `lmkDeathsAt` and the step-down becomes
+  their count, at most 2. At 1, R × 0.8 and the check re-runs. At 2, R × 0.64, the stored result
+  becomes CLASSIC (low memory), a chosen Full becomes Automatic, and the gallery shows
+  `EngineLabels110.LMK_NOTICE` once.
+- `NativeWatch.tick` every 2 s while the editor is started (the memory read off main): under
+  `threshold` + 256 MiB available it reports critical (the residency's and the governor's
+  `pressure`) and `refusingNewLayers` holds until `threshold` + 512 MiB (the layer admission does
+  not read it yet: LeadRequest); a ledger drift over 256 MiB from the native heap asks for one GC;
+  each tick records `EngineStat.LEDGER_PEAK`.
+- `CrashLog` adds an Engine line to each crash report: the level, R, the native bytes the ledger
+  holds, the step-down and the open artwork's layer count.
+
+**`EngineStats` (design 3.3 and 7).** Rings of the last 50 values per `EngineStat`, in memory only;
+`EngineStats.summary` gives each ring's p50 and p95 for Copy details and the Details list. The
+chrome feeds the UI frames from the window's frame metrics on a `frame-metrics` thread, tagged
+stroke, panel scroll or other. Under Robolectric nothing is kept unless a test sets
+`keepUnderRobolectric`.
+
+**Not built (cut 1).** Step 8, the swap read-ahead, needs A8's swap-out and residency policy,
+which this tree does not have yet.
+
+Tests: `test:v110/a10/` (the decision, the marker, the runner's triggers and resumes, the
+notices, the stored result and state, the sheet and its texts, swap round trip, slab reuse, CRC,
+I/O error, disk full, kill mid-write, janitor purge, slow reads, eviction, the ring, the exit
+watch and step-down, the pressure net, the stats rings, the low-storage message) and
+`Soak500LayersTest`: random edits at FULL with park chaos and swap, replayed at CLASSIC and
+compared bit for bit at each checkpoint (a small plan in the suite; the 500-layer, 20-minute plan
+under `bw.testSet = soak`, once `-PsoakOnly` includes it: LeadRequest). After the close the tile ledger and the swap are back to where they
+started. Until A7 is merged the soak pins the layers for a canvas rotation and releases the
+parked stores that the gate's code lets go of without releasing their tiles: the `Layer` setters
+under an undo or redo of a whole-document step, and the undo history's removed layers at the
+close. `PRE_A7_DROPS = false` turns each such store into a failure. Timing:
+`AutoCheckDurationTimingTest`, `EvictReloadTimingTest`, `UnparkSwappedTimingTest`.
 
 <!-- /v110-A10 -->
 

@@ -1,5 +1,6 @@
 package com.brushwork.paint.ui.engine
 
+import android.content.Context
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -52,9 +53,10 @@ import kotlinx.coroutines.withContext
  * not the artwork's). A tap opens [LayerStorageSheet]: a radio writes `AppSettings.layerStorageMode`
  * at once (it applies at the next open; the gallery's budget follows through
  * `EngineConfig.applyIdle`), [EngineLabels110.CHECK_AGAIN] sets `engineCheckPending`
- * ([AutoCheckRunner.requestCheck]) and [EngineLabels110.COPY_DETAILS] copies [CheckDetails]' text.
- * The stored check and the engine state are read off the main thread when the section shows and
- * after each change.
+ * ([AutoCheckRunner.requestCheck]) and [EngineLabels110.COPY_DETAILS] copies [CheckDetails]' text;
+ * the sheet's [EngineLabels110.DETAILS] row shows the same text on screen while it is open (step
+ * 7), read again after each change. The stored check and the engine state are read off the main
+ * thread when the section shows and after each change.
  */
 @Composable
 fun LayerStorageSection() {
@@ -66,8 +68,13 @@ fun LayerStorageSection() {
     var stored by remember { mutableStateOf<Stored?>(null) }
     var reads by remember { mutableIntStateOf(0) }
     var open by rememberSaveable { mutableStateOf(false) }
+    var detailsOpen by rememberSaveable { mutableStateOf(false) }
+    var details by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(reads) {
         stored = withContext(Dispatchers.IO) { Stored(CheckStore.read(app), EngineStateStore.read(app)) }
+    }
+    LaunchedEffect(open, detailsOpen, reads, mode) {
+        details = if (open && detailsOpen) detailsText(app, mode) else null
     }
     val subtitle = stored?.let { subtitleOf(mode, it.check, it.state.engineCheckPending) }
     Column(
@@ -104,18 +111,26 @@ fun LayerStorageSection() {
                 }
             },
             onCopyDetails = {
-                val level = EngineConfig.level
-                val budgets = EngineConfig.budget.budgets
                 val chosen = mode
-                scope.launch {
-                    val text = withContext(Dispatchers.IO) {
-                        CheckDetails.text(chosen, level, budgets, CheckStore.read(app), EngineStateStore.read(app), EngineStats.summary())
-                    }
-                    CheckDetails.copy(context, text)
-                }
+                scope.launch { CheckDetails.copy(context, detailsText(app, chosen)) }
             },
             onDismiss = { open = false },
+            detailsOpen = detailsOpen,
+            details = details,
+            onToggleDetails = { detailsOpen = !detailsOpen },
         )
+    }
+}
+
+/**
+ * Main: [CheckDetails]' text for [chosen], with the session's level and budgets read on main and
+ * the stored check, the engine state and the `EngineStats` summary read off it.
+ */
+private suspend fun detailsText(app: Context, chosen: LayerStorageMode): String {
+    val level = EngineConfig.level
+    val budgets = EngineConfig.budget.budgets
+    return withContext(Dispatchers.IO) {
+        CheckDetails.text(chosen, level, budgets, CheckStore.read(app), EngineStateStore.read(app), EngineStats.summary())
     }
 }
 
