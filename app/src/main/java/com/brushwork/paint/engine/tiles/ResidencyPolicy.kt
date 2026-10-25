@@ -318,12 +318,15 @@ class ResidencyPolicy internal constructor(
      * main copies each tile into [layer]'s flat bitmaps as its read lands ([FlatBuild]) and
      * rehouses the layer once every read ended, if it is still the one being activated. The
      * layer is pinned meanwhile, so P3 sends none of its tiles out again.
+     * An undo or redo asked meanwhile waits for the activation to end (`UndoManager.beginWaiting`):
+     * it never changes the store being read and copied.
      */
     private fun startAsync(layer: Layer, missing: List<Tile>) {
         val token = ++activationToken
         activatingLayer = layer
         host.activating = layer
         val pin = layer.pin()
+        val endWait = host.history?.beginWaiting()
         var builds: List<FlatBuild> = emptyList()
         var left = missing.size
         var finished = false
@@ -335,6 +338,7 @@ class ResidencyPolicy internal constructor(
                 endActivation(layer)
             }
             for (b in builds) b.drop()
+            endWait?.invoke()
         }
         if (missing.isEmpty()) {
             finish()

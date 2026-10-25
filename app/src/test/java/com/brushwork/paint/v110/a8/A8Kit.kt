@@ -132,6 +132,29 @@ internal object A8Kit {
     fun tilesOf(layer: Layer): List<Tile> =
         listOfNotNull(layer.pixels as? TiledPixels, layer.maskPixels as? TiledPixels).flatMap { s -> s.tiles.filterNotNull() }
 
+    /**
+     * One pixel edit of [layer] through [c], as a tool makes it (`beginEdit`, `touch`, draw,
+     * `commitEdit`): [rect] of [target] set to [color] exactly. The layer must be FLAT (the
+     * active one).
+     */
+    fun paint(c: EditorController, layer: Layer, rect: android.graphics.Rect, color: Int, target: com.brushwork.paint.engine.EditTarget = com.brushwork.paint.engine.EditTarget.CONTENT) {
+        val rec = c.beginEdit(layer, target)
+        rec.touch(rect)
+        val b = if (target == com.brushwork.paint.engine.EditTarget.MASK) layer.mask!! else layer.bitmap
+        val paint = android.graphics.Paint().apply {
+            this.color = color
+            xfermode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.SRC)
+        }
+        android.graphics.Canvas(b).drawRect(rect, paint)
+        org.junit.Assert.assertTrue("the edit was committed", c.commitEdit(rec, "Paint"))
+    }
+
+    /** The newest undo step of [c]. */
+    fun newestStep(c: EditorController): UndoAction = c.undoManager.undoAt(c.undoManager.undoCount - 1)!!
+
+    /** Every tile the undo step [step] holds. */
+    fun tilesOfStep(step: UndoAction): List<Tile> = ArrayList<Tile>().also { out -> (step as TileHolder).forEachTile { out += it } }
+
     /** An undo step holding [tiles] of [layer] by reference (refs + 1 each), declaring [bytes]. */
     class TileStep(private val layer: Layer?, private val tiles: List<Tile>, private val bytes: Long) : UndoAction, TileHolder {
         init {

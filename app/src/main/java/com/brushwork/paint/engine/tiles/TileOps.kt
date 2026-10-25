@@ -621,6 +621,44 @@ internal object TileOps {
         return replaced
     }
 
+    // ---------------------------------------------------------------- undo (A8, design 2.6)
+
+    /**
+     * Main only: [b] as an undo tile held once (refs 1, counted under TILES), or null (and [b]
+     * recycled) when it is fully transparent: the transparent-to-null test of a finished edit.
+     */
+    fun undoTileOf(b: Bitmap): Tile? {
+        if (isTransparent(b)) {
+            b.recycle()
+            return null
+        }
+        return tileOf(b).also { it.refs = 1 }
+    }
+
+    /**
+     * Main only: v1.9's swap of one undo tile on a FLAT store. The [w] x [h] pixels of [store] at
+     * ([x], [y]) become an undo tile held once ([undoTileOf]: null when transparent); then [put] is
+     * copied there exactly (a packed tile is inflated here, as the compositor does; the caller has
+     * the worker read a SWAPPED one first, [TileWorker.readThen]), or the region is cleared when
+     * [put] is null. Returns the tile of the pixels that were there; the caller lets go of [put].
+     */
+    fun swapFlatTile(store: FlatPixels, x: Int, y: Int, w: Int, h: Int, put: Tile?): Tile? {
+        val b = store.bitmap
+        val canvas = Canvas()
+        val was = undoTileOf(copyPiece(canvas, b, x, y, w, h))
+        canvas.setBitmap(b)
+        try {
+            if (put == null) {
+                canvas.drawRect(x.toFloat(), y.toFloat(), (x + w).toFloat(), (y + h).toFloat(), clearPaint)
+            } else {
+                drawTile(canvas, put, x, y, copyPaint)
+            }
+        } finally {
+            canvas.setBitmap(null)
+        }
+        return was
+    }
+
     /** Lets go of every tile [s] holds (refs--), leaving it empty. Main only. */
     fun releaseStore(s: TiledPixels) {
         for (i in s.tiles.indices) {

@@ -218,6 +218,44 @@ internal object TileWorker {
         }
         return true
     }
+
+    /**
+     * Main only (A8, design 2.6, an undo that finds SWAPPED tiles): pins each of [tiles] (the
+     * commit rule then keeps a tile resident once read) and reads the SWAPPED ones back at
+     * READ_URGENT ([readIn]). [then] runs on main once every read ended, at once when none is
+     * SWAPPED, with true when every read made its tile resident; the pins go after it. A packed
+     * tile is not read here: main inflates it where it is drawn, as the compositor does.
+     */
+    fun readThen(tiles: Collection<Tile>, then: (Boolean) -> Unit) {
+        val held = ArrayList<Tile>(tiles.size)
+        val seen = java.util.Collections.newSetFromMap(IdentityHashMap<Tile, Boolean>())
+        for (t in tiles) if (seen.add(t)) held += t
+        for (t in held) t.pins++
+        var ok = true
+        val finish = {
+            try {
+                then(ok)
+            } finally {
+                for (t in held) TileOps.unpinTile(t)
+            }
+        }
+        val swapped = held.filter { it.state == TileState.SWAPPED }
+        if (swapped.isEmpty()) {
+            finish()
+            return
+        }
+        var left = swapped.size
+        for (t in swapped) {
+            val queued = readIn(t, Priority.READ_URGENT) { resident ->
+                if (!resident) ok = false
+                if (--left == 0) finish()
+            }
+            if (!queued) {
+                ok = false
+                if (--left == 0) finish()
+            }
+        }
+    }
 }
 
 /**
