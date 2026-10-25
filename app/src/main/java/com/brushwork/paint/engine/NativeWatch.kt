@@ -1,6 +1,8 @@
 package com.brushwork.paint.engine
 
+import android.util.Log
 import com.brushwork.paint.engine.budget.LedgerCategory
+import com.brushwork.paint.engine.budget.MemSnapshot
 import com.brushwork.paint.engine.tiles.SavedFileRef
 import com.brushwork.paint.engine.tiles.TILE_SIZE
 import com.brushwork.paint.engine.tiles.Tile
@@ -11,6 +13,7 @@ import com.brushwork.paint.storage.LayerCodec
 import java.io.File
 import java.io.IOException
 import java.nio.ByteBuffer
+import kotlin.math.abs
 import kotlin.math.min
 
 /**
@@ -27,9 +30,16 @@ import kotlin.math.min
  * already EVICTED one, a changed one and one whose file is missing are never evicted. Its mask
  * stays as it is. Main thread, like every residency change.
  *
- * The callers: P3 order 1 in the residency policy (A8) and the pressure net (step 5); the reload
+ * The callers: P3 order 1 in the residency policy (A8), which knows the saved files; the reload
  * reference [reload] reads the whole file and cuts it, until the streamed load of section 2.9
  * (A11) replaces it.
+ *
+ * **The pressure net (section 2.12).** Every [WATCH_MS] (2 s) while an editor is open,
+ * `EngineEditorChrome` reads the memory off main and calls [tick] on main: below `threshold` +
+ * 256 MiB of available memory it acts as CRITICAL (the residency policy parks and swaps down,
+ * the governor's caches are trimmed) and [refusingNewLayers] holds until available memory is
+ * above `threshold` + 512 MiB; a ledger drift over 256 MiB from the native heap asks for one
+ * background GC. Each tick also records the ledger's total in `EngineStats`.
  */
 object NativeWatch {
     /** A layer read within this many frame epochs is never evicted. */
@@ -115,6 +125,104 @@ object NativeWatch {
         }
         return cut(bytes, w, h)
     }
+
+    // ---------------------------------------------------------------- the pressure net (design 2.12)
+
+    /** The watch's period while an editor is open (`EngineEditorChrome`). */
+    const val WATCH_MS = 2_000L
+
+    /** Below `threshold` plus this much available memory the watch acts as CRITICAL (256 MiB). */
+    const val CRITICAL_MARGIN = 256L shl 20
+
+    /** New painted layers are refused until available memory is above `threshold` plus this (512 MiB). */
+    const val RECOVER_MARGIN = 512L shl 20
+
+    /** A ledger drift this large against the native heap requests one background GC (256 MiB). */
+    const val DRIFT_MARGIN = 256L shl 20
+
+    /** What one [tick] saw and did. */
+    data class Tick(val critical: Boolean, val refusing: Boolean, val gcRequested: Boolean)
+
+    /**
+     * True from a CRITICAL tick until available memory is back above `threshold` +
+     * [RECOVER_MARGIN]: no new painted layer should be admitted meanwhile (read by the write
+     * admission, A7's `admitWrite`, after the merge). Any thread.
+     */
+    @Volatile
+    var refusingNewLayers = false
+        private set
+
+    /** One GC per drift episode: true from the request until the drift falls back under [DRIFT_MARGIN]. */
+    @Volatile
+    private var gcAsked = false
+
+    /** The background GC a drift asks for (tests put a counter here). */
+    @Volatile
+    internal var requestGc: () -> Unit = { Thread({ System.gc() }, "native-watch-gc").apply { isDaemon = true }.start() }
+
+    /**
+     * Tests: under Robolectric (one JVM, many apps) the editor's chrome runs no watch unless a test
+     * sets this (reset it in `finally`).
+     */
+    @Volatile
+    internal var runUnderRobolectric = false
+
+    /** The editor's chrome runs the watch: on a phone always, under Robolectric only when a test asks. */
+    val watchRuns: Boolean get() = runUnderRobolectric || android.os.Build.FINGERPRINT != "robolectric"
+
+    /** A new editor session: nothing refused, no GC asked. Main. */
+    fun reset() {
+        refusingNewLayers = false
+        gcAsked = false
+    }
+
+    /**
+     * One watch tick with [snap] (read off main): records the ledger's total
+     * ([EngineStat.LEDGER_PEAK]); with known memory, below `threshold` + [CRITICAL_MARGIN] it acts
+     * as CRITICAL (the residency policy parks every eligible layer and swaps tiles down,
+     * `ResidencyHooks.pressure`; the governor's caches and projections are trimmed as for a
+     * CRITICAL trim, which API 34+ no longer sends) and refuses new painted layers until above
+     * `threshold` + [RECOVER_MARGIN]; a drift of the ledger from the native heap over
+     * [DRIFT_MARGIN] requests one background GC per episode. Main.
+     */
+    fun tick(snap: MemSnapshot): Tick {
+        val ledger = EngineConfig.budget.ledger
+        EngineStats.record(EngineStat.LEDGER_PEAK, ledger.native.toFloat())
+        if (snap.totalMem <= 0L) return Tick(critical = false, refusing = refusingNewLayers, gcRequested = false)
+        val critical = snap.availMem < snap.threshold + CRITICAL_MARGIN
+        if (critical) {
+            refusingNewLayers = true
+            act(MemoryPressure.CRITICAL)
+        } else if (snap.availMem > snap.threshold + RECOVER_MARGIN) {
+            refusingNewLayers = false
+        }
+        val drift = abs(ledger.native - snap.nativeAllocated) > DRIFT_MARGIN
+        var gc = false
+        if (drift && !gcAsked) {
+            gcAsked = true
+            gc = true
+            runCatching { requestGc() }
+        } else if (!drift) {
+            gcAsked = false
+        }
+        return Tick(critical, refusingNewLayers, gc)
+    }
+
+    /** CRITICAL: the residency policy, then the governor's registered caches. */
+    private fun act(p: MemoryPressure) {
+        try {
+            EngineConfig.residency.pressure(p)
+        } catch (e: Exception) {
+            Log.w(TAG, "residency pressure", e)
+        }
+        try {
+            MemoryGovernor.policy.onPressure(p, MemoryGovernor.entries())
+        } catch (e: Exception) {
+            Log.w(TAG, "governor pressure", e)
+        }
+    }
+
+    private const val TAG = "BrushworkEngine"
 
     /** [bytes] (premultiplied ARGB_8888 as the codec stores them, [w] x [h]) cut into a PARKED store. */
     private fun cut(bytes: ByteArray, w: Int, h: Int): TiledPixels {

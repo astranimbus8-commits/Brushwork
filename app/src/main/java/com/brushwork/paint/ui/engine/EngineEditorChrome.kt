@@ -1,5 +1,12 @@
 package com.brushwork.paint.ui.engine
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
+import android.os.Build
+import android.os.Handler
+import android.os.HandlerThread
+import android.view.Window
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -16,11 +23,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -30,12 +39,22 @@ import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import com.brushwork.paint.EditorController
+import com.brushwork.paint.engine.EngineConfig
+import com.brushwork.paint.engine.EngineStats
+import com.brushwork.paint.engine.ExitWatch
+import com.brushwork.paint.engine.NativeWatch
 import com.brushwork.paint.engine.tiles.SlabSwapStore
 import com.brushwork.paint.ui.common.EngineLabels110
 import com.brushwork.paint.ui.editor.chrome.ChromeLayout
 import com.brushwork.paint.ui.theme.BrushworkColors
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 
 /**
  * v1.10 (F1, J32, design 2.7 and 2.8; signature frozen, A10 body): the engine's chrome over the
@@ -52,11 +71,37 @@ import kotlinx.coroutines.delay
  * is held without a toast; when that lasts [RING_DELAY_MS] (250 ms), the pill slot (under the
  * options strip, `ChromeLayout.pillTop`) shows a small ring with [EngineLabels110.PREPARING_LAYER]
  * until the layer is ready. A quicker activation shows nothing.
+ *
+ * A10: the safety nets (design 2.12) and the measurements (section 7). While the editor shows,
+ * the editor-open marker of [ExitWatch] is written at once and kept current at `ON_START`,
+ * `ON_STOP` and each layer change, and deleted when the editor goes; while it is started,
+ * [NativeWatch] ticks every 2 s with the memory read off main; and the window's frame metrics
+ * feed `EngineStats` (each UI frame's total duration, on a background thread). Each runs on a
+ * phone and, under Robolectric, only when a test asks (`ExitWatch.markerRuns`,
+ * `NativeWatch.watchRuns`, `EngineStats.keepUnderRobolectric`). The marker and the watch live
+ * here and not in `EditorSession` (region `v110-A10 session`) until A11's merge.
  */
 @Composable
 fun EngineEditorChrome(controller: EditorController) {
     val context = LocalContext.current
-    LaunchedEffect(controller) { SlabSwapStore.installIfFull(context.applicationContext) }
+    LaunchedEffect(controller) {
+        SlabSwapStore.installIfFull(context.applicationContext)
+    }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    if (ExitWatch.markerRuns) EditorMarker(controller, lifecycle)
+    if (NativeWatch.watchRuns) {
+        LaunchedEffect(controller, lifecycle) {
+            NativeWatch.reset()
+            lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                while (true) {
+                    delay(NativeWatch.WATCH_MS)
+                    val snap = withContext(Dispatchers.IO) { runCatching { EngineConfig.memoryProbe.snapshot() }.getOrNull() } ?: continue
+                    NativeWatch.tick(snap)
+                }
+            }
+        }
+    }
+    if (EngineStats.keepUnderRobolectric || Build.FINGERPRINT != "robolectric") FrameTimes(context)
 
     val activating = controller.activating
     var ring by remember { mutableStateOf(false) }
@@ -68,6 +113,62 @@ fun EngineEditorChrome(controller: EditorController) {
         }
     }
     if (activating != null && ring) PreparingRing()
+}
+
+/**
+ * The editor-open marker ([ExitWatch]): written when the editor shows and at each `ON_START`
+ * (foreground), `ON_STOP` (background) and layer change; deleted when the editor goes.
+ */
+@Composable
+private fun EditorMarker(controller: EditorController, lifecycle: Lifecycle) {
+    val context = LocalContext.current.applicationContext
+    DisposableEffect(controller, lifecycle) {
+        fun write() {
+            val doc = controller.doc
+            ExitWatch.editorShown(context, EngineConfig.level, doc.layers.size, doc.width, doc.height, lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED))
+        }
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_START || event == Lifecycle.Event.ON_STOP) write()
+        }
+        write()
+        lifecycle.addObserver(observer)
+        onDispose {
+            lifecycle.removeObserver(observer)
+            ExitWatch.editorClosed(context)
+        }
+    }
+    LaunchedEffect(controller, lifecycle) {
+        snapshotFlow { controller.layersVersion }.collect {
+            val doc = controller.doc
+            ExitWatch.editorShown(context, EngineConfig.level, doc.layers.size, doc.width, doc.height, lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED))
+        }
+    }
+}
+
+/** The UI frames' durations ([EngineStats.frame]) from the window's frame metrics, while the editor shows. */
+@Composable
+private fun FrameTimes(context: Context) {
+    DisposableEffect(context) {
+        val window = context.findActivity()?.window
+        val listener = Window.OnFrameMetricsAvailableListener { _, metrics, _ ->
+            EngineStats.frame(metrics.getMetric(android.view.FrameMetrics.TOTAL_DURATION) / 1_000_000f)
+        }
+        val added = window != null && runCatching { window.addOnFrameMetricsAvailableListener(listener, frameMetricsHandler) }.isSuccess
+        onDispose {
+            if (added) runCatching { window.removeOnFrameMetricsAvailableListener(listener) }
+        }
+    }
+}
+
+/** The frame metrics arrive on one shared background thread (never main). */
+private val frameMetricsHandler: Handler by lazy {
+    Handler(HandlerThread("frame-metrics").apply { isDaemon = true; start() }.looper)
+}
+
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
 }
 
 /** The ring appears after an activation has held the canvas this long. */
