@@ -223,6 +223,33 @@ internal fun parkedStoreOf(b: Bitmap): PixelStore? {
 }
 
 /**
+ * v1.10 (A11): gives [v], a view of an adjustment layer sharing the real layer's stores, a FLAT
+ * mask of its own when its enabled mask is tiled or blank. `AdjustmentStage` reads `Layer.mask`,
+ * whose materialization disposes the store it replaces; on a view that store is the real layer's,
+ * whose tiles would be released under it (its mask lost). Returns the bitmap made, which the
+ * caller recycles once the view is drawn, or null when [v] needs none (not an adjustment layer,
+ * no enabled mask, or a FLAT one). A tiled mask is read under the caller's lease (main, or a
+ * snapshot or pin off main); the bitmap is admitted and released (F1).
+ */
+internal fun privateAdjustmentMask(v: Layer): Bitmap? {
+    if (!v.isAdjustmentLayer || !v.maskEnabled) return null
+    val m = v.maskPixels ?: return null
+    if (m is FlatPixels) return null
+    val b = when (m) {
+        is TiledPixels -> TileOps.materialize(m)
+        else -> {
+            val bytes = m.width.toLong() * m.height * 4
+            val budget = EngineConfig.budget
+            if (!budget.admitNative(bytes, NativePurpose.LAYER)) throw OutOfMemoryError("No room for a ${m.width}x${m.height} mask")
+            budget.release(bytes, NativePurpose.LAYER)
+            BitmapUtils.createLayerBitmap(m.width, m.height)
+        }
+    }
+    v.maskPixels = FlatPixels(b)
+    return b
+}
+
+/**
  * Output of a canvas operation: the new document size / dpi / color mode and the new bitmaps of
  * every layer ([layers] is empty for metadata-only changes such as a new dpi). [geometry] maps old
  * document coordinates to new ones (ruler and grid follow it).
@@ -1261,12 +1288,8 @@ object CanvasOps {
         }
     }
 
-    /** v1.10 (A11): the bytes [p] holds (a FLAT bitmap as v1.9's `byteCount`; a tiled store's resident tiles). */
-    private fun bytesOf(p: PixelStore?): Long = when (p) {
-        is FlatPixels -> p.width.toLong() * p.height * 4
-        is TiledPixels -> TileOps.residentBytes(p)
-        else -> 0L
-    }
+    /** v1.10 (A11, design 2.6): the logical bytes of [p] (a FLAT bitmap as v1.9's `byteCount`; a tiled store's occupied tiles, resident or not). */
+    private fun bytesOf(p: PixelStore?): Long = p?.logicalBytes() ?: 0L
 
     /**
      * Wraps the [StoresAction] (v1.9: the [DocumentBitmapsAction]):

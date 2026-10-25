@@ -2395,7 +2395,7 @@ class EditorController(
         private val layer: Layer,
         private var other: com.brushwork.paint.engine.tiles.PixelStore,
     ) : UndoAction {
-        override val byteSize: Long = layer.pixels.residentBytes()
+        override val byteSize: Long = layer.pixels.logicalBytes() // design 2.6
 
         private fun swap(c: EditorController) = c.structural {
             val held = layer.pixels
@@ -2521,7 +2521,7 @@ class EditorController(
         override val label: String,
     ) : UndoAction {
         private val enabledBefore = layer.maskEnabled
-        override val byteSize: Long = mask.residentBytes()
+        override val byteSize: Long = mask.logicalBytes() // design 2.6
 
         /** True while the mask is removed. */
         private var applied = false

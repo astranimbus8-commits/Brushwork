@@ -780,6 +780,10 @@ class ExportSceneBuilder(
             withContext(pixelDispatcher) {
                 val tmp = Document("export", "export", w, h, dpi)
                 tmp.layers += views()
+                // An adjustment view draws through a mask of its own: the compositor's
+                // `Layer.mask` read would otherwise materialize the shared tiled mask and release
+                // the real layer's tiles.
+                val privateMasks = ArrayList<Bitmap>()
                 val rw = rect.width()
                 val rh = rect.height()
                 // The pixels go straight into the picture's array, band by band: memory is the
@@ -788,6 +792,7 @@ class ExportSceneBuilder(
                 val bandH = minOf(COMPOSITE_BAND, rh)
                 val band = BitmapUtils.createLayerBitmap(rw, bandH)
                 try {
+                    for (v in tmp.layers) com.brushwork.paint.engine.privateAdjustmentMask(v)?.let { privateMasks += it }
                     val canvas = Canvas(band)
                     val compositor = Compositor(tmp) { null }
                     // In bands, letting the main thread breathe between them (big canvases).
@@ -807,6 +812,7 @@ class ExportSceneBuilder(
                     }
                     ArgbImage(rw, rh, px)
                 } finally {
+                    privateMasks.forEach { it.recycle() }
                     band.recycle()
                 }
             }

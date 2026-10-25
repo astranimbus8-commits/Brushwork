@@ -16,6 +16,7 @@ import com.brushwork.paint.engine.EngineConfig
 import com.brushwork.paint.engine.EngineLevel
 import com.brushwork.paint.engine.LayerBudget
 import com.brushwork.paint.engine.MemoryGovernor
+import com.brushwork.paint.engine.privateAdjustmentMask
 import com.brushwork.paint.engine.budget.NativePurpose
 import com.brushwork.paint.engine.tiles.FlatPixels
 import com.brushwork.paint.engine.tiles.PixelStore
@@ -650,12 +651,12 @@ internal class SaveThumbnail private constructor(
     /** The thumbnail, [maxSize] px on its longer side, as `Compositor.renderThumbnail` draws it. Any thread; the caller owns it. */
     fun render(maxSize: Int): Bitmap {
         renderThread = Thread.currentThread()
+        // An adjustment layer's enabled mask is read through `Layer.mask` (a main-only
+        // materialization): a tiled or blank one becomes a private FLAT bitmap here, which
+        // [release] recycles with the view (a snapshot's tiles are let go of there too).
         for (v in doc.layers) {
             val m = v.maskPixels
-            if (v.isAdjustmentLayer && m is TiledPixels) {
-                v.maskPixels = FlatPixels(TileOps.materialize(m))
-                replaced += m
-            }
+            if (privateAdjustmentMask(v) != null && m is TiledPixels) replaced += m
         }
         return Compositor(doc) { null }.renderThumbnail(maxSize)
     }

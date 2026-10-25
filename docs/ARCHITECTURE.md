@@ -3692,8 +3692,9 @@ white copy on R (TRANSIENT) as well as through `MemoryGovernor`.
 main builds a private document of views: each visible layer's store as a `snapshot()` (Tiled) or
 the store itself (Blank), with non-resident pins; at most two FLAT stores are copied (TRANSIENT).
 The 512 px thumbnail is rendered from it on the save writer through the compositor (an adjustment
-layer's tiled mask is made into a bitmap there); `release()` on main lets the snapshots and pins
-go. At Classic, or with more than two FLAT stores, `take` returns null and the thumbnail renders
+layer's enabled tiled or blank mask is made into a private bitmap there by `privateAdjustmentMask`,
+so the compositor's `Layer.mask` read never materializes off main); `release()` on main lets the
+snapshots, pins and private bitmaps go. At Classic, or with more than two FLAT stores, `take` returns null and the thumbnail renders
 on main as in v1.9.
 
 **Classic's refusal** (J16, UQ16, `ClassicOpen`). A format-4 artwork opens at Classic only up to
@@ -3723,7 +3724,15 @@ dispose. `ResizeTabs` asks `LayerBudget.current.canTransformCanvas(doc, w, h)`; 
 
 **Merge, lift and the canvasOps blocks.** `LayerMerge.mergeDownInto` composites views of the two
 layers' stores (`Layer(-1, name, pixels)` with `maskPixels`, both layers pinned) and records
-`MergedStoresAction`, which keeps the lower layer's old stores by reference. `FolderLift` reads a
+`MergedStoresAction`, which keeps the lower layer's old stores by reference.
+**Views of an adjustment layer** (merge down, `compositeImage` of the layered export, the
+thumbnail) share the real layer's stores, but `AdjustmentStage` reads the mask through
+`Layer.mask`, whose materialization disposes the store it replaces: on a view that is the real
+layer's tiled mask, whose tiles would be released (the mask lost, also for undo).
+`privateAdjustmentMask(view)` (`CanvasOps.kt`) first gives such a view a FLAT mask of its own
+(tiled: `TileOps.materialize`; blank: a transparent bitmap), recycled once the view is drawn.
+Every A11 `byteSize` (`StoreSwapAction`, `MaskStoreAction`, `MergedStoresAction`, the canvas
+operation's `bytesOf`) is the stores' `logicalBytes()`, fixed at construction (design 2.6). `FolderLift` reads a
 child's bounds and crop from its store (`ChildPixels`: FLAT scans the bitmap, Tiled reads only its
 occupied band through `TileOps.readRegion`) and admits a write first (`admitWrite`, else
 `PAINT_REFUSED`). The three `canvasOps` blocks: `flipLayerNow` and `applyMask` call
@@ -3753,11 +3762,16 @@ write and read back.
   `CANVAS_OP_TOO_BIG`. The thumbnail uses the compositor, not A9's `BandAssembler`; the swap-in
   half of the autosave (reading swapped tiles) is A10's. There is no `LayerTree` index here, so
   per-layer loops stay O(n). `OtherTabs` (not A11's) still reads `opaqueBounds` off main without
-  a lease (a lead request).
+  a lease (a lead request). `RemoveLayerAction.byteSize` (A8's `Undo.kt`) is still a live getter
+  over `bitmap` and `mask`: the history's trim sums every step's `byteSize` on each push once it
+  holds two steps, so a merge down or delete of a parked layer materializes the removed layer
+  there (design 2.6 gives the fix to A8). `AdjustmentStage` reading `Layer.mask` is the root of the view hazard above (a lead
+  request); `privateAdjustmentMask` is A11's workaround.
 
 Tests (`v110/a11/`): `StreamedLoadParityTest`, `StreamedLoadNoScratchTest`, `BlankFastPathTest`,
 `TiledSaveByteIdenticalTest`, `FormatFourDeterminismTest`, `ClassicRefusesBigArtworkTest`,
-`AutosaveNoInflateOnMainTest`, `CanvasOpsLayerByLayerTest`, `PayloadRefusalTest`; Timing:
+`AutosaveNoInflateOnMainTest`, `CanvasOpsLayerByLayerTest`, `PayloadRefusalTest`,
+`StoreActionsUndoTest`; Timing:
 `Open200TimingTest`, `SaveOneLayerTimingTest`, `AutosaveMainThreadTimingTest`,
 `CanvasRotate50TimingTest`.
 

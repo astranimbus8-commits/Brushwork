@@ -1,5 +1,6 @@
 package com.brushwork.paint.engine
 
+import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
@@ -124,9 +125,15 @@ internal class LayerMerge(private val c: EditorController) {
         tmpDoc.layers += lowerView
         tmpDoc.layers += upperView
         val pins = listOf(layer.pin(), lower.pin())
+        // An adjustment view draws through a mask of its own: the compositor's `Layer.mask` read
+        // would otherwise materialize the shared tiled mask and release the real layer's tiles.
+        val privateMasks = ArrayList<Bitmap>(2)
         val merged = try {
+            privateAdjustmentMask(lowerView)?.let { privateMasks += it }
+            privateAdjustmentMask(upperView)?.let { privateMasks += it }
             Compositor(tmpDoc) { null }.renderFlattened()
         } finally {
+            privateMasks.forEach { it.recycle() }
             pins.forEach { it.close() }
         }
         val beforeProps = lower.props()
@@ -565,7 +572,7 @@ private class MergedStoresAction(
 ) : UndoAction {
     override val label: String get() = "Merge down"
 
-    override val byteSize: Long = before.residentBytes() + (beforeMask?.residentBytes() ?: 0L)
+    override val byteSize: Long = before.logicalBytes() + (beforeMask?.logicalBytes() ?: 0L) // design 2.6
 
     /** True while the layer shows the merged side. */
     private var applied = false
