@@ -1,7 +1,9 @@
 package com.brushwork.paint.v110.a10
 
+import android.os.Looper
 import com.brushwork.paint.engine.EngineConfig
 import com.brushwork.paint.engine.EngineLevel
+import com.brushwork.paint.engine.budget.StorageProbe
 import com.brushwork.paint.engine.tiles.NoSwap
 import com.brushwork.paint.engine.tiles.SlabSwapStore
 import com.brushwork.paint.testing.EngineRule
@@ -12,6 +14,7 @@ import com.brushwork.paint.ui.engine.LowStorageNotice
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -19,7 +22,9 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import java.io.File
 import java.io.IOException
+import java.util.Collections
 
 /**
  * v1.10 A10 (J10, UQ13; design step 6): the low-storage message shows once per FULL session, the
@@ -81,5 +86,28 @@ class LowStorageNoticeTest {
         EngineConfig.swapStore = SwapKit.store(FakeStorageProbe(free = gib))
         runBlocking { LowStorageNotice.watch { shown += it } }
         assertEquals(listOf(EngineLabels110.LOW_STORAGE), shown)
+    }
+
+    /** Review (A10 8/8): the watch runs on main; a new reading of the free space (a `statfs`) never does. */
+    @Test
+    fun theWatchReadsTheFreeSpaceOffTheMainThread() {
+        val readers = Collections.synchronizedList(mutableListOf<Thread>())
+        val fake = FakeStorageProbe(free = gib)
+        val storage = object : StorageProbe by fake {
+            override fun freeBytes(dir: File): Long {
+                readers += Thread.currentThread()
+                return fake.freeBytes(dir)
+            }
+        }
+        val clock = FakeClock()
+        val store = SwapKit.track(SlabSwapStore(SwapKit.root, storage, clock.millis))
+        readers.clear() // the store's first reading, when it is made
+        clock.advance(SlabSwapStore.CAP_REFRESH_MS)
+        EngineConfig.swapStore = store
+        val shown = mutableListOf<String>()
+        runBlocking { LowStorageNotice.watch { shown += it } }
+        assertEquals("shown on the watch's thread", listOf(EngineLabels110.LOW_STORAGE), shown)
+        assertEquals("one new reading", 1, readers.size)
+        assertNotSame("not on the main thread", Looper.getMainLooper().thread, readers.single())
     }
 }

@@ -21,8 +21,9 @@ import java.util.Locale
  * reason, the memory it saw, J, the probe bytes, the Deflate, write and read speeds, the free
  * space, the composite and its switches, the step-down, the low-memory closings and the date), the
  * engine state's flags, and the `EngineStats` medians and 95th percentiles (no lines while none are
- * kept). Plain English for a bug report or the device checks; it is never drawn as a screen (the
- * on-screen list is step 7's), so its words live here and not in `ui/engine` (label rule 4). Sizes
+ * kept). Plain English for a bug report or the device checks: diagnostic lines, not labels, so
+ * their words live here and not in `ui/common` (the sheet's on-screen Details list, step 7, shows
+ * the same lines as they are, under its own test tag). Sizes
  * in MiB and GiB, speeds in MB/s (10^6 bytes, as M3 and M4 measure them), dates in the phone's zone.
  */
 object CheckDetails {

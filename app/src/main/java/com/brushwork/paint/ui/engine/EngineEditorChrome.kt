@@ -76,7 +76,8 @@ import kotlinx.coroutines.withContext
  *
  * A10: the safety nets (design 2.12) and the measurements (section 7). While the editor shows,
  * the editor-open marker of [ExitWatch] is written at once and kept current at `ON_START`,
- * `ON_STOP` and each layer change, and deleted when the editor goes; while it is started,
+ * `ON_STOP` and each change of the layer count or the canvas size (a stroke writes nothing), and
+ * deleted when the editor goes; while it is started,
  * [NativeWatch] ticks every 2 s with the memory read off main; and the window's frame metrics
  * feed `EngineStats` (each UI frame's total duration, on a background thread). Each runs on a
  * phone and, under Robolectric, only when a test asks (`ExitWatch.markerRuns`,
@@ -120,7 +121,8 @@ fun EngineEditorChrome(controller: EditorController) {
 
 /**
  * The editor-open marker ([ExitWatch]): written when the editor shows and at each `ON_START`
- * (foreground), `ON_STOP` (background) and layer change; deleted when the editor goes.
+ * (foreground), `ON_STOP` (background) and change of the layer count or the canvas size (never per
+ * stroke); deleted when the editor goes.
  */
 @Composable
 private fun EditorMarker(controller: EditorController, lifecycle: Lifecycle) {
@@ -141,9 +143,13 @@ private fun EditorMarker(controller: EditorController, lifecycle: Lifecycle) {
         }
     }
     LaunchedEffect(controller, lifecycle) {
-        snapshotFlow { controller.layersVersion }.collect {
+        // Every committed edit bumps layersVersion; only a new layer count or canvas size goes on.
+        snapshotFlow {
+            controller.layersVersion
             val doc = controller.doc
-            ExitWatch.editorShown(context, EngineConfig.level, doc.layers.size, doc.width, doc.height, lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED))
+            Triple(doc.layers.size, doc.width, doc.height)
+        }.collect { (layers, width, height) ->
+            ExitWatch.editorShown(context, EngineConfig.level, layers, width, height, lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED))
         }
     }
 }

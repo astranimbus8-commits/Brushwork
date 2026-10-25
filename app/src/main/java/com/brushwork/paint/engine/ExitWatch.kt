@@ -126,15 +126,17 @@ object ExitWatch {
 
     /**
      * The editor shows (or changed): writes the marker with [level], [layers], the canvas size and
-     * [foreground]; the foreground time restarts only when [foreground] changes. Main; the write
-     * runs on the marker thread.
+     * [foreground]; the foreground time restarts only when [foreground] changes. Only a change of
+     * one of those writes it (the chrome asks again after layer changes, and a synced file per
+     * stroke would compete with the autosave and the swap for the phone's storage), so its
+     * `updatedAt` is the time of the last change. Main; the write runs on the marker thread.
      */
     fun editorShown(context: Context, level: EngineLevel, layers: Int, width: Int, height: Int, foreground: Boolean, nowMillis: Long = System.currentTimeMillis()) {
         val app = context.applicationContext ?: context
         val last = current
+        if (last != null && last.level == level && last.layers == layers && last.width == width && last.height == height && last.foreground == foreground) return
         val since = if (last != null && last.foreground == foreground) last.sinceMillis else nowMillis
         val marker = Marker(level, layers, width, height, foreground, readBootCount(app), since, nowMillis)
-        if (marker == last) return
         current = marker
         writer.execute {
             try {

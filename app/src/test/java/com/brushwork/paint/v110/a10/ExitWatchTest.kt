@@ -50,7 +50,8 @@ import java.util.concurrent.Executor
  *   probable closing; another boot count (or none) is ignored; a crash report explains the exit.
  * - A restored phone (no `engine-state.json`, no marker) misreads nothing.
  * - The marker follows the editor (written, its foreground time kept until the state changes,
- *   deleted at close, taken once at start), and `AndroidExitInfo` maps the system's records.
+ *   deleted at close, taken once at start; written again only when what it holds changes), and
+ *   `AndroidExitInfo` maps the system's records.
  */
 @RunWith(RobolectricTestRunner::class)
 class ExitWatchTest {
@@ -241,6 +242,39 @@ class ExitWatchTest {
         assertNull("an unreadable marker counts as none", ExitWatch.takeMarker(app))
         assertFalse(ExitWatch.markerFile(app).exists())
         assertFalse("under Robolectric the editor writes no marker unless a test asks", ExitWatch.markerRuns)
+    }
+
+    /**
+     * Review (A10 8/8): the chrome asks again at every committed edit (`layersVersion`); only a
+     * change of what the marker holds writes the synced file, so a stroke costs no storage write.
+     */
+    @Test
+    fun theMarkerIsWrittenOnlyWhenWhatItHoldsChanges() {
+        Settings.Global.putInt(app.contentResolver, Settings.Global.BOOT_COUNT, 9)
+        var writes = 0
+        ExitWatch.writer = Executor {
+            writes++
+            it.run()
+        }
+        ExitWatch.editorClosed(app)
+        writes = 0
+        ExitWatch.editorShown(app, EngineLevel.FULL, 3, 1080, 2400, foreground = true, nowMillis = 1_000)
+        assertEquals("the editor shows: written", 1, writes)
+        repeat(50) { ExitWatch.editorShown(app, EngineLevel.FULL, 3, 1080, 2400, foreground = true, nowMillis = 1_001L + it) }
+        assertEquals("50 strokes: the same level, layers, size and state, nothing written", 1, writes)
+        ExitWatch.editorShown(app, EngineLevel.FULL, 4, 1080, 2400, foreground = true, nowMillis = 2_000)
+        assertEquals("a new layer", 2, writes)
+        ExitWatch.editorShown(app, EngineLevel.FULL, 4, 2400, 1080, foreground = true, nowMillis = 3_000)
+        assertEquals("a rotated canvas", 3, writes)
+        ExitWatch.editorShown(app, EngineLevel.FULL, 4, 2400, 1080, foreground = false, nowMillis = 4_000)
+        assertEquals("the stop", 4, writes)
+        ExitWatch.editorShown(app, EngineLevel.FULL, 4, 2400, 1080, foreground = false, nowMillis = 5_000)
+        assertEquals("nothing new in the background", 4, writes)
+        assertEquals(
+            "the marker of the last change",
+            ExitWatch.Marker(EngineLevel.FULL, 4, 2400, 1080, foreground = false, bootCount = 9, sinceMillis = 4_000, updatedAt = 4_000),
+            ExitWatch.takeMarker(app),
+        )
     }
 
     @Test

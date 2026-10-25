@@ -12,6 +12,8 @@ import com.brushwork.paint.engine.check.AutoCheckRunner
 import com.brushwork.paint.engine.check.CheckNotices
 import com.brushwork.paint.engine.check.CheckStore
 import com.brushwork.paint.engine.tiles.SwapJanitor
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 /**
  * v1.10 (F1, J32; signature frozen, A10 body): the engine's start, called from
@@ -25,12 +27,38 @@ import com.brushwork.paint.engine.tiles.SwapJanitor
  * step-down's notice ([ExitWatch.noticeAtStart]) and the check's ([CheckNotices.atStart]) if one
  * was raised and never shown; and `onTrimMemory` stopping the check and deleting its marker. Then,
  * on a background thread and never under Robolectric (one JVM, many apps; the tests call
- * [atStart] themselves): the swap leftovers of earlier processes deleted ([SwapJanitor.purge]:
- * never a live session's directory, so an editor reopened meanwhile keeps its own), the closings
- * of the last process counted ([ExitWatch.atStart]) and, after them so that it carries their
- * step-down, the launch's look at an interrupted check ([AutoCheckRunner.atLaunch]).
+ * [atStart] themselves): the closings of the last process counted ([ExitWatch.atStart]), the swap
+ * leftovers of earlier processes deleted ([SwapJanitor.purge]: never a live session's directory,
+ * so an editor reopened meanwhile keeps its own) and, after the closings so that it carries their
+ * step-down, the launch's look at an interrupted check ([AutoCheckRunner.atLaunch]). The gallery's
+ * check waits for the closings too ([awaitClosingsCounted]): a run that read the stored result
+ * before [ExitWatch] counted a closing would write it back without that closing's step-down.
  */
 object EngineStartup {
+    /** The gallery's check waits at most this long for the start to count the closings. */
+    const val CLOSINGS_WAIT_MS = 10_000L
+
+    /**
+     * Open while the start's background part has not counted the last process's closings yet; null
+     * when no such part runs (under Robolectric, unless a test sets one). Any thread.
+     */
+    @Volatile
+    internal var closingsCounted: CountDownLatch? = null
+
+    /**
+     * The gallery's check, on its own thread before its run: waits until the start counted the
+     * closings (at most [CLOSINGS_WAIT_MS]); returns at once when they are counted or nothing
+     * counts them. Never on main.
+     */
+    internal fun awaitClosingsCounted() {
+        val gate = closingsCounted ?: return
+        try {
+            if (!gate.await(CLOSINGS_WAIT_MS, TimeUnit.MILLISECONDS)) Log.w(TAG, "the closings are not counted yet; the check runs anyway")
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+        }
+    }
+
     fun onAppCreate(app: Application) {
         val brush = app as? BrushworkApp ?: return
         AndroidExitInfo.attach(app)
@@ -44,20 +72,26 @@ object EngineStartup {
         CheckNotices.atStart(app, stored, mode)
         app.registerComponentCallbacks(TrimCallbacks(brush))
         if (Build.FINGERPRINT == "robolectric") return
+        closingsCounted = CountDownLatch(1)
         Thread({ atStart(brush, marker) }, "engine-start").apply { isDaemon = true }.start()
     }
 
-    /** The background part of the start (its thread), with the [marker] taken on main. */
+    /**
+     * The background part of the start (its thread), with the [marker] taken on main: the closings
+     * (then [closingsCounted] opens, whatever happened), the swap purge, the interrupted check.
+     */
     internal fun atStart(app: BrushworkApp, marker: ExitWatch.Marker? = null) {
-        try {
-            SwapJanitor.purge(SwapJanitor.root(app))
-        } catch (e: Exception) {
-            Log.w(TAG, "swap purge", e)
-        }
         try {
             ExitWatch.atStart(app, marker)
         } catch (e: Exception) {
             Log.w(TAG, "exit watch", e)
+        } finally {
+            closingsCounted?.countDown()
+        }
+        try {
+            SwapJanitor.purge(SwapJanitor.root(app))
+        } catch (e: Exception) {
+            Log.w(TAG, "swap purge", e)
         }
         try {
             AutoCheckRunner.of(app).atLaunch()

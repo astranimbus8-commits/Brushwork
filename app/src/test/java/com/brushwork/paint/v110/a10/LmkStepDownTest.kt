@@ -1,9 +1,11 @@
 package com.brushwork.paint.v110.a10
 
+import com.brushwork.paint.BrushworkApp
 import com.brushwork.paint.UiPrefs
 import com.brushwork.paint.engine.EngineLevel
 import com.brushwork.paint.engine.EngineNotice
 import com.brushwork.paint.engine.EngineNotices
+import com.brushwork.paint.engine.EngineStartup
 import com.brushwork.paint.engine.ExitWatch
 import com.brushwork.paint.engine.LayerStorageMode
 import com.brushwork.paint.engine.budget.ExitRecord
@@ -30,6 +32,8 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import java.io.File
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 /**
  * v1.10 A10 (design 2.12 and 2.10, step 5): the step-down after low-memory closings.
@@ -43,6 +47,8 @@ import java.io.File
  *   Classic stays and gets no notice. Later closings keep 2 and change nothing else.
  * - A closing older than 30 days does not make the next one the second.
  * - The notice comes back at the next start while it was never shown, and never after.
+ * - The gallery's check waits until the start counted the closings, so it carries their
+ *   step-down.
  */
 @RunWith(RobolectricTestRunner::class)
 class LmkStepDownTest {
@@ -187,6 +193,54 @@ class LmkStepDownTest {
         assertEquals(deaths + (ranAt + 4 * day), stored().lmkDeathsAt)
         assertEquals("the user's new choice stays", LayerStorageMode.FULL, mode)
         assertNull("no second notice", EngineNotices.current)
+    }
+
+    /**
+     * Review (A10 8/8): the gallery's check (on its own thread, 1 s after the first frame) may be
+     * due for another reason before the start's thread has counted the last closing. It waits for
+     * the count, so its run reads the result with the closing and carries the step-down instead of
+     * writing back the result it read before.
+     */
+    @Test
+    fun theGallerysCheckWaitsUntilTheStartCountedTheClosings() {
+        // A new version: due at the gallery whatever the closings say.
+        CheckStore.write(app, A10Kit.result(EngineLevel.FULL, version = A10Kit.VERSION - 1, ranAt = ranAt))
+        val gate = CountDownLatch(1)
+        EngineStartup.closingsCounted = gate
+        try {
+            val steps = A10Kit.Steps(app)
+            val measuring = CountDownLatch(1)
+            steps.before = { measuring.countDown() }
+            val run = A10Kit.runner(app, A10Kit.Env().also { it.mode = mode }, steps).launchIfDue()
+            assertFalse("nothing measured before the closings are counted", measuring.await(300, TimeUnit.MILLISECONDS))
+            assertEquals("the start's thread counts one", ExitWatch.Closing.SURE, closedAt(ranAt + day))
+            gate.countDown()
+            assertEquals(AutoCheckRunner.Outcome.DONE, run.get(10, TimeUnit.SECONDS))
+            val rerun = stored()
+            assertEquals("the new version's result", A10Kit.VERSION, rerun.appVersionCode)
+            assertEquals("it carries the closing's step-down", 1, rerun.stepDown)
+            assertEquals("and the closing", listOf(ranAt + day), rerun.lmkDeathsAt)
+        } finally {
+            EngineStartup.closingsCounted = null
+        }
+    }
+
+    /** The start's background part counts the closings, then lets the gallery's check go. */
+    @Test
+    fun theStartCountsTheClosingsThenOpensTheGate() {
+        CheckStore.write(app, A10Kit.result(EngineLevel.FULL, ranAt = ranAt))
+        exits.records += ExitRecord(ranAt + day, lowMemory = true, signaled9 = true, foreground = true)
+        val marker = ExitWatch.Marker(EngineLevel.FULL, 40, 1080, 2400, foreground = true, bootCount = 5, sinceMillis = ranAt + day - 60_000, updatedAt = ranAt + day - 1_000)
+        val gate = CountDownLatch(1)
+        EngineStartup.closingsCounted = gate
+        try {
+            EngineStartup.atStart(app as BrushworkApp, marker)
+            assertEquals("open", 0L, gate.count)
+            assertEquals("after the closing was counted", 1, stored().stepDown)
+            EngineStartup.awaitClosingsCounted() // returns at once
+        } finally {
+            EngineStartup.closingsCounted = null
+        }
     }
 
     @Test

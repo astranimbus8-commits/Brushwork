@@ -4159,8 +4159,11 @@ asynchronous activation (`EditorController.activating`) holds the canvas for 250
 
 **Safety nets (design 2.12).**
 - `ExitWatch`: while an editor shows, the marker `editor-open` holds the level, the layer count,
-  the canvas size, the foreground state and `BOOT_COUNT`; the chrome keeps it current and deletes
-  it when the editor goes. `EngineStartup` takes it on main at the next start. `ExitWatch.atStart`
+  the canvas size, the foreground state and `BOOT_COUNT`; the chrome keeps it current (rewritten
+  only when one of those changes, never per stroke) and deletes it when the editor goes.
+  `EngineStartup` takes it on main at the next start and counts the closings on its thread before
+  the gallery's check may start (`EngineStartup.awaitClosingsCounted`), so a run never writes back
+  a result read before a closing was counted. `ExitWatch.atStart`
   reads the exits since `lastExitSeen` (`AndroidExitInfo`, API 30+): `REASON_LOW_MEMORY` is a sure
   closing; a foreground SIGKILL on a phone without low-memory reports, or (API 26-29) a foreground
   marker with the same boot count and no crash report since (`CrashLog.closedAppSince`), is a

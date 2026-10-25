@@ -9,6 +9,7 @@ import android.util.Log
 import com.brushwork.paint.BrushworkApp
 import com.brushwork.paint.engine.EngineConfig
 import com.brushwork.paint.engine.EngineLevel
+import com.brushwork.paint.engine.EngineStartup
 import com.brushwork.paint.engine.LayerStorageMode
 import com.brushwork.paint.engine.budget.Budgets
 import com.brushwork.paint.engine.budget.MemSnapshot
@@ -196,12 +197,17 @@ class AutoCheckRunner(context: Context, private val env: CheckEnv, private val s
         return Outcome.DONE
     }
 
-    /** Starts [runIfDue] on the check's thread (after a run still stopping); [requestStop] stops it. */
+    /**
+     * Starts [runIfDue] on the check's thread (after a run still stopping, and once the app's start
+     * counted the last process's closings, `EngineStartup.awaitClosingsCounted`, so the run carries
+     * their step-down); [requestStop] stops it.
+     */
     fun launchIfDue(): Future<Outcome> {
         val t = Token()
         token = t
         return executor.submit<Outcome> {
             try {
+                EngineStartup.awaitClosingsCounted()
                 runIfDue { t.stopped }
             } catch (e: Exception) {
                 Log.w(TAG, "engine check failed", e)

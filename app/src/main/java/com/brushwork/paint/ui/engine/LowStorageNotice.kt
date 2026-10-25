@@ -4,7 +4,9 @@ import com.brushwork.paint.engine.EngineConfig
 import com.brushwork.paint.engine.tiles.SlabSwapStore
 import com.brushwork.paint.engine.tiles.SwapStore
 import com.brushwork.paint.ui.common.EngineLabels110
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 
 /**
  * v1.10 A10 (J10, UQ13; design 4.4 A10 step 6): the low-storage message. Once per FULL session,
@@ -36,12 +38,14 @@ internal object LowStorageNotice {
     }
 
     /**
-     * Main: asks [due] of the session's store now and then every 60 s, and passes the message to
-     * [show] once; returns at once when the session has no swap store.
+     * Main: asks [due] of the session's store now and then every 60 s, off the main thread (a new
+     * reading of the free space is a `statfs`), and passes the message to [show] once on the
+     * caller's thread; returns at once when the session has no swap store.
      */
     suspend fun watch(show: (String) -> Unit) {
-        while (EngineConfig.swapStore is SlabSwapStore) {
-            due(EngineConfig.swapStore)?.let {
+        while (true) {
+            val store = EngineConfig.swapStore as? SlabSwapStore ?: return
+            withContext(Dispatchers.IO) { due(store) }?.let {
                 show(it)
                 return
             }
