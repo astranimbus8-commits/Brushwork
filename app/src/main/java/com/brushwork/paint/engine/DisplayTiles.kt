@@ -5,7 +5,9 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.PointF
 import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
 import android.graphics.Rect
+import com.brushwork.paint.engine.live.WaitingTiles
 import kotlin.math.min
 
 /**
@@ -92,6 +94,47 @@ class DisplayTiles(val docWidth: Int, val docHeight: Int, val tileSize: Int = 51
     internal var belowRenderer: BelowRenderer? = null
 
     /**
+     * v1.10 A9 step 2 (design 2.0 P4): the waiting tiles, made when a part first needs a tile that
+     * is not resident (tests install one with their own worker and handler). Main thread.
+     */
+    internal var waiting: WaitingTiles? = null
+
+    /** v1.10 A9 (P4): false renders every part at once, reading what is not resident on main (v1.9; tests and benches). */
+    internal var waitingEnabled: Boolean = true
+
+    /** v1.10 A9 (P4): called on main when a waiting tile completed (the view asks for a frame). */
+    var onWaitingDone: (() -> Unit)? = null
+
+    /** v1.10 A9 (P4): true while some display tile waits for its sources. */
+    val hasWaiting: Boolean get() = waiting?.pending == true
+
+    /**
+     * v1.10 A9 (P4): true when tile [index] shows exactly the current composite: rendered, not
+     * dirty and not waiting (a waiting tile shows stale content, or nothing, until it completes).
+     */
+    fun isExact(index: Int): Boolean = tiles.getOrNull(index) != null && dirty[index] == null && waiting?.isWaiting(index) != true
+
+    /**
+     * v1.10 A9 step 2 (design 4.4 A9): set by the view for the first update after a gesture lifts;
+     * that update renders on the plain path, never through a projection ([belowRenderer]).
+     */
+    internal var projectionsOff: Boolean = false
+
+    private val srcPaint = Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC) }
+
+    /** v1.10 A9 (P4): a waiting tile's finished accumulator [acc] (tile [index], document rect [tr]) replaces its part [d]. */
+    internal fun completeWaiting(index: Int, tr: Rect, d: Rect, acc: Bitmap) {
+        val bmp = tiles.getOrNull(index) ?: return
+        val c = canvases[index] ?: return
+        if (bmp.isRecycled) return
+        val save = c.save()
+        c.translate(-tr.left.toFloat(), -tr.top.toFloat())
+        c.clipRect(d)
+        c.drawBitmap(acc, tr.left.toFloat(), tr.top.toFloat(), srcPaint)
+        c.restoreToCount(save)
+    }
+
+    /**
      * Marks [rect] (document coords; null = everything) for re-rendering. The [invalidationHook]
      * gets a scratch rect valid during the call only (its users copy what they keep).
      */
@@ -110,6 +153,8 @@ class DisplayTiles(val docWidth: Int, val docHeight: Int, val tileSize: Int = 51
             val part = partRect
             part.set(left, top, right, bottom)
             if (!part.intersect(tmpRect)) continue
+            // v1.10 A9 (P4): a waiting tile's job is cancelled; its part is dirty again.
+            waiting?.cancel(idx)?.let { part.union(it) }
             val d = dirty[idx]
             if (d != null) d.union(part)
             else { dirty[idx] = dirtyRects[idx].apply { set(part) }; dirtyCount++ }
@@ -163,7 +208,13 @@ class DisplayTiles(val docWidth: Int, val docHeight: Int, val tileSize: Int = 51
         c.translate(-tr.left.toFloat(), -tr.top.toFloat())
         c.clipRect(d)
         // v1.9 A6 (P3, R11a): a stroke's below-cache, when it can draw this part exactly.
-        val below = belowRenderer
+        // v1.10 A9 (P4): sources not resident: the part waits (the tile keeps what it shows).
+        if (waitingEnabled && WaitingTiles.needsReads(compositor, d)) {
+            c.restoreToCount(save)
+            (waiting ?: WaitingTiles(this).also { waiting = it }).queue(idx, tr, d, compositor)
+            return
+        }
+        val below = if (projectionsOff) null else belowRenderer
         if (below == null || !below.render(this, idx, tr, d, c, target, compositor)) {
             c.drawColor(0, PorterDuff.Mode.CLEAR)
             compositor.drawDocument(c, d, target = target)
@@ -285,6 +336,7 @@ class DisplayTiles(val docWidth: Int, val docHeight: Int, val tileSize: Int = 51
     }
 
     fun release() {
+        waiting?.cancelAll()
         for (i in tiles.indices) { tiles[i]?.recycle(); tiles[i] = null; canvases[i] = null; targets[i] = null }
         tileBytes.fill(0)
         heldBytes = 0L
