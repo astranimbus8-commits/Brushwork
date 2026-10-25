@@ -634,6 +634,8 @@ internal object LayerEntries {
             var maskName: String? = null
             // A tiled store's tiles stay where they are for the write: pinned here (main), not made resident.
             val held = if (content is TiledPixels || maskStore is TiledPixels) TileOps.pin(layer, resident = false) else null
+            // v1.10 (A11, F1 3.3): the ms one changed layer's pixel files take go to EngineStats (SAVE_LAYER).
+            val started = System.nanoTime()
             try {
                 writeStore(File(dir, contentName), content)
                 if (maskStore != null) {
@@ -643,6 +645,7 @@ internal object LayerEntries {
             } finally {
                 if (held != null) TileOps.unpin(layer, held)
             }
+            com.brushwork.paint.engine.EngineStats.record(com.brushwork.paint.engine.EngineStat.SAVE_LAYER, (System.nanoTime() - started) / 1_000_000f)
             // The vector content is immutable: encoded off the main thread, written atomically.
             var vectorName: String? = null
             if (vector != null) {
