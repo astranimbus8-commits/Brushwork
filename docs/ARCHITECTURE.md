@@ -2350,12 +2350,14 @@ The invariants are in "Invariants (v1.10)" above.
   area's merge (recorded in `.wt/_tools/v110-merges.json`) is an ancestor of its HEAD.
 - Each area keeps `.wt/v110<x>-progress.txt`, seeded by the lead from
   `.wt/_tools/v110-progress-template.txt`; rule C reads it.
-- The test-count floor (`app/src/test/test-count.txt`, no trailing newline) is 4918 after F1:
-  v1.9.0's 4787, F0's 50 and F1's 81 new non-Timing tests. The `unit-full` floor
-  (`app/src/test/test-count-full.txt`, new at F1) is 4890: the same suite at FULL without
+- The test-count floor (`app/src/test/test-count.txt`, no trailing newline) is 5078 after F1
+  (`gate-v110-1`, on `main` after the A5, A6 and A1 merges): v1.9.0's 4787, F0's 50, A5's 53,
+  A6's 69, A1's 38 and F1's 81 new non-Timing tests. The `unit-full` floor
+  (`app/src/test/test-count-full.txt`, new at F1) is 5050: the same suite at FULL without
   `EngineKitTest`'s `EngineGolden` test and the 27 tests of the three classes in
-  `app/src/test/unit-full-backlog.txt`. The Timing run (`-PtimingOnly`) has 360 tests; F1 adds
-  none. Only the lead changes the floors, in a commit of its own after each step and merge.
+  `app/src/test/unit-full-backlog.txt`. The Timing run (`-PtimingOnly`) has 365 tests (360 at
+  F0, five from the areas merged before F1); F1 adds none. Only the lead changes the floors, in
+  a commit of its own after each step and merge.
 
 ### The UI seams (F0)
 
