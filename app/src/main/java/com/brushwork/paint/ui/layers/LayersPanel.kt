@@ -418,6 +418,10 @@ private fun WindowHeader(count: HeaderCount, onDismiss: () -> Unit, modifier: Mo
             count.text,
             color = if (count.danger) BrushworkColors.Danger else BrushworkColors.OnChromeDim,
             fontSize = 12.sp,
+            // v1.10 (A7, I27): its own line height. The theme's 24 sp is twice this font, and with
+            // Android 14's non-linear font scale the line keeps that ratio to the scaled font: at
+            // font scale 2.0 the line was 48 dp in the 46 dp header (the text overflowed).
+            lineHeight = 16.sp,
             maxLines = 1,
             modifier = Modifier.testTag(HEADER_COUNT_TAG).semantics { count.description?.let { contentDescription = it } },
         )

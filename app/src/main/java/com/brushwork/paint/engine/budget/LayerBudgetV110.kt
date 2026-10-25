@@ -105,14 +105,16 @@ class LayerBudgetV110(private val budget: MemoryBudget, private val level: Engin
 
     /**
      * Section 2.13: the structural guard's text at 10,000 layers; at FULL with swap "Not enough
-     * free storage for more layers"; else v1.9's "Layer limit reached (N) for this canvas size".
-     * [suffix] follows after a colon in each.
+     * free storage for more layers" when neither R nor the store has room for one more layer; the
+     * guard's text when the limit is the guard (an adjustment layer's two at 9,999, say); else
+     * v1.9's "Layer limit reached (N) for this canvas size". [suffix] follows after a colon in each.
      */
     override fun refusal(doc: Document, suffix: String?): String {
         if (!known) return LayerBudgetV19.refusal(doc, suffix)
-        val atGuard = doc.layers.size >= LayerBudget.MAX_LAYERS_GUARD || maxLayers(doc) >= LayerBudget.MAX_LAYERS_GUARD
+        val atGuard = maxLayers(doc) >= LayerBudget.MAX_LAYERS_GUARD
         val text = when {
-            swapping && used(doc) < LayerBudget.MAX_LAYERS_GUARD && doc.layers.size < LayerBudget.MAX_LAYERS_GUARD -> EngineLabels110.STORAGE_FULL
+            doc.layers.size >= LayerBudget.MAX_LAYERS_GUARD -> LayersLabels110.GUARD
+            swapping && !storageRoom(doc) -> EngineLabels110.STORAGE_FULL
             atGuard -> LayersLabels110.GUARD
             else -> "Layer limit reached (${maxLayers(doc)}) for this canvas size"
         }

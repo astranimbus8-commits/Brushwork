@@ -214,12 +214,39 @@ class LayerBudgetV110Test {
             assertEquals("$level", LayerBudget.MAX_LAYERS_GUARD, b.maxLayers(d))
             assertTrue("$level", b.canAdd(d))
             assertFalse("$level: two would pass the guard", b.canAdd(d, 2))
+            assertFalse("$level", b.canAddAdjustment(d))
+            // The guard refused the adjustment layer's two, not storage (FULL has the store's room).
+            assertEquals("$level: the adjustment layer's refusal", LayersLabels110.GUARD, b.refusal(d))
             d.layers += Layer(d.newLayerId(), "last", BlankPixels(16, 16))
             assertFalse("$level", b.canAdd(d))
             assertEquals("$level", 0, b.room(d))
             assertEquals("$level", LayersLabels110.GUARD, b.refusal(d))
             assertEquals("$level", LayersLabels110.GUARD + ": x", b.refusal(d, "x"))
         }
+    }
+
+    @Test
+    fun atFullWithSwapTheGuardIsSaidUnlessStorageIsWhatRanOut() {
+        val ledger = PixelLedger()
+        val b = budget(EngineLevel.FULL, ledger = ledger)
+        val d = doc(PHONE_W, PHONE_H, LayerBudget.MAX_LAYERS_GUARD - 1)
+        // R and the store both full at 9,999 layers: storage is what stops the next layer.
+        ledger.add(LedgerCategory.TRANSIENT, R)
+        swap.capacityBytes = 1L
+        try {
+            assertFalse(b.canAdd(d))
+            assertEquals(EngineLabels110.STORAGE_FULL, b.refusal(d))
+            // At 10,000 the guard is the reason, full store or not.
+            d.layers += Layer(d.newLayerId(), "last", BlankPixels(PHONE_W, PHONE_H))
+            assertFalse(b.canAdd(d))
+            assertEquals(LayersLabels110.GUARD, b.refusal(d))
+            assertEquals(LayersLabels110.GUARD + ": x", b.refusal(d, "x"))
+        } finally {
+            swap.capacityBytes = 256L shl 20
+            ledger.sub(LedgerCategory.TRANSIENT, R)
+        }
+        // With room again, 10,000 layers still say the guard.
+        assertEquals(LayersLabels110.GUARD, b.refusal(d))
     }
 
     @Test

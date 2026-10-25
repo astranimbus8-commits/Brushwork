@@ -3561,8 +3561,9 @@ layer's bytes, `used(doc)` stays v1.9's units (painted layers, masks, array sour
   but the structural guard, `LayerBudget.MAX_LAYERS_GUARD` = 10,000 (`noFixedLimit`), and a new
   layer needs R or the store to take one more layer. Every count is at most the guard.
 - Refusals (`refusal`): "Layer limit reached (N) for this canvas size" at Classic and TILES (the
-  v1.9 text), `EngineLabels110.STORAGE_FULL` at FULL with swap, `LayersLabels110.GUARD` at the
-  guard. A refused first write to a BLANK, PARKED or EVICTED layer says `PAINT_REFUSED`
+  v1.9 text), `EngineLabels110.STORAGE_FULL` at FULL with swap when neither R nor the store has
+  room for one more layer, `LayersLabels110.GUARD` at the guard (10,000 layers, or an adjustment
+  layer's two at 9,999, at every level and before storage). A refused first write to a BLANK, PARKED or EVICTED layer says `PAINT_REFUSED`
   (`firstWriteRefusal()` gives `STORAGE_FULL` at FULL with swap; the controller's two toasts are
   a lead request).
 - The J12 ceiling: `canvasCheck` refuses a canvas whose one painted layer does not fit with
@@ -3601,7 +3602,9 @@ loops, which were O(n²) at 10,000 layers.
 
 The layers panel's header (`LayersPanel.headerCount`, tag `layerWindowCount`) keeps v1.9's
 "n / max" in `used` units, red when nothing more can be added, at Classic, TILES and FULL without
-a store; only with `noFixedLimit` it shows "n" alone, read "n layers", never red. The list was
+a store; only with `noFixedLimit` it shows "n" alone, read "n layers", never red. The count has
+its own 16 sp line height: Android 14's non-linear font scale keeps the theme's 24 sp line at
+twice the 12 sp font, 48 dp in the 46 dp header at font scale 2.0. The list was
 already a `LazyColumn` keyed by layer id: a scroll frame composes only the rows coming into view,
 the same at 40 layers and at 500 (`PanelScroll500TimingTest`). The rows' model
 (`LayerTreeRows.kt`, not A7's) still asks `LayerTree` per row (a lead request).
@@ -3611,7 +3614,8 @@ Tests: `test:v110/a7/` (`MemoryBudgetFormulaTest`, `LayerBudgetV110Test`, `Canva
 `GalleryLimitsOnRTest`, `BlankLayersCostZeroTest`, `LayerTreeIndexTest`,
 `LayersHeaderClassicShowsMaxTest`; timing `LayerTreeIndexBuildTimingTest`,
 `PanelScroll500TimingTest`) and `test:qa110/Qa110LayerLimitsUiTest` (392 and 360 dp, font scale
-1, 1.3 and 2.0: Classic at its limit, FULL without one, every refusal text of 2.13).
+1, 1.3 and 2.0: Classic at its limit, FULL without one, every refusal text of 2.13, and the
+editor's layer window header at each: "14 / 14", "103" alone, "10000 / 10000").
 
 <!-- /v110-A7 -->
 
