@@ -77,10 +77,14 @@ class EditorSession(private val app: BrushworkApp, val projectId: String) {
         scope.launch {
             try {
                 // v1.9 (design 2.4.4): opening (loading the files, setting up the editor) as PerfTrace.OPEN.
+                // v1.10 (A11, design 2.9): the load streams each layer into its store (LayerEntries);
+                // a refused admission is an OutOfMemoryError, caught below. The open's ms go to EngineStats.
+                val started = System.nanoTime()
                 val c = PerfTrace.span(PerfTrace.OPEN) {
                     val doc = app.repository.load(projectId)
                     EditorController(app, doc, scope, app.settings)
                 }
+                com.brushwork.paint.engine.EngineStats.record(com.brushwork.paint.engine.EngineStat.OPEN, (System.nanoTime() - started) / 1_000_000f)
                 controller = c
                 // v1.9 (design 2.4.13): sizes and counts only.
                 Breadcrumbs.add("open:${c.doc.width}x${c.doc.height}/${c.doc.layers.size}")

@@ -6,9 +6,11 @@ import android.graphics.ColorSpace
 import android.graphics.Paint
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
+import android.graphics.Rect
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.PerfTrace
 import java.io.BufferedInputStream
+import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.EOFException
@@ -237,6 +239,9 @@ internal object LayerCodec {
      * Throws [CorruptProjectException] when it is truncated, damaged (the zlib checksum), inflates
      * to more bytes than its header says or is too large. Bytes after the compressed stream are
      * not read. Blocking: call on IO.
+     *
+     * v1.10 (A11, design 2.9): read a [Band] of rows at a time (at most [BAND_BYTES_MAX] of Java
+     * heap), never through a buffer the size of the bitmap.
      */
     fun readBitmap(input: InputStream, name: String, maxWidth: Int, maxHeight: Int): Bitmap {
         try {
@@ -245,12 +250,16 @@ internal object LayerCodec {
             if (w <= 0 || h <= 0 || w > maxWidth || h > maxHeight || len.toLong() != w.toLong() * h * 4) {
                 throw CorruptProjectException("$name is ${w}x$h, larger than ${maxWidth}x$maxHeight or inconsistent")
             }
-            val dst = ByteArray(len)
-            inflateInto(buffered, name, dst, len)
             val bitmap = BitmapUtils.createLayerBitmap(w, h)
             try {
                 check(bitmap.byteCount == len) { "Unexpected bitmap format ${bitmap.config}" }
-                bitmap.copyPixelsFromBuffer(ByteBuffer.wrap(dst, 0, len))
+                Band(w, minOf(h, bandRows(w, BAND_BYTES_MAX))).use { band ->
+                    val canvas = Canvas(bitmap)
+                    inflateBands(buffered, name, w, h, band.bytes) { y, n ->
+                        band.load()
+                        band.copyRows(canvas, 0, w, n, 0, y)
+                    }
+                }
             } catch (e: Throwable) {
                 bitmap.recycle()
                 throw e
@@ -300,5 +309,246 @@ internal object LayerCodec {
         val len = byteLength(bitmap.width, bitmap.height)
         check(bitmap.byteCount == len) { "Unexpected bitmap format ${bitmap.config}" }
         bitmap.copyPixelsFromBuffer(ByteBuffer.wrap(scratch, 0, len))
+    }
+
+    // ------------------------------------------------------------------ v1.10 (A11): bands
+
+    /** v1.10 (A11): the Java band of [readBitmap] at most (an array source is at most the canvas). */
+    private const val BAND_BYTES_MAX = 4 * 1024 * 1024
+
+    /** v1.10 (A11): the zero bytes [blankEncoding] deflates, a chunk at a time. */
+    private const val ZERO_CHUNK = 64 * 1024
+
+    /** v1.10 (A11): the canvas sizes whose [blankEncoding] is kept. */
+    private const val BLANK_SIZES = 4
+
+    /** v1.10 (A11): copies a band's rows exactly (the premultiplied values, no blending, no filtering). */
+    private val srcPaint = Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC) }
+
+    private val blankEncodings = object : LinkedHashMap<Long, ByteArray>(BLANK_SIZES * 2, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Long, ByteArray>?): Boolean = size > BLANK_SIZES
+    }
+
+    /**
+     * v1.10 (A11, design 2.9): a band of rows on its way between a pixel file and bitmaps: [bytes]
+     * (Java heap, `width × rows × 4`, the rows as pixel files hold them) and [native], its bitmap
+     * twin. [load] copies [bytes] into [native]; [copyRows] then draws rows of it onto a canvas
+     * exactly (SRC, source and destination rectangles of one size, no density), which is how
+     * `TileOps` copies pixels too: no `setPixels`, which premultiplies again. The caller admits
+     * both buffers before it makes one and [close]s it (main or the opener's thread).
+     */
+    class Band(val width: Int, val rows: Int) : AutoCloseable {
+        val bytes = ByteArray(byteLength(width, rows))
+
+        /** [bytes] read as longs and ints (whole-array offsets); the byte order does not matter to [isZero] and [kind]. */
+        private val view: ByteBuffer = ByteBuffer.wrap(bytes)
+
+        /** The bitmap twin of [bytes]. */
+        val native: Bitmap = BitmapUtils.createLayerBitmap(width, rows).apply { density = Bitmap.DENSITY_NONE }
+
+        private val src = Rect()
+        private val dst = Rect()
+
+        /** Copies [bytes] into [native] (every row; a short last band copies stale rows it never draws). */
+        fun load() {
+            native.copyPixelsFromBuffer(ByteBuffer.wrap(bytes))
+        }
+
+        /** Draws [w] x [n] pixels of [native] at ([x], 0) onto [c] at ([dx], [dy]) exactly. */
+        fun copyRows(c: Canvas, x: Int, w: Int, n: Int, dx: Int, dy: Int) {
+            src.set(x, 0, x + w, n)
+            dst.set(dx, dy, dx + w, dy + n)
+            c.drawBitmap(native, src, dst, srcPaint)
+        }
+
+        /** True when the first [n] rows of [bytes] are all zero bytes. */
+        fun isZero(n: Int): Boolean = isZero(0, n * width * 4)
+
+        /** [ZERO], [UNIFORM] or [OTHER]: the [w] pixels from column [x] of the first [n] rows of [bytes]. */
+        fun kind(x: Int, w: Int, n: Int): Int {
+            val rowBytes = width * 4
+            var zero = true
+            for (r in 0 until n) {
+                if (!isZero(r * rowBytes + x * 4, w * 4)) {
+                    zero = false
+                    break
+                }
+            }
+            if (zero) return ZERO
+            val first = view.getInt(x * 4)
+            for (r in 0 until n) {
+                val start = r * rowBytes + x * 4
+                var i = start
+                val end = start + w * 4
+                while (i < end) {
+                    if (view.getInt(i) != first) return OTHER
+                    i += 4
+                }
+            }
+            return UNIFORM
+        }
+
+        /** True when [len] bytes from [from] are zero (longs, then the tail). */
+        private fun isZero(from: Int, len: Int): Boolean {
+            val end = from + len
+            var i = from
+            val longs = end - 7
+            while (i < longs) {
+                if (view.getLong(i) != 0L) return false
+                i += 8
+            }
+            while (i < end) {
+                if (bytes[i].toInt() != 0) return false
+                i++
+            }
+            return true
+        }
+
+        override fun close() {
+            native.recycle()
+        }
+
+        companion object {
+            /** Every byte zero (transparent, and nothing else stored). */
+            const val ZERO = 0
+
+            /** Every pixel the same 4 bytes, not all zero. */
+            const val UNIFORM = 1
+
+            /** Anything else. */
+            const val OTHER = 2
+        }
+    }
+
+    /**
+     * v1.10 (A11, design 2.9): reads the pixel file [file] of a [width] x [height] layer a band of
+     * rows at a time into [band] (at least one row: `band.size / (width × 4)` rows per band, the
+     * last one shorter) and hands each band to [onBand] as (first row, rows) before the next one
+     * replaces it. The checks and messages are [read]'s: a missing, truncated or damaged file, one
+     * of another size or with trailing data throws [CorruptProjectException]. What [onBand] throws
+     * goes through unchanged. No buffer the size of the layer. Blocking: call on IO.
+     */
+    fun readBands(file: File, width: Int, height: Int, band: ByteArray, onBand: (y: Int, rows: Int) -> Unit) {
+        val length = byteLength(width, height)
+        if (!file.isFile) throw CorruptProjectException("missing file ${file.name}")
+        try {
+            FileInputStream(file).use { fis ->
+                val input = BufferedInputStream(fis, IO_BUFFER)
+                val (w, h, len) = readHeader(DataInputStream(input), file.name)
+                if (w != width || h != height || len != length) {
+                    throw CorruptProjectException("${file.name} is ${w}x$h, expected ${width}x$height")
+                }
+                inflateBands(input, file.name, width, height, band, onBand)
+            }
+        } catch (e: CorruptProjectException) {
+            throw e
+        } catch (e: EOFException) {
+            throw CorruptProjectException("${file.name} is truncated", e)
+        } catch (e: ZipException) {
+            throw CorruptProjectException("${file.name} is damaged", e)
+        }
+    }
+
+    /** Inflates the [width] x [height] rows after a header from [input] band by band (see [readBands]) and checks that the stream ends there. */
+    private fun inflateBands(input: InputStream, name: String, width: Int, height: Int, band: ByteArray, onBand: (Int, Int) -> Unit) {
+        val rowBytes = width * 4
+        require(band.size >= rowBytes) { "a band holds at least one row" }
+        val rows = minOf(band.size / rowBytes, height)
+        val inflater = Inflater()
+        try {
+            val zip = InflaterInputStream(input, inflater, IO_BUFFER)
+            var y = 0
+            while (y < height) {
+                val n = minOf(rows, height - y)
+                val want = n * rowBytes
+                var off = 0
+                while (off < want) {
+                    val k = zip.read(band, off, want - off)
+                    if (k < 0) throw CorruptProjectException("$name is truncated")
+                    off += k
+                }
+                onBand(y, n)
+                y += n
+            }
+            // Reading past the end makes zlib verify the stream's checksum.
+            if (zip.read() != -1) throw CorruptProjectException("$name has trailing data")
+        } finally {
+            inflater.end()
+        }
+    }
+
+    /**
+     * v1.10 (A11, design 2.9): the pixel file of a transparent [width] x [height] layer, byte for
+     * byte as every save writes one (the same header and deflater, zero rows), computed once per
+     * size: at most about 0.4 MB even at 10,000², as level 1 compresses zeros about 1000:1. The
+     * last [BLANK_SIZES] sizes are kept. Any thread.
+     */
+    fun blankEncoding(width: Int, height: Int): ByteArray {
+        val length = byteLength(width, height)
+        val key = (width.toLong() shl 32) or height.toLong()
+        synchronized(blankEncodings) { blankEncodings[key]?.let { return it } }
+        val out = ByteArrayOutputStream(length / 512 + 64)
+        val zeros = ByteArray(minOf(length, ZERO_CHUNK))
+        writeBody(out, width, height, length) { zip ->
+            var left = length
+            while (left > 0) {
+                val n = minOf(left, zeros.size)
+                zip.write(zeros, 0, n)
+                left -= n
+            }
+        }
+        val bytes = out.toByteArray()
+        synchronized(blankEncodings) { blankEncodings[key] = bytes }
+        return bytes
+    }
+
+    /**
+     * v1.10 (A11, design 2.9): the blank fast path. True only when [file] has exactly the length
+     * of [blankEncoding] and every byte equal to it (a prefix is not enough: above about 12 Mpx
+     * the encoding is longer than 64 KiB, and content in the last rows leaves a prefix unchanged).
+     * False when the file can't be read (the decode then says what is wrong). Blocking: call on IO.
+     */
+    fun isBlankEncoding(file: File, width: Int, height: Int): Boolean {
+        val length = file.length()
+        if (length <= 0L) return false
+        val enc = blankEncoding(width, height)
+        if (length != enc.size.toLong()) return false
+        return try {
+            FileInputStream(file).use { input ->
+                val buf = ByteArray(minOf(IO_BUFFER, enc.size))
+                var off = 0
+                while (off < enc.size) {
+                    val n = input.read(buf, 0, minOf(buf.size, enc.size - off))
+                    if (n < 0) return false
+                    for (i in 0 until n) if (buf[i] != enc[off + i]) return false
+                    off += n
+                }
+                input.read() == -1
+            }
+        } catch (e: IOException) {
+            false
+        }
+    }
+
+    /**
+     * v1.10 (A11, design 2.9): writes a [width] x [height] pixel file (atomically) whose rows
+     * [fill] provides a band at a time: `fill(y, n, scratch)` puts rows y until y + n, as pixel
+     * files hold them, at the start of [scratch] (at least one row). The deflater gets the same
+     * bytes in the same order as [write] gives it, so the file is byte-identical to [write]'s of
+     * the same pixels (X6). Blocking: call on IO.
+     */
+    fun writeRows(file: File, width: Int, height: Int, scratch: ByteArray, fill: (y: Int, rows: Int, into: ByteArray) -> Unit) {
+        val rowBytes = width * 4
+        require(scratch.size >= rowBytes) { "the scratch holds at least one row" }
+        val rows = minOf(scratch.size / rowBytes, height)
+        writeStream(file, width, height, byteLength(width, height)) { out ->
+            var y = 0
+            while (y < height) {
+                val n = minOf(rows, height - y)
+                fill(y, n, scratch)
+                out.write(scratch, 0, n * rowBytes)
+                y += n
+            }
+        }
     }
 }

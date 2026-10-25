@@ -1,9 +1,22 @@
 package com.brushwork.paint.storage
 
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
 import android.graphics.Rect
 import android.util.Log
 import com.brushwork.paint.engine.BitmapUtils
+import com.brushwork.paint.engine.EngineConfig
+import com.brushwork.paint.engine.EngineLevel
+import com.brushwork.paint.engine.MemoryGovernor
+import com.brushwork.paint.engine.budget.NativePurpose
+import com.brushwork.paint.engine.tiles.BlankPixels
+import com.brushwork.paint.engine.tiles.FlatPixels
+import com.brushwork.paint.engine.tiles.PixelStore
+import com.brushwork.paint.engine.tiles.TILE_SIZE
+import com.brushwork.paint.engine.tiles.Tile
+import com.brushwork.paint.engine.tiles.TileOps
+import com.brushwork.paint.engine.tiles.TiledPixels
 import com.brushwork.paint.filters.FilterRegistry
 import com.brushwork.paint.masks.AdjustmentCodec
 import com.brushwork.paint.masks.MaskCodec
@@ -24,6 +37,8 @@ import kotlinx.coroutines.withContext
 import java.io.BufferedInputStream
 import java.io.File
 import java.io.FileInputStream
+import kotlin.math.max
+import kotlin.math.min
 
 /**
  * The layer entries and saved selections of `project.json` (v1.7 extraction X3, §4.3): how a
@@ -76,18 +91,32 @@ internal object LayerEntries {
      * texts name are reserved. Problems that affect one layer's data go to `doc.loadWarnings`; a
      * damaged pixel file throws [CorruptProjectException] after recycling every bitmap this
      * allocated. Blocking: call on IO.
+     *
+     * v1.10 (A11, design 2.9): streamed ([StreamedLoad]). A transparent entry is a [BlankPixels]
+     * store (the blank fast path: nothing decoded); any other is read [BAND_ROWS] rows at a time
+     * through one band, into a [FlatPixels] store at Classic and into tiles ([TiledPixels]) at
+     * TILES and FULL, each bitmap and tile admitted before it is allocated. The active entry
+     * (`dto.activeLayerIndex`) and its mask are FLAT at every level. No Java buffer is larger
+     * than the band. On any failure every store built so far is released; an
+     * [OutOfMemoryError] (also a refused admission) goes on as one ("Not enough memory to open
+     * this artwork", `EditorSession`).
      */
     fun readLayers(dir: File, dto: ProjectFileDto, doc: Document) {
-        val scratch = ByteArray(LayerCodec.byteLength(doc.width, doc.height))
+        val active = dto.activeLayerIndex.coerceIn(0, dto.layers.lastIndex)
+        val load = StreamedLoad(dir, doc.width, doc.height, tiled = EngineConfig.level != EngineLevel.CLASSIC)
+        // The array source pixels (v1.7 containers) stay bitmaps.
         val allocated = ArrayList<Bitmap>()
         try {
-            for (entry in dto.layers) {
-                doc.layers += readEntry(dir, entry, dto.formatVersion, doc, scratch, allocated)
+            for ((i, entry) in dto.layers.withIndex()) {
+                doc.layers += readEntry(dir, entry, dto.formatVersion, doc, load, flat = i == active, allocated)
                 doc.ensureNextLayerIdAbove(entry.id)
             }
         } catch (e: Throwable) {
+            load.releaseAll()
             allocated.forEach { it.recycle() }
             throw e
+        } finally {
+            load.close()
         }
         if (doc.hasFolders) uniqueIds(doc)
         doc.loadWarnings += LayerTree.sanitize(doc.layers)
@@ -97,7 +126,15 @@ internal object LayerEntries {
         reserveWrapSourceIds(doc)
     }
 
-    private fun readEntry(dir: File, entry: LayerEntryDto, formatVersion: Int, doc: Document, scratch: ByteArray, allocated: MutableList<Bitmap>): Layer {
+    private fun readEntry(
+        dir: File,
+        entry: LayerEntryDto,
+        formatVersion: Int,
+        doc: Document,
+        load: StreamedLoad,
+        flat: Boolean,
+        allocated: MutableList<Bitmap>,
+    ): Layer {
         val props = sanitized(entry.props)
         entry.folderSpec(formatVersion)?.let { spec ->
             // A folder has no pixels, mask or editable data (I11); anything else in its entry is ignored.
@@ -107,17 +144,14 @@ internal object LayerEntries {
                 folderOpen = entry.folderOpen
             }
         }
-        val bitmap = BitmapUtils.createLayerBitmap(doc.width, doc.height).also { allocated += it }
-        readPixels(dir, entry.contentFileName, bitmap, scratch, "Layer \"${entry.props.name}\"")
-        val layer = Layer(entry.id, entry.props.name, bitmap)
+        val content = load.read(entry.contentFileName, "Layer \"${entry.props.name}\"", flat)
+        val layer = Layer(entry.id, entry.props.name, content)
         layer.copyPropsFrom(props)
         layer.parentId = entry.parentId
         layer.textData = entry.textData
         layer.shapeData = entry.shapeData
         if (entry.hasMask) {
-            val mask = BitmapUtils.createLayerBitmap(doc.width, doc.height).also { allocated += it }
-            readPixels(dir, entry.maskFileName, mask, scratch, "The mask of layer \"${entry.props.name}\"")
-            layer.mask = mask
+            layer.maskPixels = load.read(entry.maskFileName, "The mask of layer \"${entry.props.name}\"", flat, mask = true)
         }
         readEditableData(dir, entry, layer, doc, allocated)
         return layer
@@ -209,6 +243,9 @@ internal object LayerEntries {
      * v1.7: in a document with folders a repeated layer id makes the tree ambiguous (and only a
      * damaged file holds one): every later layer with an id already used gets a fresh id. Ids
      * that wrapped texts name are reserved first, so a fresh id is never one of them.
+     *
+     * v1.10 (A11, design 2.3): the new layer takes the old one's stores as they are (never through
+     * `bitmap` or `mask`, so nothing is materialized).
      */
     private fun uniqueIds(doc: Document) {
         reserveWrapSourceIds(doc)
@@ -216,9 +253,9 @@ internal object LayerEntries {
         for (i in doc.layers.indices) {
             val l = doc.layers[i]
             if (seen.add(l.id)) continue
-            doc.layers[i] = Layer(doc.newLayerId(), l.name, l.bitmap).also { n ->
+            doc.layers[i] = Layer(doc.newLayerId(), l.name, l.pixels).also { n ->
                 n.copyPropsFrom(l.props())
-                n.mask = l.mask
+                n.maskPixels = l.maskPixels
                 n.restoreData(l.dataSnapshot())
                 n.parentId = l.parentId
                 n.folderOpen = l.folderOpen
@@ -257,12 +294,171 @@ internal object LayerEntries {
         return if (o.isFinite() && o in 0f..1f) props else props.copy(opacity = if (o.isNaN()) 1f else o.coerceIn(0f, 1f))
     }
 
-    private fun readPixels(dir: File, fileName: String, into: Bitmap, scratch: ByteArray, what: String) {
-        if (!ProjectFormat.isPixelFile(fileName)) throw CorruptProjectException("$what refers to an invalid file")
-        try {
-            LayerCodec.readInto(File(dir, fileName), into, scratch)
-        } catch (e: CorruptProjectException) {
-            throw CorruptProjectException("$what is damaged or missing (${e.message})", e)
+    /** v1.10 (A11, design 2.9): the rows of one band of a streamed load: one row of tiles. */
+    const val BAND_ROWS = TILE_SIZE
+
+    /** v1.10 (A11): the purpose a load's Java band is admitted for ([MemoryGovernor.admit]). */
+    private const val OPEN_PURPOSE = "Open"
+
+    /**
+     * Test seam (v1.10, A11): the largest Java buffer a [readLayers] allocated since it was last
+     * set to 0 (the band; `StreamedLoadNoScratchTest`).
+     */
+    @Volatile
+    internal var loadScratchBytes = 0
+
+    /**
+     * v1.10 (A11, design 2.9): the pixel files of one [readLayers], read on its (IO) thread into
+     * stores of a [w] x [h] canvas: [tiled] at TILES and FULL. One [LayerCodec.Band] serves every
+     * entry; it is made at the first entry that needs decoding (a document of blank layers never
+     * makes one) and admitted first, the Java bytes by [MemoryGovernor.admit] and the bitmap twin
+     * as TRANSIENT. Every FLAT bitmap is admitted as LAYER (F1's rule: admitted, then not kept in
+     * the ledger) and every tile reserved under TILES before it is allocated; a refusal throws
+     * [OutOfMemoryError]. The stores are unpublished until [readLayers] returns, so the tiles'
+     * holder counts and the releases on failure ([releaseAll]) happen on this thread with no other
+     * reader (the threading rules of `Tile` speak of published tiles).
+     */
+    internal class StreamedLoad(private val dir: File, private val w: Int, private val h: Int, private val tiled: Boolean) {
+        private var band: LayerCodec.Band? = null
+        private var bandReserved = 0L
+        private val built = ArrayList<PixelStore>()
+        private val cols = (w + TILE_SIZE - 1) / TILE_SIZE
+
+        /**
+         * The store of the pixel file [fileName] ([what] names it in errors): [BlankPixels] for a
+         * transparent one unless [flat], else FLAT at Classic or when [flat], tiles otherwise. A FLAT
+         * [mask] is admitted as MASK, any other FLAT bitmap as LAYER.
+         */
+        fun read(fileName: String, what: String, flat: Boolean, mask: Boolean = false): PixelStore {
+            val purpose = if (mask) NativePurpose.MASK else NativePurpose.LAYER
+            if (!ProjectFormat.isPixelFile(fileName)) throw CorruptProjectException("$what refers to an invalid file")
+            val file = File(dir, fileName)
+            val store = try {
+                when {
+                    LayerCodec.isBlankEncoding(file, w, h) -> if (flat) FlatPixels(newFlat(purpose)) else BlankPixels(w, h)
+                    flat || !tiled -> decodeFlat(file, flat, purpose)
+                    else -> decodeTiles(file)
+                }
+            } catch (e: CorruptProjectException) {
+                throw CorruptProjectException("$what is damaged or missing (${e.message})", e)
+            }
+            built += store
+            return store
+        }
+
+        /** FLAT: the first band that is not all zero allocates the bitmap; none gives [BlankPixels] unless [flat]. */
+        private fun decodeFlat(file: File, flat: Boolean, purpose: NativePurpose): PixelStore {
+            val b = band()
+            var bitmap: Bitmap? = null
+            try {
+                var canvas: Canvas? = null
+                LayerCodec.readBands(file, w, h, b.bytes) { y, n ->
+                    if (!b.isZero(n)) {
+                        val c = canvas ?: Canvas(newFlat(purpose).also { bitmap = it }).also { canvas = it }
+                        b.load()
+                        b.copyRows(c, 0, w, n, 0, y)
+                    }
+                }
+            } catch (e: Throwable) {
+                bitmap?.recycle()
+                throw e
+            }
+            val out = bitmap
+            return when {
+                out != null -> FlatPixels(out)
+                flat -> FlatPixels(newFlat(purpose))
+                else -> BlankPixels(w, h)
+            }
+        }
+
+        /** TILES / FULL: each band is one row of tiles; a slice is no tile, `Tile.solid` or its own tile. None gives [BlankPixels]. */
+        private fun decodeTiles(file: File): PixelStore {
+            val b = band()
+            val tiles = arrayOfNulls<Tile>(cols * ((h + TILE_SIZE - 1) / TILE_SIZE))
+            var any = false
+            try {
+                LayerCodec.readBands(file, w, h, b.bytes) { y, n ->
+                    val row = y / TILE_SIZE
+                    var loaded = false
+                    for (col in 0 until cols) {
+                        val x = col * TILE_SIZE
+                        val tw = min(TILE_SIZE, w - x)
+                        val kind = b.kind(x, tw, n)
+                        if (kind == LayerCodec.Band.ZERO) continue
+                        if (!loaded) {
+                            b.load()
+                            loaded = true
+                        }
+                        val color = if (kind == LayerCodec.Band.UNIFORM) b.native.getPixel(x, 0) else 0
+                        val tile = if (kind == LayerCodec.Band.UNIFORM && Color.alpha(color) == 0xFF) Tile.solid(color, tw, n) else newTile(b, x, tw, n)
+                        tile.refs = 1
+                        tiles[row * cols + col] = tile
+                        any = true
+                    }
+                }
+            } catch (e: Throwable) {
+                for (t in tiles) if (t != null) TileOps.release(t)
+                throw e
+            }
+            return if (any) TiledPixels(w, h, tiles) else BlankPixels(w, h)
+        }
+
+        /** A [tw] x [n] tile of the band's pixels from column [x], reserved under TILES before it is allocated. */
+        private fun newTile(b: LayerCodec.Band, x: Int, tw: Int, n: Int): Tile {
+            val bytes = tw.toLong() * n * 4
+            val budget = EngineConfig.budget
+            if (!budget.admitNative(bytes, NativePurpose.TILE)) throw OutOfMemoryError("No room for a tile while opening a ${w}x$h artwork")
+            try {
+                val bmp = BitmapUtils.createLayerBitmap(tw, n).apply { density = Bitmap.DENSITY_NONE }
+                try {
+                    b.copyRows(Canvas(bmp), x, tw, n, 0, 0)
+                } catch (e: Throwable) {
+                    bmp.recycle()
+                    throw e
+                }
+                // Tile.of counts it under TILES; the reservation made room for it until then.
+                return Tile.of(bmp)
+            } finally {
+                budget.release(bytes, NativePurpose.TILE)
+            }
+        }
+
+        /** A transparent FLAT bitmap of the canvas, admitted for [purpose] first. */
+        private fun newFlat(purpose: NativePurpose): Bitmap {
+            val bytes = w.toLong() * h * 4
+            val budget = EngineConfig.budget
+            if (!budget.admitNative(bytes, purpose)) throw OutOfMemoryError("No room for a ${w}x$h layer while opening")
+            budget.release(bytes, purpose)
+            return BitmapUtils.createLayerBitmap(w, h)
+        }
+
+        /** The band, made (and admitted) at the first decode. */
+        private fun band(): LayerCodec.Band {
+            band?.let { return it }
+            val rows = min(BAND_ROWS, h)
+            val bytes = LayerCodec.byteLength(w, rows).toLong()
+            if (!MemoryGovernor.admit(bytes, OPEN_PURPOSE)) throw OutOfMemoryError("No room for a ${w}x$rows band while opening")
+            val budget = EngineConfig.budget
+            if (!budget.admitNative(bytes, NativePurpose.TRANSIENT)) throw OutOfMemoryError("No room for a ${w}x$rows band while opening")
+            bandReserved = bytes
+            val made = LayerCodec.Band(w, rows)
+            loadScratchBytes = max(loadScratchBytes, made.bytes.size)
+            band = made
+            return made
+        }
+
+        /** Lets go of every store [read] built (the open failed). */
+        fun releaseAll() {
+            for (s in built) TileOps.dispose(s)
+            built.clear()
+        }
+
+        /** Recycles the band and returns its reservation. */
+        fun close() {
+            band?.close()
+            band = null
+            if (bandReserved > 0L) EngineConfig.budget.release(bandReserved, NativePurpose.TRANSIENT)
+            bandReserved = 0L
         }
     }
 
@@ -347,7 +543,7 @@ internal object LayerEntries {
                     parentId = layer.parentId, folder = layer.folder, folderOpen = layer.folderOpen,
                 )
             }
-            val mask = layer.mask
+            val hasMask = layer.hasMask
             val prev = previousEntries[layer.id]
             val array = layer.array
             // An array without a source (damaged in memory) is written as plain pixels.
@@ -358,21 +554,21 @@ internal object LayerEntries {
             val textData = if (arrayed) null else layer.textData
             val shapeData = if (arrayed) null else layer.shapeData
             // Specs are small: stored inside project.json (a damaged one only affects its layer).
-            val maskSpecText = if (mask != null) layer.maskSpec?.let { MaskCodec.encode(it) } else null
+            val maskSpecText = if (hasMask) layer.maskSpec?.let { MaskCodec.encode(it) } else null
             val adjustmentText = layer.adjustment?.let { AdjustmentCodec.encode(it) }
             val arrayText = if (arrayed) ArrayCodec.encodeSpec(array.spec) else null
             val prevVector = prev?.vectorFile
             val prevArray = prev?.arrayFile
             if (prev != null && !sizeChanged &&
                 layer.contentVersion == layer.savedVersion &&
-                prev.hasMask == (mask != null) &&
+                prev.hasMask == hasMask &&
                 prev.contentFileName in existing &&
-                (mask == null || prev.maskFileName in existing) &&
+                (!hasMask || prev.maskFileName in existing) &&
                 (vector == null || (prevVector != null && prevVector in existing)) &&
                 (!arrayed || (prevArray != null && prevArray in existing))
             ) {
                 return LayerEntryDto(
-                    layer.id, props.name, props, mask != null, prev.contentFileName, if (mask != null) prev.maskFileName else null,
+                    layer.id, props.name, props, hasMask, prev.contentFileName, if (hasMask) prev.maskFileName else null,
                     textData, shapeData, if (vector != null) prevVector else null, maskSpecText, adjustmentText,
                     parentId = layer.parentId, array = arrayText, arrayFile = if (arrayed) prevArray else null,
                 )
@@ -382,7 +578,8 @@ internal object LayerEntries {
             val contentName = ProjectFormat.layerFile(layer.id, revision)
             writePixels(File(dir, contentName), layer.bitmap)
             var maskName: String? = null
-            if (mask != null) {
+            if (hasMask) {
+                val mask = layer.mask ?: return null
                 if (!fits(mask)) return null
                 maskName = ProjectFormat.maskFile(layer.id, revision)
                 writePixels(File(dir, maskName), mask)
@@ -403,7 +600,7 @@ internal object LayerEntries {
             }
             savedVersions += layer to version
             return LayerEntryDto(
-                layer.id, props.name, props, mask != null, contentName, maskName,
+                layer.id, props.name, props, hasMask, contentName, maskName,
                 textData, shapeData, vectorName, maskSpecText, adjustmentText,
                 parentId = layer.parentId, array = arrayText, arrayFile = arrayName,
             )
