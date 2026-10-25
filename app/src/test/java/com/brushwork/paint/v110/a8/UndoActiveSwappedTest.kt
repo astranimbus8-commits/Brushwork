@@ -4,7 +4,9 @@ import android.graphics.Bitmap
 import android.graphics.Rect
 import android.os.Looper
 import com.brushwork.paint.EditorController
+import com.brushwork.paint.engine.CompositeAction
 import com.brushwork.paint.engine.EngineConfig
+import com.brushwork.paint.engine.MaskChangeAction
 import com.brushwork.paint.engine.EngineLevel
 import com.brushwork.paint.engine.tiles.ClassicResidency
 import com.brushwork.paint.engine.tiles.ResidencyPolicy
@@ -177,5 +179,110 @@ class UndoActiveSwappedTest {
         assertNull("the hold ended", c.activating)
         assertArrayEquals("nothing applied", after, A8Kit.pixelsOf(l).first)
         assertTrue("every tile of the step let go", tiles.all { it.refs <= 0 && it.pins == 0 && it.slot == null })
+    }
+
+    /**
+     * Review fix (7/7): an edit pushed while an undo waits (a panel or menu action: only canvas
+     * input is held) drops the redo steps, but the waiting undo still applies, and its step is
+     * let go after it: before, the push disposed the waiting step, its undo was lost and the
+     * step's change stayed in the pixels with no step left to undo it.
+     */
+    @Test
+    fun anEditPushedWhileItWaitsStillLetsTheUndoApplyThenDropsItsStep() {
+        val c = editor()
+        val l = c.doc.layers[2]
+        val other = c.doc.layers[0]
+        val before = A8Kit.pixelsOf(l).first
+        A8Kit.paint(c, l, Rect(100, 50, 400, 250), 0xFF3366AA.toInt())
+        val tiles = swapOutNewest(c)
+        val steps = c.undoManager.undoCount
+
+        c.undo()
+        assertSame(l, c.activating)
+        A8Kit.paint(c, other, Rect(10, 10, 60, 60), 0xFF00FF00.toInt())
+        assertFalse("the push dropped the redo side", c.undoManager.canRedo)
+        assertTrue("the waiting step is not let go before it applied", tiles.any { it.pins > 0 || it.refs > 0 })
+
+        A8Kit.drain()
+        assertNull("the hold ended", c.activating)
+        assertArrayEquals("the undo asked before the edit applied", before, A8Kit.pixelsOf(l).first)
+        val px = A8Kit.pixelsOf(other).first
+        assertEquals("the edit is there", 0xFF00FF00.toInt(), px[20 * 512 + 20])
+        assertEquals("the edit is the newest step", steps, c.undoManager.undoCount)
+        assertFalse(c.undoManager.canRedo)
+        assertTrue("the undone step was let go after its apply", tiles.all { it.refs <= 0 && it.pins == 0 && it.slot == null })
+    }
+
+    /**
+     * Review fix (7/7): an undo of a mask change queued behind a waiting undo, then an edit
+     * pushed: the queued undo applies (the mask comes back) and only then is its step disposed.
+     * Before, the push disposed the step first, and the queued undo then put the null it was
+     * left holding into the layer: the mask never came back.
+     */
+    @Test
+    fun aMaskUndoQueuedBehindAWaitingUndoSurvivesAPush() {
+        val c = editor()
+        val masked = c.doc.layers[1]
+        val l = c.doc.layers[2]
+        val maskBefore = A8Kit.pixelsOf(masked).second!!
+        val delete = MaskChangeAction(masked, masked.maskPixels, null, "Delete mask")
+        delete.redo(c)
+        c.undoManager.push(delete)
+        assertFalse(masked.hasMask)
+        val before = A8Kit.pixelsOf(l).first
+        A8Kit.paint(c, l, Rect(100, 50, 400, 250), 0xFF3366AA.toInt())
+        swapOutNewest(c)
+
+        c.undo()
+        c.undo()
+        assertSame("the first undo waits", l, c.activating)
+        assertFalse("the mask undo is queued", masked.hasMask)
+        A8Kit.paint(c, c.doc.layers[0], Rect(10, 10, 60, 60), 0xFF00FF00.toInt())
+
+        A8Kit.drain()
+        assertNull(c.activating)
+        assertArrayEquals(before, A8Kit.pixelsOf(l).first)
+        assertTrue("the queued mask undo applied", masked.hasMask)
+        assertArrayEquals("the mask as it was", maskBefore, A8Kit.pixelsOf(masked).second)
+        assertFalse(c.undoManager.canRedo)
+    }
+
+    /**
+     * Review fix (7/7): a composite step whose pixel part waits for its tiles holds its later
+     * parts too: a redo of [a stroke, an opacity change] changes the opacity only after the
+     * stroke's tiles were read and applied, never out of turn.
+     */
+    @Test
+    fun aCompositesLaterPartsWaitBehindItsWaitingPart() {
+        val c = editor()
+        val l = c.doc.layers[2]
+        val opacity = l.opacity
+        val mark = c.undoManager.undoCount
+        A8Kit.paint(c, l, Rect(100, 50, 400, 250), 0xFF3366AA.toInt())
+        val after = A8Kit.pixelsOf(l).first
+        c.setLayerProps(l, l.props().copy(opacity = 0.5f))
+        val parts = c.undoManager.takeSince(mark)
+        assertEquals("a stroke and a props change", 2, parts.size)
+        val both = CompositeAction("Both", parts)
+        c.undoManager.pushRaw(both)
+
+        c.undo()
+        A8Kit.drain()
+        assertEquals(opacity, l.opacity, 0f)
+        // The undone step (on the redo side now) holds the stroke's pixels: sent to the swap.
+        val tiles = A8Kit.tilesOfStep(both)
+        assertTrue(tiles.isNotEmpty())
+        TileOps.nextEpoch()
+        for (t in tiles) assertTrue("queued", TileWorker.writeOut(t))
+        A8Kit.drain()
+        assertTrue(tiles.all { it.state == TileState.SWAPPED })
+
+        c.redo()
+        assertSame("the stroke part waits", l, c.activating)
+        assertEquals("the props part waits behind it", opacity, l.opacity, 0f)
+        A8Kit.drain()
+        assertNull(c.activating)
+        assertArrayEquals(after, A8Kit.pixelsOf(l).first)
+        assertEquals("then the props part applied", 0.5f, l.opacity, 0f)
     }
 }

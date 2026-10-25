@@ -62,8 +62,14 @@ class UndoManager(private val maxBytes: Long, private val maxSteps: Int = 150) {
     val undoLabel: String? get() = undoStack.lastOrNull()?.label
     val redoLabel: String? get() = redoStack.lastOrNull()?.label
 
+    /**
+     * Pushes a new step; the redo steps are dropped. v1.10 (A8): while an apply waits for its
+     * tiles ([beginWaiting]), the dropped redo steps are disposed only once nothing waits any more
+     * ([droppedWhileWaiting]): an undo asked before this push, whose apply is still waiting or
+     * queued, still applies, and its step is let go after it.
+     */
     fun push(action: UndoAction) {
-        redoStack.forEach { it.dispose() }
+        if (waiting > 0 || deferred.isNotEmpty()) droppedWhileWaiting += redoStack else redoStack.forEach { it.dispose() }
         redoStack.clear()
         undoStack.addLast(action)
         trim()
@@ -93,6 +99,20 @@ class UndoManager(private val maxBytes: Long, private val maxSteps: Int = 150) {
     private val deferred = ArrayDeque<() -> Unit>()
 
     /**
+     * v1.10 (A8): redo steps a [push] dropped while an apply waited (one of them may be the
+     * waiting one, others may have their undo queued in [deferred]): disposed once nothing waits
+     * and nothing is queued, so no apply runs on a disposed step. [clear] disposes them at once.
+     */
+    private val droppedWhileWaiting = ArrayList<UndoAction>()
+
+    private fun disposeDropped() {
+        if (droppedWhileWaiting.isEmpty()) return
+        val drop = droppedWhileWaiting.toList()
+        droppedWhileWaiting.clear()
+        drop.forEach { it.dispose() }
+    }
+
+    /**
      * v1.10 (A8, design 2.6): an undo step's apply now waits for the worker to read its tiles
      * (`PixelEditAction` on a FLAT layer with SWAPPED tiles). Until the returned function runs
      * (once, on main, after that apply), every later undo or redo, and every part of a step that
@@ -109,6 +129,7 @@ class UndoManager(private val maxBytes: Long, private val maxSteps: Int = 150) {
                     val op = deferred.removeFirstOrNull() ?: break
                     op()
                 }
+                if (waiting == 0 && deferred.isEmpty()) disposeDropped()
             }
         }
     }
@@ -123,6 +144,7 @@ class UndoManager(private val maxBytes: Long, private val maxSteps: Int = 150) {
     fun clear() {
         // Steps undone or redone while an apply waited are dropped with the history.
         deferred.clear()
+        disposeDropped()
         dropped += undoStack.size
         undoStack.forEach { it.dispose() }; undoStack.clear()
         redoStack.forEach { it.dispose() }; redoStack.clear()
@@ -427,8 +449,16 @@ class PixelEditAction internal constructor(
 /** Several actions treated as one step (undone in reverse order). */
 class CompositeAction(override val label: String, private val actions: List<UndoAction>) : UndoAction, TileHolder {
     override val byteSize: Long get() = actions.sumOf { it.byteSize }
-    override fun undo(c: EditorController) { for (a in actions.asReversed()) a.undo(c) }
-    override fun redo(c: EditorController) { for (a in actions) a.redo(c) }
+
+    // v1.10 (A8, design 2.6): a part whose apply waits for its tiles (UndoManager.beginWaiting)
+    // holds the parts after it too, so they apply after it, in order, never out of turn.
+    override fun undo(c: EditorController) {
+        for (a in actions.asReversed()) if (!c.undoManager.deferIfWaiting { a.undo(c) }) a.undo(c)
+    }
+
+    override fun redo(c: EditorController) {
+        for (a in actions) if (!c.undoManager.deferIfWaiting { a.redo(c) }) a.redo(c)
+    }
     override fun dispose() { actions.forEach { it.dispose() } }
 
     /** v1.10 (A8): the one layer its parts' tiles belong to, or null (none, or several). */
@@ -566,6 +596,9 @@ class MaskChangeAction(private val layer: Layer, before: PixelStore?, after: Pix
     /** The mask not in the layer now: the one to add until the first redo, then the one the last undo or redo took out. */
     private var held: PixelStore? = after
 
+    /** Dropped from the history: an undo or redo still queued behind a waiting apply changes nothing. */
+    private var disposed = false
+
     private fun exchange() {
         val out = layer.maskPixels
         layer.maskPixels = held
@@ -573,7 +606,7 @@ class MaskChangeAction(private val layer: Layer, before: PixelStore?, after: Pix
     }
 
     override fun undo(c: EditorController) {
-        if (c.undoManager.deferIfWaiting { undo(c) }) return
+        if (disposed || c.undoManager.deferIfWaiting { undo(c) }) return
         c.structural {
             exchange()
             layer.maskEnabled = enabledBefore
@@ -584,7 +617,7 @@ class MaskChangeAction(private val layer: Layer, before: PixelStore?, after: Pix
     }
 
     override fun redo(c: EditorController) {
-        if (c.undoManager.deferIfWaiting { redo(c) }) return
+        if (disposed || c.undoManager.deferIfWaiting { redo(c) }) return
         c.structural {
             exchange()
             if (!layer.hasMask) { layer.editingMask = false; layer.maskEnabled = true }
@@ -598,6 +631,7 @@ class MaskChangeAction(private val layer: Layer, before: PixelStore?, after: Pix
     override fun forEachTile(block: (Tile) -> Unit) = forEachTileOf(held, block)
 
     override fun dispose() {
+        disposed = true
         releaseHeld(held, layer)
         held = null
     }
@@ -701,8 +735,11 @@ class DocumentBitmapsAction(
         }
     }
 
+    /** Dropped from the history: an undo or redo still queued behind a waiting apply changes nothing (the stores it held are gone). */
+    private var disposed = false
+
     private fun apply(c: EditorController, before: Boolean) {
-        if (c.undoManager.deferIfWaiting { apply(c, before) }) return
+        if (disposed || c.undoManager.deferIfWaiting { apply(c, before) }) return
         val size = if (before) sizeBefore else sizeAfter
         c.doc.setSize(size.first, size.second)
         c.doc.dpi = if (before) dpiBefore else dpiAfter
@@ -739,6 +776,7 @@ class DocumentBitmapsAction(
     }
 
     override fun dispose() {
+        disposed = true
         for ((i, e) in entries.withIndex()) {
             releaseHeld(heldContent[i], e.layer)
             releaseHeld(heldMask[i], e.layer)

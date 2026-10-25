@@ -3728,6 +3728,12 @@ about 0.6 ms per transparent tile, and the PRINT lift of `LiftPerfTest` (Q5) wen
   (READ_URGENT) and applies on main, while `activating` holds input. Every later undo or redo
   waits behind it, and so does every part of a step that defers itself (`deferIfWaiting`)
   (`UndoActiveSwappedTest`). An undo or redo never reads a slot on main.
+- The parts of a `CompositeAction` after a waiting part wait behind it too, in order.
+- An edit pushed while an apply waits (a panel or menu action; only canvas input is held) drops
+  the redo steps, but they are disposed only once nothing waits. So the waiting undo, and the
+  undos queued behind it, still apply, and their steps go after them. A step dropped from the
+  history (`dispose`) applies nothing afterwards (`PixelEditAction`, `MaskChangeAction`,
+  `DocumentBitmapsAction`).
 
 `MaskChangeAction` and `DocumentBitmapsAction` exchange stores, not bitmaps, so a layer's history
 never materializes its parked mask or content. `RemoveLayerAction` and `LayerTreeAction` count
@@ -3768,8 +3774,12 @@ through the facade, as at F1.
 
 **Known gaps.**
 - An undo or redo that waits for its tiles applies outside `inHistoryDo`.
-- The parts of a `CanvasChangeAction` are not deferred.
-- An edit pushed while an undo waits disposes the waiting step, so its apply is skipped.
+- The parts of a `CanvasChangeAction` (`CanvasOps.kt`) are not deferred.
+- An edit pushed while an undo waits is applied before that undo. Where the edit and the waiting
+  step touch the same tiles of the same layer, the undo then overwrites the edit's pixels there.
+  Only canvas input is held; holding the panel and menu edits too needs `EditorController`
+  outside the A8 region.
+- A park does not reuse the last edit's tiles (design 2.6): a parked layer's tiles are cut anew.
 - A tool's `onActivate` may read `activeLayer.bitmap` while an activation holds input. The
   facade then makes the layer FLAT synchronously.
 
