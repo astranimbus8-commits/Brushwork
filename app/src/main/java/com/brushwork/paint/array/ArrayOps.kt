@@ -29,6 +29,7 @@ import com.brushwork.paint.tools.array.ArrayTool
 import com.brushwork.paint.tools.vector.ShapeCodec
 import com.brushwork.paint.ui.common.ArrayLabels
 import com.brushwork.paint.ui.common.ArrayLabels18
+import com.brushwork.paint.ui.common.EngineLabels110
 import com.brushwork.paint.vector.VObject
 import com.brushwork.paint.vector.VShape
 import com.brushwork.paint.vector.VectorContent
@@ -284,7 +285,8 @@ object ArrayOps {
             // Read again after the pause: the work it committed may have finished it already.
             val cur = layer.array ?: return@paused false
             if (!cur.spec.editingSource) return@paused true
-            val px = try { ArraySources.layerPixels(layer.bitmap) } catch (e: OutOfMemoryError) { c.toast(MEMORY_REFUSAL); return@paused false }
+            // v1.10 (A3 step 6, C-TILE): read from the store (the row may be parked); the step's write admits it.
+            val px = try { ArraySources.layerPixelsOf(layer) } catch (e: OutOfMemoryError) { c.toast(MEMORY_REFUSAL); return@paused false }
             if (px == null) { c.toast(EMPTY_SOURCE); return@paused false }
             if (!ArraySources.hasRoom(c, 0, px.bytes, freedBytes = cur.pixels?.bytes ?: 0L)) {
                 px.bitmap.recycle()
@@ -311,6 +313,8 @@ object ArrayOps {
     private fun pixelArray(c: EditorController, src: Layer): Boolean {
         if (!c.checkUsable(src)) return false
         if (src.alphaLocked) { c.toast(alphaLocked(src.name)); return false }
+        // v1.10 (A3 step 6, design 2.13): the cut writes the source (the active layer, so FLAT: always admitted).
+        if (!src.admitWrite()) { c.toast(EngineLabels110.PAINT_REFUSED); return false }
         if (!ArraySources.hasRoom(c, 1, 0L)) { c.toast(MEMORY_REFUSAL); return false }
         val layer = paused(c) {
             val sel = c.selection ?: return@paused null
@@ -325,7 +329,7 @@ object ArrayOps {
         var px: ArrayPixels? = null
         var bmp: Bitmap? = null
         try {
-            px = ArraySources.selectedPixels(src.bitmap, sel)
+            px = ArraySources.selectedPixelsOf(src, sel)
             if (px == null) { c.toast(EMPTY_SELECTION); return null }
             if (!ArraySources.hasRoom(c, 1, px.bytes)) { c.toast(MEMORY_REFUSAL); return null }
             if (doc.colorMode != ColorMode.RGB) ColorModeOps.constrain(px.bitmap, Rect(0, 0, px.bitmap.width, px.bitmap.height), doc.colorMode)
@@ -342,11 +346,11 @@ object ArrayOps {
             val placed = c.editScope {
                 val rec = c.beginEdit(src, EditTarget.CONTENT)
                 rec.touch(sel.bounds)
-                Canvas(src.bitmap).apply {
+                Canvas(src.bitmap).apply { // I28: one layer
                     clipRect(sel.bounds)
                     drawBitmap(sel.mask, 0f, 0f, Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT) })
                 }
-                if (doc.colorMode != ColorMode.RGB) ColorModeOps.constrain(src.bitmap, sel.bounds, doc.colorMode)
+                if (doc.colorMode != ColorMode.RGB) ColorModeOps.constrain(src.bitmap, sel.bounds, doc.colorMode) // I28: one layer
                 // v1.7 (rule S): directly above the source at its level (without folders: the
                 // v1.6 AddLayerAction), recorded in the same step as the pixel edit.
                 val add = c.structure.placed(layer, c.structure.above(src), ArrayLabels.BUTTON)
@@ -584,7 +588,13 @@ object ArrayOps {
     private fun applyPixels(c: EditorController, layer: Layer, before: LayerData, a: LayerArray): Boolean {
         val after = before.copy(array = null)
         if (!a.spec.editingSource) return c.updateLayerData(layer, after, ArrayLabels.APPLY, null, draw = null)
-        val px = ArraySources.layerPixels(layer.bitmap) ?: return c.updateLayerData(layer, after, ArrayLabels.APPLY, null, draw = null)
+        // v1.10 (A3 step 6, C-TILE): read from the store (the row may be parked); the step's write admits it.
+        val px = try {
+            ArraySources.layerPixelsOf(layer)
+        } catch (e: OutOfMemoryError) {
+            c.toast(MEMORY_REFUSAL)
+            return false
+        } ?: return c.updateLayerData(layer, after, ArrayLabels.APPLY, null, draw = null)
         val baked = LayerArray(a.spec.copy(editingSource = false), px)
         val dirty = ArraySources.rectOf(ArrayDraw.cacheBounds(LayerData(array = baked))).also { it.inset(-1, -1) }
         // (Drawn into the cache, never published in data: let go once drawn.)

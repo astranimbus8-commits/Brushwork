@@ -3193,10 +3193,34 @@ reopens as it was (`ArrayBehindPersistenceTest`).
 - v1.9 opens a Recolored array with its saved cache, re-renders it as Tinted (the same stops and
   strength), and drops the mode when it saves (design R5 (b)).
 
+**Reads of other layers (C-TILE, I28; `ArrayOps.kt`, `ArrayRenders.kt`, `ArraySources.kt`).**
+- `ArrayOps` and `ArrayRenders` never read `Layer.bitmap` of a layer that may be parked. The
+  reads go through `ArraySources`, which reads the store:
+  - `selectedPixelsOf(layer, sel)` (making a pixel array, above or behind) and
+    `layerPixelsOf(layer)` ("Finish source edit" and "Apply array", which the layer menu runs
+    on a row that may be parked).
+  - FLAT: the store's bitmap, as `TileOps.readRegion` reads it, so Classic draws v1.9's calls
+    with no copy. TILED: `PixelReads.region` of the selection's bounds, or of the occupied tiles'
+    bounds. The shader reads the region moved by a whole-pixel local matrix, so each pixel is the
+    one a full bitmap gives. BLANK and FOLDER: no pixels.
+  - A region of 4 MiB or more is admitted first. A refusal is an `OutOfMemoryError`, which each
+    caller turns into its memory message.
+- Writes stay one layer each (`// I28: one layer`). The selection's cut admits the source first
+  (`admitWrite`, `EngineLabels110.PAINT_REFUSED`). It is the active layer, so it is FLAT. A
+  background render's swap (`ArrayRenders.apply`) admits its layer before `beginEdit`. Finish and
+  Apply write through `updateLayerData`, which admits.
+- The background render keys on `pixelGeneration` and `contentVersion` (F0). Parking or
+  unparking the layer while it renders is no replacement, so the patch still lands. A replaced
+  store makes it stale, and the edit is drawn on the main thread instead. It is ONE step with the
+  same pixels either way. `ArrayTool`'s proxy and `ArrayDraw`'s memo key on data, not pixels.
+- `ArrayPixelReadsTest` checks these: flat, parked and v1.9's oracle are bit-equal under
+  `PixelFacade.strict` with no materialization; a parked row's Finish and Apply equal the active
+  row's; and a render lands on a layer parked or replaced meanwhile.
+
 **Tests:** `app/src/test/java/com/brushwork/paint/v110/a3/` (`BehindKit` holds the shared
 fixtures). The v1.9 decode checks (`ArrayBehindCompat19Test`, `ArrayColorModeCompat19Test`)
-need the frozen `compat19` kit (v1.9's `ArraySpec` and `ArrayLook` DTOs), which neither F0 nor F1
-lands; they wait for the lead's kit (lead request) and come with step 6.
+need the frozen `compat19` kit (v1.9's `ArraySpec` and `ArrayLook` DTOs). Neither F0 nor F1
+lands it, and `main` still has no `compat19` folder. They wait for the lead's kit (lead request).
 
 <!-- /v110-A3 -->
 

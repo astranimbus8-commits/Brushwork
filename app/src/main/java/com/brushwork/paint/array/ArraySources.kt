@@ -3,6 +3,7 @@ package com.brushwork.paint.array
 import android.graphics.Bitmap
 import android.graphics.BitmapShader
 import android.graphics.Canvas
+import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.RectF
@@ -14,6 +15,9 @@ import com.brushwork.paint.engine.ArrayDraw
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.CanvasOps
 import com.brushwork.paint.engine.LayerBudget
+import com.brushwork.paint.engine.tiles.FlatPixels
+import com.brushwork.paint.engine.tiles.PixelReads
+import com.brushwork.paint.engine.tiles.TiledPixels
 import com.brushwork.paint.model.ArrayPixels
 import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.Layer
@@ -132,15 +136,20 @@ internal object ArraySources {
      * The pixels of [src] × the coverage of [sel] (as the selection bar's Cut takes them),
      * cropped to the non-transparent ones, as array source pixels; null when the selection
      * covers no painted pixel.
+     * v1.10 (A3 step 6, C-TILE): [src] may hold only the document rect at ([ox], [oy]) (a
+     * `PixelReads.region`); the shader then reads it moved there by a whole-pixel translate, so
+     * each pixel is the one a full layer bitmap gives. At (0, 0) the drawing is v1.9's, call for call.
      */
-    fun selectedPixels(src: Bitmap, sel: Selection): ArrayPixels? {
+    fun selectedPixels(src: Bitmap, sel: Selection, ox: Int = 0, oy: Int = 0): ArrayPixels? {
         val b = Rect(sel.bounds)
-        if (!b.intersect(0, 0, src.width, src.height)) return null
+        if (!b.intersect(ox, oy, ox + src.width, oy + src.height)) return null
         val crop = BitmapUtils.createLayerBitmap(b.width(), b.height())
         Canvas(crop).apply {
             translate(-b.left.toFloat(), -b.top.toFloat())
             // Skia draws an ALPHA_8 bitmap as coverage: the source, as a shader, through the mask.
-            drawBitmap(sel.mask, 0f, 0f, Paint().apply { shader = BitmapShader(src, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP) })
+            val shader = BitmapShader(src, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
+            if (ox != 0 || oy != 0) shader.setLocalMatrix(Matrix().apply { setTranslate(ox.toFloat(), oy.toFloat()) })
+            drawBitmap(sel.mask, 0f, 0f, Paint().apply { this.shader = shader })
         }
         val o = CanvasOps.opaqueBounds(crop)
         if (o == null) { crop.recycle(); return null }
@@ -152,8 +161,21 @@ internal object ArraySources {
     /**
      * v1.10 (R4, `ArrayBehind`): [selectedPixels] of [layer]'s pixels, COPIED (the layer is not
      * changed). Here so that `ArrayBehind` reads no layer pixels itself (rule P).
+     * v1.10 (A3 step 6, C-TILE; I28): read from the store, never through `Layer.bitmap`, so a
+     * parked layer is not materialized. Flat: the store's bitmap, as `TileOps.readRegion` reads
+     * it (v1.9's drawing, no copy); Tiled: `PixelReads.region` of the selection's bounds (none
+     * when no tile is painted there); Blank and Folder: null. An evicted store (A11) is read as
+     * `PixelReads` reads it. Throws `OutOfMemoryError` when the budget refuses the region.
      */
-    fun selectedPixelsOf(layer: Layer, sel: Selection): ArrayPixels? = selectedPixels(layer.bitmap, sel)
+    fun selectedPixelsOf(layer: Layer, sel: Selection): ArrayPixels? {
+        val store = layer.pixels
+        if (store is FlatPixels) return selectedPixels(store.bitmap, sel)
+        if (store !is TiledPixels) return null
+        val b = Rect(sel.bounds)
+        if (!b.intersect(0, 0, store.width, store.height) || store.isEmptyIn(b)) return null
+        val region = PixelReads.region(layer, b)
+        return try { selectedPixels(region, sel, b.left, b.top) } finally { region.recycle() }
+    }
 
     /** v1.10 (R4): [px] limited to the document's color [mode] (nothing in RGB), as v1.9's arrays are. */
     fun constrain(px: ArrayPixels, mode: ColorMode) {
@@ -167,6 +189,28 @@ internal object ArraySources {
     fun layerPixels(bmp: Bitmap): ArrayPixels? {
         val o = CanvasOps.opaqueBounds(bmp) ?: return null
         return ArrayPixels(cropped(bmp, o), o.left, o.top)
+    }
+
+    /**
+     * v1.10 (A3 step 6, C-TILE; I28): [layerPixels] of [layer]'s content, read from the store
+     * without materializing it ("Finish source edit" and "Apply array" run from the layer menu on
+     * a row that may be parked). Flat: the store's bitmap, as `TileOps.readRegion` reads it (v1.9,
+     * no copy); Tiled: `PixelReads.region` of the occupied tiles' bounds, cropped to the
+     * non-transparent pixels (null without a painted tile); Blank and Folder: null. Throws
+     * `OutOfMemoryError` when the budget refuses the region.
+     */
+    fun layerPixelsOf(layer: Layer): ArrayPixels? {
+        val store = layer.pixels
+        if (store is FlatPixels) return layerPixels(store.bitmap)
+        if (store !is TiledPixels) return null
+        val area = Rect()
+        if (!store.occupiedBounds(area)) return null
+        val region = PixelReads.region(layer, area)
+        val o = CanvasOps.opaqueBounds(region)
+        if (o == null) { region.recycle(); return null }
+        if (o.left == 0 && o.top == 0 && o.width() == region.width && o.height() == region.height) return ArrayPixels(region, area.left, area.top)
+        val out = try { cropped(region, o) } finally { region.recycle() }
+        return ArrayPixels(out, area.left + o.left, area.top + o.top)
     }
 
     /** A new mutable ARGB_8888 copy of [r] of [bmp]. */
