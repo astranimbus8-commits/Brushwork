@@ -142,10 +142,11 @@ internal object A11Kit {
 
     /**
      * A project [id] of [w] x [h] whose layer i (bottom first) is written by `files[i]` into
-     * `layer_<i+1>_r1.bin` (null: an empty folder), with [active] as the active index. Returns its
+     * `layer_<i+1>_r1.bin` (null: an empty folder), with [active] as the active index, as format
+     * [formatVersion] (default 1, or 3 with a folder). Returns its
      * folder.
      */
-    fun writeProject(id: String, w: Int, h: Int, files: List<((File) -> Unit)?>, active: Int = 0): File {
+    fun writeProject(id: String, w: Int, h: Int, files: List<((File) -> Unit)?>, active: Int = 0, formatVersion: Int? = null): File {
         val dir = dirOf(id)
         dir.mkdirs()
         val entries = files.mapIndexed { i, write ->
@@ -161,7 +162,7 @@ internal object A11Kit {
                 LayerEntryDto(layerId, "Layer $layerId", ProjectFormat.defaultProps("Layer $layerId"), file = name)
             }
         }
-        val version = if (files.any { it == null }) 3 else 1
+        val version = formatVersion ?: if (files.any { it == null }) 3 else 1
         ProjectFormat.write(dir, ProjectFileDto(formatVersion = version, id = id, name = id, width = w, height = h, activeLayerIndex = active, layers = entries, revision = 1))
         return dir
     }

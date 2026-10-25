@@ -73,7 +73,40 @@ class EditorSession(private val app: BrushworkApp, val projectId: String) {
     }
 
     // region v110-A11 open
+    /**
+     * v1.10 (A11, J16, UQ16): true while [state] is Classic's refusal of an artwork that does not
+     * fit Classic layer storage and Classic's reason is not memory (the user chose Classic, or the
+     * check chose it for slow drawing or slow storage): the editor then offers
+     * `EngineLabels110.OPEN_WITH_FULL`, which calls [openWithFullStorage].
+     */
+    var offersFullStorage by mutableStateOf(false)
+        private set
+
     init {
+        open()
+    }
+
+    /**
+     * v1.10 (A11, J16): opens this artwork once at TILES or FULL (FULL with 2 GiB of free storage)
+     * after Classic refused it, without changing the setting: the next artwork opens at the
+     * setting's level again. Does nothing unless [offersFullStorage], or when a newer session owns
+     * the engine. Main thread.
+     */
+    fun openWithFullStorage() {
+        if (!offersFullStorage || closed || engineSession != engineSessions) return
+        offersFullStorage = false
+        val check = CheckStore.read(app)
+        val freeBytes = runCatching { EngineConfig.storageProbe.freeBytes(app.filesDir) }.getOrDefault(0L)
+        EngineConfig.openSession(
+            com.brushwork.paint.storage.ClassicOpen.onceLevel(freeBytes),
+            Budgets.compute(EngineConfig.memoryProbe, check?.stepDown ?: 0),
+            check,
+        )
+        state = State.Loading
+        open()
+    }
+
+    private fun open() {
         scope.launch {
             try {
                 // v1.9 (design 2.4.4): opening (loading the files, setting up the editor) as PerfTrace.OPEN.
@@ -90,6 +123,18 @@ class EditorSession(private val app: BrushworkApp, val projectId: String) {
                 Breadcrumbs.add("open:${c.doc.width}x${c.doc.height}/${c.doc.layers.size}")
                 state = State.Ready(c)
                 autosaveLoop(c)
+            } catch (e: com.brushwork.paint.storage.ClassicCapacityException) {
+                // v1.10 (A11, J16, UQ16): not a failure to report; the text says why, and the
+                // offer stands unless Classic's reason is memory.
+                Breadcrumbs.add("open:classic-refused:${e.painted}/${e.capacity}")
+                val totalMem = runCatching { EngineConfig.memoryProbe.snapshot().totalMem }.getOrDefault(0L)
+                val forMemory = com.brushwork.paint.storage.ClassicOpen.refusedForMemory(
+                    CheckStore.read(app),
+                    app.settings.layerStorageMode,
+                    EngineConfig.deviceKey(Build.MODEL.orEmpty(), totalMem),
+                )
+                offersFullStorage = !forMemory
+                state = State.Failed(com.brushwork.paint.storage.ClassicOpen.refusalText(forMemory))
             } catch (e: OutOfMemoryError) {
                 // v1.9 (A7a): kept as a handled report (sizes only: no name, no path).
                 CrashLog.record(e, "open", fatal = false)

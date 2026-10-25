@@ -8,6 +8,7 @@ import android.util.Log
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.EngineConfig
 import com.brushwork.paint.engine.EngineLevel
+import com.brushwork.paint.engine.LayerStorageMode
 import com.brushwork.paint.engine.MemoryGovernor
 import com.brushwork.paint.engine.budget.NativePurpose
 import com.brushwork.paint.engine.tiles.BlankPixels
@@ -30,7 +31,10 @@ import com.brushwork.paint.model.LayerArray
 import com.brushwork.paint.model.LayerProps
 import com.brushwork.paint.model.LayerTree
 import com.brushwork.paint.model.SavedSelection
+import com.brushwork.paint.storage.engine.CheckReasons
+import com.brushwork.paint.storage.engine.EngineCheckResult
 import com.brushwork.paint.tools.text.TextCodec
+import com.brushwork.paint.ui.common.EngineLabels110
 import com.brushwork.paint.vector.CorruptVectorException
 import com.brushwork.paint.vector.VectorCodec
 import kotlinx.coroutines.Dispatchers
@@ -102,16 +106,31 @@ internal object LayerEntries {
      * than the band. On any failure every store built so far is released; an
      * [OutOfMemoryError] (also a refused admission) goes on as one ("Not enough memory to open
      * this artwork", `EditorSession`).
+     *
+     * v1.10 (A11, J16): at Classic a format-4 artwork whose painted layers do not fit
+     * [ClassicOpen.capacity] throws [ClassicCapacityException]: before anything is decoded when
+     * its painted pixel files already say so, else once the array pixels are known (every store
+     * released). One that fits admits its FLAT layers against `Rstable`, not the session's R.
      */
     fun readLayers(dir: File, dto: ProjectFileDto, doc: Document) {
         val active = dto.activeLayerIndex.coerceIn(0, dto.layers.lastIndex)
-        val load = StreamedLoad(dir, doc.width, doc.height, tiled = EngineConfig.level != EngineLevel.CLASSIC)
+        val classic = EngineConfig.level == EngineLevel.CLASSIC
+        val capacity = if (classic && dto.formatVersion >= ClassicOpen.BIG_FORMAT) ClassicOpen.capacity(doc.width, doc.height) else null
+        if (capacity != null) {
+            val painted = ClassicOpen.paintedFiles(dir, dto, doc.width, doc.height)
+            if (painted > capacity.layers) throw ClassicCapacityException(painted, capacity.layers)
+        }
+        val load = StreamedLoad(dir, doc.width, doc.height, tiled = !classic, classicRoom = capacity?.room ?: Long.MAX_VALUE)
         // The array source pixels (v1.7 containers) stay bitmaps.
         val allocated = ArrayList<Bitmap>()
         try {
             for ((i, entry) in dto.layers.withIndex()) {
                 doc.layers += readEntry(dir, entry, dto.formatVersion, doc, load, flat = i == active, allocated)
                 doc.ensureNextLayerIdAbove(entry.id)
+            }
+            if (capacity != null) {
+                val painted = load.painted + ClassicOpen.arrayLayers(doc)
+                if (painted > capacity.layers) throw ClassicCapacityException(painted, capacity.layers)
             }
         } catch (e: Throwable) {
             load.releaseAll()
@@ -319,12 +338,30 @@ internal object LayerEntries {
      * [OutOfMemoryError]. The stores are unpublished until [readLayers] returns, so the tiles'
      * holder counts and the releases on failure ([releaseAll]) happen on this thread with no other
      * reader (the threading rules of `Tile` speak of published tiles).
+     *
+     * At Classic (not [tiled]) the FLAT bitmaps are admitted against [classicRoom] instead (J16:
+     * `Rstable` for a format-4 artwork that fits Classic's capacity, unlimited otherwise, as v1.9
+     * loaded with no cap), so a session whose R is low (little free memory at this open) still
+     * opens what opened before.
      */
-    internal class StreamedLoad(private val dir: File, private val w: Int, private val h: Int, private val tiled: Boolean) {
+    internal class StreamedLoad(
+        private val dir: File,
+        private val w: Int,
+        private val h: Int,
+        private val tiled: Boolean,
+        private val classicRoom: Long = Long.MAX_VALUE,
+    ) {
         private var band: LayerCodec.Band? = null
         private var bandReserved = 0L
         private val built = ArrayList<PixelStore>()
         private val cols = (w + TILE_SIZE - 1) / TILE_SIZE
+
+        /** The FLAT bytes admitted against [classicRoom] so far. */
+        private var classicBytes = 0L
+
+        /** The stores [read] built that hold pixels (painted layers and masks, J16). */
+        var painted = 0
+            private set
 
         /**
          * The store of the pixel file [fileName] ([what] names it in errors): [BlankPixels] for a
@@ -366,6 +403,7 @@ internal object LayerEntries {
                 throw e
             }
             val out = bitmap
+            if (out != null) painted++
             return when {
                 out != null -> FlatPixels(out)
                 flat -> FlatPixels(newFlat(purpose))
@@ -402,6 +440,7 @@ internal object LayerEntries {
                 for (t in tiles) if (t != null) TileOps.release(t)
                 throw e
             }
+            if (any) painted++
             return if (any) TiledPixels(w, h, tiles) else BlankPixels(w, h)
         }
 
@@ -425,9 +464,14 @@ internal object LayerEntries {
             }
         }
 
-        /** A transparent FLAT bitmap of the canvas, admitted for [purpose] first. */
+        /** A transparent FLAT bitmap of the canvas, admitted for [purpose] first (at Classic against [classicRoom]). */
         private fun newFlat(purpose: NativePurpose): Bitmap {
             val bytes = w.toLong() * h * 4
+            if (!tiled) {
+                if (classicBytes > classicRoom - bytes) throw OutOfMemoryError("No room for a ${w}x$h layer while opening")
+                classicBytes += bytes
+                return BitmapUtils.createLayerBitmap(w, h)
+            }
             val budget = EngineConfig.budget
             if (!budget.admitNative(bytes, purpose)) throw OutOfMemoryError("No room for a ${w}x$h layer while opening")
             budget.release(bytes, purpose)
@@ -766,4 +810,132 @@ internal object LayerEntries {
         }
         return out
     }
+}
+
+/**
+ * v1.10 (A11, J16, design 2.9): Classic layer storage cannot open this artwork: [painted] painted
+ * layers (masks and array pixels counted as v1.9 counted them) against Classic's [capacity] on this
+ * phone ([ClassicOpen.capacity]). `EditorSession` shows [ClassicOpen.refusalText] and, unless
+ * Classic's reason is memory, offers "Open with Full storage".
+ */
+internal class ClassicCapacityException(val painted: Int, val capacity: Int) :
+    java.io.IOException(EngineLabels110.NEEDS_FULL_STORAGE)
+
+/**
+ * v1.10 (A11, J16, UQ16, design 2.4, 2.9 and 2.15): what Classic layer storage opens. A format-4
+ * artwork (one v1.9 could not hold, [BIG_FORMAT]) opens at Classic only when its painted layers fit
+ * [capacity], a number that depends on the phone alone:
+ *
+ * `classicOpenCapacity(w, h) = max(v19Cap(J), (Rstable − 3.8·L − 184 MB) / L)`
+ *
+ * where `Rstable` ([rStable]) is section 2.4's R with `base = 0.30 × totalMem`: `availMem` and the
+ * step-down are ignored, so an artwork that opened once opens again on the same phone in every
+ * session, and since a session's R never exceeds `Rstable`, every artwork made at Classic on this
+ * phone fits. `v19Cap(J)` is v1.9's cap at this phone's heap (`LayerBudgetV19.maxLayers`). Unknown
+ * memory (`totalMem` 0 or a throwing probe, J3) keeps v1.9's numbers: `Rstable = 0.55 J`, so the
+ * capacity is `v19Cap(J)`. A painted layer is a content or mask pixel file that is not the blank
+ * encoding (adjustment layers and blank layers cost nothing at any level), plus the array pixels in
+ * layer units, as `ProjectFormat.v19OpenCount` counts them. Artworks of formats 1-3 (v1.9's) always
+ * open, as in v1.9 (an over-limit one opens and only adding stops).
+ *
+ * The level's own Classic count (A7's `LayerBudgetV110`) is this formula on the session's R, which
+ * is never above `Rstable`.
+ */
+internal object ClassicOpen {
+    /** The format `ProjectFormat.writtenVersion` writes when v1.9 could not hold the artwork (I30). */
+    const val BIG_FORMAT = 4
+
+    /** Classic's reserve: 3.8 layers of the canvas ... */
+    private const val RESERVE_LAYERS = 3.8
+
+    /** ... and 184 MB of undo RAM and caches (section 2.15). */
+    private const val RESERVE_BYTES = 184_000_000L
+
+    private const val MIB = 1L shl 20
+
+    /** R's ceiling on a 64-bit build (section 2.4). */
+    private const val HI_64 = 2048 * MIB
+
+    /** R's ceiling on a 32-bit build (armeabi-v7a). */
+    private const val HI_32 = 700 * MIB
+
+    /**
+     * Stands in for `EngineConfig`'s private `FULL_MIN_FREE`: the free storage FULL needs; with less,
+     * "Open with Full storage" opens at TILES (as `EngineConfig.resolve` does for the Full setting).
+     */
+    private const val FULL_MIN_FREE = 2L shl 30
+
+    /** Classic's [layers] for this phone and the bytes ([room], `Rstable`) its open admits FLAT layers against. */
+    class Capacity(val layers: Int, val room: Long)
+
+    /** `Rstable` for the memory [s] reports (null: unknown) and the heap [javaMax] (J). */
+    fun rStable(s: com.brushwork.paint.engine.budget.MemSnapshot?, javaMax: Long): Long {
+        val lo = (javaMax * 0.55).toLong()
+        if (s == null || s.totalMem <= 0L) return lo
+        val f = (if (s.isLowRamDevice) 0.6 else 1.0) * (if (s.is64Bit) 1.0 else 0.6)
+        val hi = if (s.is64Bit) HI_64 else HI_32
+        return max(lo, min(hi, (0.30 * s.totalMem * f).toLong()))
+    }
+
+    /** `classicOpenCapacity` of a [w] x [h] canvas for Classic's [room] (`Rstable`) and the heap [javaMax]. */
+    fun layersFor(w: Int, h: Int, room: Long, javaMax: Long): Int {
+        val l = max(1L, w.toLong() * h * 4)
+        val v19 = ((javaMax * 0.55).toLong() / l - 3).toInt().coerceIn(2, 100)
+        val r = ((room - RESERVE_LAYERS * l - RESERVE_BYTES) / l).toLong().coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()
+        return max(v19, r)
+    }
+
+    /** Classic's capacity for a [w] x [h] canvas on this phone, from `EngineConfig.memoryProbe` (any thread). */
+    fun capacity(w: Int, h: Int): Capacity {
+        val s = try {
+            EngineConfig.memoryProbe.snapshot().takeIf { it.totalMem > 0L }
+        } catch (e: Exception) {
+            null
+        }
+        val j = s?.javaMax?.takeIf { it > 0L } ?: EngineConfig.budget.javaMax
+        val room = rStable(s, j)
+        return Capacity(layersFor(w, h, room, j), room)
+    }
+
+    /** The painted content and mask pixel files of [dto]'s entries in [dir] (a file that is missing or misnamed counts as none: the load reports it). */
+    fun paintedFiles(dir: File, dto: ProjectFileDto, w: Int, h: Int): Int {
+        var n = 0
+        for (e in dto.layers) {
+            if (e.folderSpec(dto.formatVersion) != null) continue
+            if (paintedFile(dir, e.contentFileName, w, h)) n++
+            if (e.hasMask && paintedFile(dir, e.maskFileName, w, h)) n++
+        }
+        return n
+    }
+
+    private fun paintedFile(dir: File, name: String, w: Int, h: Int): Boolean {
+        if (!ProjectFormat.isPixelFile(name)) return false
+        val f = File(dir, name)
+        return f.isFile && !LayerCodec.isBlankEncoding(f, w, h)
+    }
+
+    /** The array source pixels of [doc] in layers of its canvas, rounded up (`ProjectFormat.v19OpenCount`). */
+    fun arrayLayers(doc: Document): Int {
+        val l = max(1L, doc.layerBytes)
+        val bytes = doc.layers.sumOf { it.array?.pixels?.bytes ?: 0L }
+        return ((bytes + l - 1) / l).toInt()
+    }
+
+    /**
+     * True when Classic's reason is memory: the check chose Classic for low memory ([check] with
+     * `CheckReasons.LOW_MEMORY`) and the user did not choose Classic themselves (the Classic setting
+     * with this phone's check, [deviceKey]). Then the refusal offers no button (UQ16).
+     */
+    fun refusedForMemory(check: EngineCheckResult?, mode: LayerStorageMode, deviceKey: String): Boolean {
+        if (check == null || check.reason != CheckReasons.LOW_MEMORY || check.level != EngineLevel.CLASSIC) return false
+        val userChose = mode == LayerStorageMode.CLASSIC && check.deviceKey == deviceKey
+        return !userChose
+    }
+
+    /** The refusal's text: [EngineLabels110.NEEDS_FULL_STORAGE], with [EngineLabels110.NEEDS_FULL_NO_MEMORY] when [forMemory]. */
+    fun refusalText(forMemory: Boolean): String =
+        if (forMemory) EngineLabels110.NEEDS_FULL_STORAGE + " " + EngineLabels110.NEEDS_FULL_NO_MEMORY else EngineLabels110.NEEDS_FULL_STORAGE
+
+    /** The level "Open with Full storage" opens at: FULL with [freeBytes] of 2 GiB or more, else TILES. */
+    fun onceLevel(freeBytes: Long): EngineLevel = if (freeBytes >= FULL_MIN_FREE) EngineLevel.FULL else EngineLevel.TILES
 }

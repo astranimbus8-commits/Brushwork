@@ -126,7 +126,7 @@ abstract class TiledSaveByteIdenticalBase(private val level: EngineLevel) {
         val dir = A11Kit.dirOf("x6open")
         val first = ProjectFormat.read(dir)
         val before = first.layers.associate { it.id to File(dir, it.contentFileName).readBytes() } +
-            first.layers.filter { it.hasMask }.associate { -it.id to File(dir, it.maskFileName!!).readBytes() }
+            first.layers.filter { it.hasMask }.associate { -it.id to File(dir, it.maskFileName).readBytes() }
         val loaded = runBlocking { A11Kit.repo().load("x6open") }
         try {
             if (level != EngineLevel.CLASSIC) assertTrue("tiled at $level", loaded.layers[0].pixels is TiledPixels)
@@ -138,7 +138,7 @@ abstract class TiledSaveByteIdenticalBase(private val level: EngineLevel) {
             for (e in second.layers) {
                 assertTrue("${e.contentFileName} is a new file", e.contentFileName !in first.layers.map { it.contentFileName })
                 assertArrayEquals("$level: layer ${e.id}", before.getValue(e.id), File(dir, e.contentFileName).readBytes())
-                if (e.hasMask) assertArrayEquals("$level: mask ${e.id}", before.getValue(-e.id), File(dir, e.maskFileName!!).readBytes())
+                if (e.hasMask) assertArrayEquals("$level: mask ${e.id}", before.getValue(-e.id), File(dir, e.maskFileName).readBytes())
             }
         } finally {
             A11Kit.dispose(loaded)
