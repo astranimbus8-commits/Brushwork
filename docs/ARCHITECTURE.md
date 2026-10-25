@@ -3936,7 +3936,11 @@ canvas update while no stroke uses Classic's `StrokeBelowCache`.
   the cache. An unbuilt tile whose units below need reads anywhere in the tile is built by a
   waiting job: it composites them across the whole tile, the projection adopts that accumulator
   at the split (`adopt`, when split and key still match), and the job goes on above the split in
-  the part only. Nothing below the split is read on main.
+  the part only. So, with `waitingEnabled`, nothing below the split is read on main. The first
+  update after a lift has no projection (`projectionsOff`) and checks every layer: when P3 has
+  swapped the tiles below, that one update waits for all of them. An adopted accumulator is
+  exact as long as every edit invalidates the pixels it changes (the assumption the projection's
+  key already makes: an edit outside a tile with a job in flight changes no pixel of that tile).
 - At most `min(displayHeld, R / 8)` bytes; registered with `MemoryGovernor` at priority 20, so
   any pressure above NORMAL frees it first (P5).
 - At CLASSIC, `StrokeBelowCache` runs when `EngineConfig.strokeBelowMinLayers` (from the check)
