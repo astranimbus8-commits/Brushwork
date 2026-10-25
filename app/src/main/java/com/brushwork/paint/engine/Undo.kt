@@ -152,6 +152,19 @@ class UndoManager(private val maxBytes: Long, private val maxSteps: Int = 150) {
     internal fun undoAt(index: Int): UndoAction? = undoStack.getOrNull(index)
 }
 
+/**
+ * v1.10 (A8, design 2.0 P3 order 2, 2.6): an undo step that holds tiles by reference (a tile map,
+ * a store snapshot). A tile no store of the document holds any more is undo-only, and the
+ * residency policy may swap it out, those of the oldest step first (`ResidencyPolicy`). Main only.
+ */
+internal interface TileHolder {
+    /** The layer the step's tiles belong to, when one does (the undo-age rule keeps the active layer's newest 3 steps). */
+    val tileLayer: Layer?
+
+    /** Calls [block] with every tile the step holds (a tile it holds twice, twice). */
+    fun forEachTile(block: (com.brushwork.paint.engine.tiles.Tile) -> Unit)
+}
+
 /** Which bitmap of a layer an edit applies to. */
 enum class EditTarget { CONTENT, MASK }
 
@@ -253,11 +266,20 @@ class PixelEditAction(
 }
 
 /** Several actions treated as one step (undone in reverse order). */
-class CompositeAction(override val label: String, private val actions: List<UndoAction>) : UndoAction {
+class CompositeAction(override val label: String, private val actions: List<UndoAction>) : UndoAction, TileHolder {
     override val byteSize: Long get() = actions.sumOf { it.byteSize }
     override fun undo(c: EditorController) { for (a in actions.asReversed()) a.undo(c) }
     override fun redo(c: EditorController) { for (a in actions) a.redo(c) }
     override fun dispose() { actions.forEach { it.dispose() } }
+
+    /** v1.10 (A8): the one layer its parts' tiles belong to, or null (none, or several). */
+    override val tileLayer: Layer?
+        get() = actions.mapNotNullTo(HashSet()) { (it as? TileHolder)?.tileLayer }.singleOrNull()
+
+    /** v1.10 (A8): the tiles of every part that holds some. */
+    override fun forEachTile(block: (com.brushwork.paint.engine.tiles.Tile) -> Unit) {
+        for (a in actions) (a as? TileHolder)?.forEachTile(block)
+    }
 }
 
 /**
