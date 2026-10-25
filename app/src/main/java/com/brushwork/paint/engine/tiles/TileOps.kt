@@ -14,6 +14,7 @@ import com.brushwork.paint.engine.budget.NativePurpose
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.recycleUnlessShared
 import java.nio.ByteBuffer
+import java.nio.IntBuffer
 import java.util.zip.Deflater
 import java.util.zip.Inflater
 import kotlin.math.max
@@ -339,12 +340,25 @@ internal object TileOps {
         internal val bitmaps = arrayOfNulls<Bitmap>(cols * rows)
         internal val solids = arrayOfNulls<Int>(cols * rows)
 
+        /**
+         * Copies that held a transparent or uniform piece, each kept for the next piece of its
+         * size (at most one per size): the cut recycles nothing itself (rule 3); main does, here.
+         */
+        internal val spares = ArrayList<Bitmap>(4)
+
         /** Recycles the copies (a cut that was not adopted). Main only (rule 3). */
         fun recycle() {
             for (i in bitmaps.indices) {
                 bitmaps[i]?.recycle()
                 bitmaps[i] = null
             }
+            recycleSpares()
+        }
+
+        /** Recycles [spares]. Main only (rule 3). */
+        internal fun recycleSpares() {
+            for (b in spares) b.recycle()
+            spares.clear()
         }
     }
 
@@ -352,7 +366,12 @@ internal object TileOps {
      * [b] cut into [CutPieces] on the calling thread, any thread: it reads only [b] (which the
      * caller keeps alive and unchanged) and touches no tile, ledger or count. With [detectBlank],
      * a fully transparent piece is nothing and a uniform opaque one a color, else every piece is a
-     * copy. One canvas and one pixel array serve every piece. Null when [cancelled] said so
+     * copy. One canvas and one pixel array serve every piece. Each piece is copied first and
+     * classified from the copy's raw (premultiplied) pixels (`copyPixelsToBuffer`, a plain copy,
+     * where `getPixels` would unpremultiply every pixel); a copy that held a transparent or uniform
+     * piece is reused for the next piece of its size ([CutPieces.spares]). The verdict is the one
+     * `getPixels` gives: alpha is the same in both, and an opaque pixel is the same color
+     * premultiplied or not. Null when [cancelled] said so
      * between two pieces (what was cut is recycled, which is why the worker never cancels: it
      * hands its pieces to main to recycle).
      */
@@ -363,7 +382,9 @@ internal object TileOps {
         val pieces = CutPieces(w, h)
         val cols = pieces.cols
         val px = if (detectBlank) IntArray(TILE_SIZE * TILE_SIZE) else null
+        val raw = px?.let { IntBuffer.wrap(it) }
         val canvas = Canvas()
+        val spares = pieces.spares
         try {
             for (row in 0 until pieces.rows) for (col in 0 until cols) {
                 if (cancelled()) {
@@ -375,16 +396,22 @@ internal object TileOps {
                 val tw = min(TILE_SIZE, w - x)
                 val th = min(TILE_SIZE, h - y)
                 val i = row * cols + col
-                val kind = if (px == null) {
+                val spare = spares.indexOfFirst { it.width == tw && it.height == th }
+                val copy = copyPiece(canvas, b, x, y, tw, th, into = if (spare >= 0) spares.removeAt(spare) else null)
+                val kind = if (px == null || raw == null) {
                     OTHER
                 } else {
-                    b.getPixels(px, 0, tw, x, y, tw, th)
-                    classify(px, tw * th)
+                    raw.clear()
+                    copy.copyPixelsToBuffer(raw)
+                    classifyRaw(px, tw * th)
                 }
                 when (kind) {
-                    BLANK -> Unit
-                    UNIFORM_OPAQUE -> pieces.solids[i] = px!![0]
-                    else -> pieces.bitmaps[i] = copyPiece(canvas, b, x, y, tw, th)
+                    BLANK -> spares += copy
+                    UNIFORM_OPAQUE -> {
+                        pieces.solids[i] = b.getPixel(x, y)
+                        spares += copy
+                    }
+                    else -> pieces.bitmaps[i] = copy
                 }
             }
         } catch (e: Throwable) {
@@ -416,6 +443,7 @@ internal object TileOps {
             p.recycle()
             throw e
         }
+        p.recycleSpares()
         return TiledPixels(p.width, p.height, tiles)
     }
 
@@ -423,8 +451,12 @@ internal object TileOps {
     private const val OTHER = 0
     private const val UNIFORM_OPAQUE = 1
 
-    /** [BLANK]: every alpha is 0; [UNIFORM_OPAQUE]: one opaque color; else [OTHER]. [px] as `getPixels` gives it. */
-    private fun classify(px: IntArray, n: Int): Int {
+    /**
+     * [BLANK]: every alpha is 0; [UNIFORM_OPAQUE]: one opaque color; else [OTHER]. [px] holds the
+     * raw pixels `copyPixelsToBuffer` writes into an `IntBuffer`: ARGB_8888 packed as
+     * `A << 24 | B << 16 | G << 8 | R`, premultiplied, so alpha is the top byte, as in a color int.
+     */
+    private fun classifyRaw(px: IntArray, n: Int): Int {
         val first = px[0]
         var visible = false
         var uniform = true
@@ -440,16 +472,18 @@ internal object TileOps {
 
     /**
      * An exact copy of [tw] x [th] pixels of [b] at ([x], [y]), drawn through [canvas] (reused
-     * from piece to piece; it takes the copy's density, none, so [b]'s is never scaled).
+     * from piece to piece; it takes the copy's density, none, so [b]'s is never scaled), into
+     * [into] when given (a spare of that size: SRC replaces every pixel), else into a new bitmap.
      */
-    private fun copyPiece(canvas: Canvas, b: Bitmap, x: Int, y: Int, tw: Int, th: Int): Bitmap {
-        val out = BitmapUtils.createLayerBitmap(tw, th)
+    private fun copyPiece(canvas: Canvas, b: Bitmap, x: Int, y: Int, tw: Int, th: Int, into: Bitmap? = null): Bitmap {
+        val out = into ?: BitmapUtils.createLayerBitmap(tw, th)
         try {
             out.density = Bitmap.DENSITY_NONE
             canvas.setBitmap(out)
             canvas.drawBitmap(b, -x.toFloat(), -y.toFloat(), copyPaint)
             canvas.setBitmap(null)
         } catch (e: Throwable) {
+            // A spare was taken out of the spares already: it goes too, as the cut does.
             out.recycle()
             throw e
         }
