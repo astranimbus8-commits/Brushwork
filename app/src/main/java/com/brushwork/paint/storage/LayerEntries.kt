@@ -819,7 +819,7 @@ internal object LayerEntries {
  * v1.10 (A11, J16, design 2.9): Classic layer storage cannot open this artwork: [painted] painted
  * layers (masks and array pixels counted as v1.9 counted them) against Classic's [capacity] on this
  * phone ([ClassicOpen.capacity]). `EditorSession` shows [ClassicOpen.refusalText] and, unless
- * Classic's reason is memory, offers "Open with Full storage".
+ * Classic's reason is memory, offers [EngineLabels110.OPEN_WITH_FULL].
  */
 internal class ClassicCapacityException(val painted: Int, val capacity: Int) :
     java.io.IOException(EngineLabels110.NEEDS_FULL_STORAGE)
@@ -864,7 +864,7 @@ internal object ClassicOpen {
 
     /**
      * Stands in for `EngineConfig`'s private `FULL_MIN_FREE`: the free storage FULL needs; with less,
-     * "Open with Full storage" opens at TILES (as `EngineConfig.resolve` does for the Full setting).
+     * [EngineLabels110.OPEN_WITH_FULL] opens at TILES (as `EngineConfig.resolve` does for the Full setting).
      */
     private const val FULL_MIN_FREE = 2L shl 30
 
@@ -939,6 +939,6 @@ internal object ClassicOpen {
     fun refusalText(forMemory: Boolean): String =
         if (forMemory) EngineLabels110.NEEDS_FULL_STORAGE + " " + EngineLabels110.NEEDS_FULL_NO_MEMORY else EngineLabels110.NEEDS_FULL_STORAGE
 
-    /** The level "Open with Full storage" opens at: FULL with [freeBytes] of 2 GiB or more, else TILES. */
+    /** The level [EngineLabels110.OPEN_WITH_FULL] opens at: FULL with [freeBytes] of 2 GiB or more, else TILES. */
     fun onceLevel(freeBytes: Long): EngineLevel = if (freeBytes >= FULL_MIN_FREE) EngineLevel.FULL else EngineLevel.TILES
 }
