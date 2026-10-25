@@ -235,6 +235,12 @@ internal object BandAssembler {
         }
     }
 
+    /**
+     * The bitmap of a FLAT [store] when it is still usable, else null; never materializes. For the
+     * C-TILE readers (the layer thumbnails) that draw a flat store at once and otherwise wait.
+     */
+    fun flatBitmap(store: PixelStore): Bitmap? = (store as? FlatPixels)?.bitmap?.takeUnless { it.isRecycled }
+
     /** The paint `Bitmap.createScaledBitmap(…, filter = true)` draws with. */
     private val scalePaint = Paint(Paint.FILTER_BITMAP_FLAG)
 

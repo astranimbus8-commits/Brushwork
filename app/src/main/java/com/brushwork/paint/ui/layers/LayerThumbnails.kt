@@ -3,8 +3,8 @@ package com.brushwork.paint.ui.layers
 import android.graphics.Bitmap
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import com.brushwork.paint.engine.tiles.BandAssembler
 import com.brushwork.paint.engine.tiles.BlankPixels
-import com.brushwork.paint.engine.tiles.FlatPixels
 import com.brushwork.paint.engine.tiles.PixelStore
 import com.brushwork.paint.model.Layer
 import kotlin.math.max
@@ -57,8 +57,8 @@ class LayerThumbnails(private val maxSize: Int) {
         val e = cache[layer.id]
         val current = e != null && e.version == version && e.generation == generation
         if (current && e!!.exact) return e.image
-        val source = (store as? FlatPixels)?.bitmap
-        if (source == null || source.isRecycled) {
+        val source = BandAssembler.flatBitmap(store)
+        if (source == null) {
             // Not flat: never materialize. The picture of the same key stays; else a placeholder
             // (exact for a blank store, which is transparent).
             if (current) return e!!.image
