@@ -54,6 +54,7 @@ import com.brushwork.paint.engine.SelectionAction
 import com.brushwork.paint.engine.UndoAction
 import com.brushwork.paint.engine.UndoManager
 import com.brushwork.paint.engine.ViewTransform
+import com.brushwork.paint.engine.budget.LayerBudgetV110
 import com.brushwork.paint.engine.tiles.FolderPixels
 import com.brushwork.paint.engine.live.LiveAdjust
 import com.brushwork.paint.filters.Filter
@@ -1300,8 +1301,9 @@ class EditorController(
     fun checkEditable(layer: Layer = doc.activeLayer): Boolean {
         if (!checkUsable(layer)) return false
         if (layer.isAdjustmentLayer && editTargetOf(layer) == EditTarget.CONTENT) { toast(LayerToolRules.ADJUSTMENT_MESSAGE); return false }
-        // v1.10 (F1, design 2.13): the first write to a blank, parked or evicted layer may be refused (never in F1).
-        if (!layer.admitWrite()) { toast(EngineLabels110.PAINT_REFUSED); return false }
+        // v1.10 (F1, design 2.13): the first write to a blank, parked or evicted layer may be refused;
+        // the text is the level's (A7): PAINT_REFUSED, or STORAGE_FULL at FULL with a swap store.
+        if (!layer.admitWrite()) { toast(LayerBudgetV110.firstWriteRefusal()); return false }
         return true
     }
 
@@ -1653,8 +1655,8 @@ class EditorController(
             storeData(layer, before, after, label, target)
             return@editScope true
         }
-        // v1.10 (F1, design 2.13): as checkEditable, before any pixel changes (never refused in F1).
-        if (!layer.admitWrite()) { toast(EngineLabels110.PAINT_REFUSED); return@editScope false }
+        // v1.10 (F1, design 2.13): as checkEditable, before any pixel changes, with the same text.
+        if (!layer.admitWrite()) { toast(LayerBudgetV110.firstWriteRefusal()); return@editScope false }
         val bmp = (if (target == EditTarget.MASK) layer.mask else layer.bitmap) ?: return@editScope false // I28: one layer
         val area = Rect(dirty ?: doc.bounds)
         // v1.7 (I14): [dirty] covers the source only; the copies of a live array are cleared

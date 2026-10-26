@@ -321,7 +321,7 @@ class LayerBudgetV110(private val budget: MemoryBudget, private val level: Engin
          * Section 2.13: what a refused first write to a blank, parked or evicted layer says: at FULL
          * with the session's swap store [EngineLabels110.STORAGE_FULL], else
          * [EngineLabels110.PAINT_REFUSED]. `EditorController.checkEditable` and `updateLayerData`
-         * show it (a lead request; they show the second text until then).
+         * show it.
          */
         fun firstWriteRefusal(): String =
             if (EngineConfig.level == EngineLevel.FULL && EngineConfig.swapStore.capacityBytes > 0L) {

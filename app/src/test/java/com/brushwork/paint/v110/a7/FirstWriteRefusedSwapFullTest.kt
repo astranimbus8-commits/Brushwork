@@ -41,9 +41,8 @@ import org.robolectric.Shadows.shadowOf
  * v1.10 A7 step 2 (design 2.13): at FULL with the swap store and R both full, the first write to a
  * blank or parked layer is refused before any pixel changes (no undo step, no partial stroke, the
  * store and `pixelGeneration` unchanged), and adding a layer says "Not enough free storage for
- * more layers". The refused write's text at FULL is the same ([LayerBudgetV110.firstWriteRefusal]);
- * `EditorController` shows it once the lead request for its two first-write sites lands (until
- * then it shows "Not enough memory to paint on this layer. Merge or delete layers").
+ * more layers". The refused write's text at FULL is the same ([LayerBudgetV110.firstWriteRefusal]),
+ * and `EditorController` shows it (its two first-write sites, the A7 merge's lead commit).
  *
  * The session is the T606 at FULL with a store smaller than one layer and a residency that parks
  * and swaps nothing ([Quiet]).
@@ -115,7 +114,7 @@ class FirstWriteRefusedSwapFullTest {
         assertFalse(swap.canWrite(doc.layerBytes))
         c.message = null
         stroke(c)
-        assertNotNull("the refusal is said", c.message)
+        assertEquals("the storage refusal is said", EngineLabels110.STORAGE_FULL, c.message)
         assertEquals(steps, c.undoManager.undoCount)
         assertEquals(ResidencyState.BLANK, layer.residency)
         assertEquals(generation, layer.pixelGeneration)
@@ -149,7 +148,7 @@ class FirstWriteRefusedSwapFullTest {
         fill()
         c.message = null
         stroke(c)
-        assertNotNull(c.message)
+        assertEquals(EngineLabels110.STORAGE_FULL, c.message)
         assertEquals(steps, c.undoManager.undoCount)
         assertEquals(ResidencyState.PARKED, layer.residency)
         assertEquals(generation, layer.pixelGeneration)

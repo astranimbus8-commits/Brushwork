@@ -3563,9 +3563,9 @@ layer's bytes, `used(doc)` stays v1.9's units (painted layers, masks, array sour
 - Refusals (`refusal`): "Layer limit reached (N) for this canvas size" at Classic and TILES (the
   v1.9 text), `EngineLabels110.STORAGE_FULL` at FULL with swap when neither R nor the store has
   room for one more layer, `LayersLabels110.GUARD` at the guard (10,000 layers, or an adjustment
-  layer's two at 9,999, at every level and before storage). A refused first write to a BLANK, PARKED or EVICTED layer says `PAINT_REFUSED`
-  (`firstWriteRefusal()` gives `STORAGE_FULL` at FULL with swap; the controller's two toasts are
-  a lead request).
+  layer's two at 9,999, at every level and before storage). A refused first write to a BLANK, PARKED or EVICTED layer says `firstWriteRefusal()`:
+  `PAINT_REFUSED`, or `STORAGE_FULL` at FULL with swap (the controller's two first-write toasts,
+  `checkEditable` and `updateLayerData`, show it).
 - The J12 ceiling: `canvasCheck` refuses a canvas whose one painted layer does not fit with
   `LayersLabels110.canvasTooBig(W, H)`, W × H being `largestCanvas` at the asked aspect, rounded
   down. `canTransformCanvas`: v1.9's check at Classic, `CANVAS_OP_TOO_BIG` at TILES when twice
