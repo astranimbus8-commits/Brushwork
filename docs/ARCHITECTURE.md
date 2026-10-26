@@ -4127,7 +4127,7 @@ choice (`subtitleOf`) and `EngineLabels110.FOR_THIS_PHONE`. A tap opens `LayerSt
 **Swap (design 2.8, J9, J10, I34).** At FULL `EditorSession` (region `v110-A10 session`) installs
 a `SlabSwapStore` as `EngineConfig.swapStore` (`SlabSwapStore.installIfFull`) once its engine
 session is open, before the editor exists; the editor's chrome installs one when none is (after
-"Open with Full storage", which opens the engine session again without a store).
+`EngineLabels110.OPEN_WITH_FULL`, which opens the engine session again without a store).
 `EngineConfig.closeSession` closes it.
 - Place: `noBackupFilesDir/swap/<session UUID>/slab-NNN.bin`, never `cacheDir` or a project
   folder. Slabs of 64 MiB in 4 KiB pages; a tile's packed bytes take the first free run in the

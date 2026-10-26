@@ -65,8 +65,8 @@ import kotlinx.coroutines.withContext
  *
  * A10: the session's swap store. `EditorSession` (region `v110-A10 session`) installs a
  * [SlabSwapStore] as `EngineConfig.swapStore` when its engine session runs at FULL; the editor
- * installs one too when none is ([SlabSwapStore.installIfFull]: after "Open with Full storage",
- * which opens the engine session again without a store; at CLASSIC and TILES, with a store already
+ * installs one too when none is ([SlabSwapStore.installIfFull]: after
+ * [EngineLabels110.OPEN_WITH_FULL], which opens the engine session again without a store; at CLASSIC and TILES, with a store already
  * installed, or under Robolectric nothing happens); the session's end (`EngineConfig.closeSession`)
  * closes it and deletes its directory. With a store installed, [LowStorageNotice] shows
  * [EngineLabels110.LOW_STORAGE] once in the session when the store reads less than 1.5 GiB free (at

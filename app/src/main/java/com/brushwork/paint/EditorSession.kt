@@ -41,9 +41,9 @@ class EditorSession(private val app: BrushworkApp, val projectId: String) {
         private set
 
     // region v110-A10 session
-    // v1.10 (A10): the session's swap store is installed in the second region of this name (after
-    // the engine session below is open); NativeWatch and the editor-open marker run with the
-    // editor's lifecycle in `EngineEditorChrome`.
+    // v1.10 (A10): the swap session directory (the session's swap store) is installed in the
+    // second region of this name (after the engine session below is open); NativeWatch and the
+    // editor-open marker run with the editor's lifecycle in `EngineEditorChrome`.
     // endregion
 
     private var controller: EditorController? = null
