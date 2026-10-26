@@ -463,18 +463,7 @@ internal const val LARGEST_TAG = "newCanvasLargest"
  * [w]:[h] shape ("about", as the too-big refusal says it), or null while memory is unknown.
  */
 internal fun largestLine(budget: LayerBudget, w: Int, h: Int): String? =
-    (budget as? LayerBudgetV110)?.largestNewCanvas(w, h)?.let { (lw, lh) -> largestOnPhoneStandInForLabelsV110(lw, lh) }
-
-/**
- * Stands in for a `LayersLabels110` entry the design names but `LabelsV110.kt` (frozen, the lead's)
- * does not hold yet: the new-canvas dialog's line under the size fields (design 2.13, "the
- * new-canvas dialog shows the maximum under the size fields"). LeadRequest: add
- * `LayersLabels110.largestOnPhone(w, h)` with this text and call it here.
- */
-private fun largestOnPhoneStandInForLabelsV110(w: Int, h: Int): String = LARGEST_ON_PHONE_STAND_IN.format(java.util.Locale.ROOT, w, h)
-
-/** The text of [largestOnPhoneStandInForLabelsV110]; stands in for `LayersLabels110.largestOnPhone`. */
-private const val LARGEST_ON_PHONE_STAND_IN = "Largest on this phone: about %d × %d px"
+    (budget as? LayerBudgetV110)?.largestNewCanvas(w, h)?.let { (lw, lh) -> LayersLabels110.largestOnPhone(lw, lh) }
 
 @Composable
 private fun InfoRow(label: String, value: String) {

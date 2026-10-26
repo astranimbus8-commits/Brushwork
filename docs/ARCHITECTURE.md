@@ -3575,8 +3575,8 @@ layer's bytes, `used(doc)` stays v1.9's units (painted layers, masks, array sour
   first (at FULL also `swapUndoTiles`), then only `native − tile bytes − 0.90 R` is dropped from
   the oldest steps; at Classic v1.9's heap measure against `0.70 J + 0.90 R`.
 
-The gallery reads the same budget: `NewCanvasDialog` shows "Largest on this phone: about W × H px"
-under the size fields (a private stand-in text until `LayersLabels110` holds it: a lead request)
+The gallery reads the same budget: `NewCanvasDialog` shows `LayersLabels110.largestOnPhone`
+("Largest on this phone: about W × H px") under the size fields
 and "No fixed limit" for the layer count at FULL; `NewArtwork` and `GalleryImport` refuse with the
 too-big text only while memory is known; `CloneSource` samples its source layer in place (I28)
 under `cloneSnapshotCap`.
