@@ -3627,9 +3627,10 @@ R13, sections 2.0, 2.2, 2.6 and 2.7 of the v1.10 design; J4-J6, J8, I28, I29. Co
 `engine/tiles/TileOps.kt` (the tuned bodies and the commit rule), `engine/tiles/SolidTiles.kt`,
 `engine/tiles/TileWorker.kt` (the `tile-swapper` and `PackedPool`), `engine/tiles/ParkCutter.kt`,
 `engine/tiles/ResidencyPolicy.kt`, `engine/Undo.kt` (undo on tiles),
-`tools/transform/LayerBoundsCache.kt`; the regions `EditorController.kt` `v110-A8 activate` and
-`DataLift.kt` `v110-A8 pins` (two blocks). The engine level decides whether any of it runs:
-CLASSIC (production until A10) installs no policy (P6) and every layer stays FLAT, as in v1.9.
+`tools/transform/LayerBoundsCache.kt`; the regions `EditorController.kt` `v110-A8 activate`,
+`LayerStructure.kt` `v110-A8 duplicate` (two blocks) and `DataLift.kt` `v110-A8 pins` (two
+blocks). The engine level decides whether any of it runs: CLASSIC (production until A10) installs
+no policy (P6) and every layer stays FLAT, as in v1.9.
 
 **Tiles (`TileOps`, `SolidTiles`, `PackedPool`).** A parked store is a grid of 256 px `Tile`s.
 A transparent cell has no tile. A uniform opaque cell is a `SolidTiles` color: refcounted, its
@@ -3660,7 +3661,9 @@ READ_AHEAD, WRITE, then PARK_CUT. The worker only produces and posts (the `Tile.
 rules): it never frees, recycles or changes the state of a tile, and never touches `refs`, `pins`
 or `lastUse`. Main leases a tile to a job (one reference more). The posted task releases the
 lease, and it always runs, also when the work failed. At most one job per tile is in flight, so a
-tile's bitmap is recycled only by its own commit.
+tile's bitmap is recycled only by its own commit. A read that finds its tile already RESIDENT
+(main read it meanwhile, see `settle()` below) adopts nothing: `TileOps.adoptRead` never takes a
+tile's own bitmap as a new one.
 
 **The commit rule (section 2.7).** The posted task runs on main. There a tile leaves RESIDENT
 only when all of these hold (`TileOps.commitPacked`, `commitWritten`):
@@ -3713,6 +3716,16 @@ holds input, undo and redo wait in order (`UndoManager.beginWaiting`;
 `ActivationAsyncHoldsInputTest`). `LayerSwitchTimingTest` measures a switch to a resident layer on
 the PC, and `LayerSwitchBigTimingTest` a switch to a swapped 4000 x 5000 layer (512 x 512 on CI).
 
+**Settling a wait (`UndoManager.settle()`).** Each apply that waits for the worker (an
+asynchronous activation, a pixel undo or redo that found SWAPPED tiles) registers a hurry with
+`beginWaiting`. `settle()` runs the hurries in order until nothing waits. An activation then
+materializes its layer at once; a pixel step reads its SWAPPED tiles on main
+(`TileOps.makeResident`) and applies. Then the undos and redos queued behind run, in order. The
+worker's late reads adopt nothing. `settle()` is for an edit about to start, which must not land
+before a waiting undo of the same pixels (`UndoActiveSwappedTest`,
+`ActivationAsyncHoldsInputTest`). The editor does not call it yet: the calls belong in
+`EditorController.beginEdit()` and `withToolPaused()`, outside the A8 region (a LeadRequest).
+
 **Undo on tiles (section 2.6, `engine/Undo.kt`).** `PixelEditAction` holds ONE map of undo tiles
 by tile index (null = transparent), each held once by the step. It swaps them with the layer's
 pixels on each undo and redo, so a step costs 1x its touched tiles, as in v1.9. Its `byteSize` is
@@ -3727,8 +3740,14 @@ about 0.6 ms per transparent tile, and the PRINT lift of `LiftPerfTest` (Q5) wen
 - A step on a FLAT layer may find SWAPPED tiles. It then waits for the worker to read them back
   (READ_URGENT) and applies on main, while `activating` holds input. Every later undo or redo
   waits behind it, and so does every part of a step that defers itself (`deferIfWaiting`)
-  (`UndoActiveSwappedTest`). An undo or redo never reads a slot on main.
-- The parts of a `CompositeAction` after a waiting part wait behind it too, in order.
+  (`UndoActiveSwappedTest`). An undo or redo reads no slot on main, unless `settle()` asks it to
+  finish at once.
+- The parts of a `CompositeAction` after a waiting part wait behind it too, in order. A step that
+  is not a composite, such as a `CanvasChangeAction` (`CanvasOps.kt`), waits whole: its undo or
+  redo is deferred as one.
+- What applies after a wait (the waiting step and every step queued behind it) applies as
+  history. `UndoManager.aroundDeferred`, set in region `v110-A8 activate`, runs it inside
+  `inHistoryDo`, as `undo()` and `redo()` run theirs, so it raises no edit or layer-list event.
 - An edit pushed while an apply waits (a panel or menu action; only canvas input is held) drops
   the redo steps, but they are disposed only once nothing waits. So the waiting undo, and the
   undos queued behind it, still apply, and their steps go after them. A step dropped from the
@@ -3740,17 +3759,40 @@ never materializes its parked mask or content. `RemoveLayerAction` and `LayerTre
 `logicalBytes`. A store replaced by an undo or redo bumps `pixelGeneration`; a park or unpark
 does not (`PixelGenerationTest`, here `A8PixelGenerationTest`).
 
+**Duplicate as copy-on-write (region `LayerStructure.kt` `v110-A8 duplicate`).** Duplicate layer
+and Duplicate folder copy every content and mask store by its kind:
+- A parked store becomes a `snapshot()` that shares its tiles: one reference more on each, no
+  bytes, nothing read or materialized.
+- A blank store becomes another blank store.
+- A flat bitmap is copied as in v1.9, through the facade; so is an evicted store.
+
+Duplicate selection of a parked layer draws its copy from the tiles (`TiledPixels.materialize`)
+and leaves the layer parked. While undone, `AddLayerAction` holds the added layer's tiles. Its
+`dispose` lets go of the tiled stores of a layer that no document or pin holds, so an undone
+duplicate dropped from the redo stack gives its references back (`DuplicateIsCowTest`).
+`DuplicateCowTimingTest` measures the duplicate of a parked 1080 x 2408 layer (PC budget 2 ms).
+
 **Snapping bounds (`LayerBoundsCache`).** An entry is keyed on `contentVersion`,
 `pixelGeneration`, whether a mask applies, and the store's size. It is never keyed on bitmap
-identity.
-- A small layer (at most 512 x 512 px) is scanned at once. A flat bitmap is scanned where it is;
-  any other store is scanned from a copy read from its tiles (`TileOps.readRegion`, TRANSIENT).
-- A big parked layer gets its bounds at once from `occupiedBounds`, narrowed by an edge scan. The
-  scan reads only the outer tiles that hold content, one 256 px cell at a time, under a plain
-  `pin()`. It trims the bounds by the mask's hidden cells. A swapped edge tile is read on main
-  into a scratch tile (`TileOps.readRegion`) and stays SWAPPED. The design asks for
-  `pinResident()` here, which would read every swapped tile of the layer on main, not only the
-  edge ones.
+identity. F1's cache keyed an entry on `System.identityHashCode(layer.bitmap)`, read through the
+facade. Under `-PparkChaos` each read materialized the layer and the next idle parked it again,
+so the bounds were never known and nothing snapped: the nightly failure of
+`TransformSnapDeleteRobolectricTest` ("expected:<700.0> but was:<704.0>").
+`BoundsUnderParkChaosTest` pins it: the bounds stay known through re-parks into new stores, and
+asking for them materializes nothing. Main never reads a swap slot here:
+- A small layer (at most 512 x 512 px) with every tile in RAM is scanned at once. A flat bitmap
+  is scanned where it is; any other store is scanned from a copy read from its tiles
+  (`TileOps.readRegion`, TRANSIENT).
+- A big parked layer with every tile in RAM gets its bounds at once from `occupiedBounds`,
+  narrowed by an edge scan. The scan reads only the outer tiles that hold content, one 256 px
+  cell at a time, under a plain `pin()`. It trims the bounds by the mask's hidden cells, from a
+  flat mask or from the mask's own tiles. The design asks for `pinResident()` here, which would
+  read every swapped tile of the layer on main.
+- A layer whose content or applying mask holds a SWAPPED tile goes to the worker. On main the
+  worker takes a `snapshot()` of each tiled store (sharing its tiles) under a plain pin, and
+  reserves the copy's bytes under TRANSIENT. It reads the snapshot with `TileOps.readRegion` on
+  `Dispatchers.Default`, and gives the snapshot, the pin and the bytes back on main, as A11 reads
+  a layer for a save. The swapped tiles stay SWAPPED (`LayerBoundsOnTilesTest`).
 - The worker finds a big parked layer's lines later, on a TRANSIENT copy. With no room for the
   copy, the layer has no lines; the cache never materializes it.
 - A blank layer has nothing to snap to. An evicted layer is skipped.
@@ -3761,27 +3803,25 @@ parked layer (`PixelFacadeMaterializationTest`):
 - a pixel edit pushed, undone and redone, also once its layer parked;
 - a delete of a parked masked layer, and its undo;
 - `LayerBudget.used`;
-- a switch, which makes only the new active layer FLAT.
+- a switch, which makes only the new active layer FLAT;
+- a save, and an autosave, of a project of 200 changed parked layers, half of them masked (A11's
+  `storage` reads their tiles).
 
-The test has no save or autosave case yet: on this base, save and autosave still read
-`layer.bitmap` in `storage/LayerEntries.kt`, which is A11's. The layers panel is A9's.
-
-**Not built yet.** Duplicate as copy-on-write waits for A7: the region `LayerStructure.kt`
-`v110-A8 duplicate`, `DuplicateIsCowTest` and `DuplicateCowTimingTest`. A7 changes
-`LayerStructure.kt` before A8 does (`$Sequential`), and A7 had not merged. It comes after A7's
-merge, on a rebase, as a 7/7 commit. Until then, a duplicate of a parked layer copies its pixels
-through the facade, as at F1.
+The layers panel is A9's.
 
 **Known gaps.**
-- An undo or redo that waits for its tiles applies outside `inHistoryDo`.
-- The parts of a `CanvasChangeAction` (`CanvasOps.kt`) are not deferred.
-- An edit pushed while an undo waits is applied before that undo. Where the edit and the waiting
-  step touch the same tiles of the same layer, the undo then overwrites the edit's pixels there.
-  Only canvas input is held; holding the panel and menu edits too needs `EditorController`
-  outside the A8 region.
+- The editor does not call `UndoManager.settle()` yet (a LeadRequest for
+  `EditorController.beginEdit()` and `withToolPaused()`). Until it does, an edit pushed while an
+  undo waits is applied before that undo. Where the edit and the waiting step touch the same tiles
+  of the same layer, the undo then overwrites the edit's pixels there.
+- A settle reads the waiting step's SWAPPED tiles on main, by design: the edit cannot wait for the
+  worker. So does Duplicate selection of a parked layer (`TiledPixels.materialize`), as the
+  compositor does.
+- A tool's `onActivate` (`ColorSelectTool`, `MagneticLassoTool`, the lift of `TransformTool`) may
+  read `activeLayer.bitmap` while an activation holds input. The facade then makes the layer FLAT
+  synchronously and reads its SWAPPED tiles on main. Running `onActivate` when the activation ends
+  needs `EditorController` outside the A8 region (a LeadRequest).
 - A park does not reuse the last edit's tiles (design 2.6): a parked layer's tiles are cut anew.
-- A tool's `onActivate` may read `activeLayer.bitmap` while an activation holds input. The
-  facade then makes the layer FLAT synchronously.
 
 <!-- /v110-A8 -->
 
