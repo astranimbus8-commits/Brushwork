@@ -43,8 +43,9 @@ import org.robolectric.RobolectricTestRunner
  * parked layers. A parked layer larger than `SYNC_PIXELS` gets its bounds at once from its
  * occupied tiles refined by its edge tiles, and its lines in the background, equal to what its
  * FLAT self gives (content and mask); a smaller one the same from a copy of its tiles. Nothing is
- * materialized, no tile changes state (a swapped one is read where it is and stays swapped), and
- * the TRANSIENT bytes of the copies come back. An entry follows the content version and the pixel
+ * materialized, no tile changes state (a swapped one is read where it is and stays swapped, only
+ * off main: a layer with one is read in the background from a snapshot, 7/7), and the TRANSIENT
+ * bytes of the copies come back. An entry follows the content version and the pixel
  * generation, not a bitmap: a park, an unpark or a materialization keeps it, a replacement or a
  * mask turned off does not. A blank layer has nothing to snap to and is not materialized.
  */
@@ -193,14 +194,53 @@ class LayerBoundsOnTilesTest {
         A8Kit.drain()
         assertTrue(movable.all { it.state == TileState.SWAPPED })
         val reads = swap.reads
+        val transient = transient()
 
-        val parked = scan(LayerBoundsCache(scope, detectLines = true) {}, listOf(masked))
+        val cache = LayerBoundsCache(scope, detectLines = true) {}
+        cache.request(listOf(masked))
+        assertFalse("not read on main: known only from the background", cache.isKnown(masked))
+        assertEquals("nothing read yet", reads, swap.reads)
+        val parked = scan(cache, listOf(masked))
         assertEquals(flat.bounds, parked.bounds)
         assertEquals(flat.lines, parked.lines)
         assertTrue("read from the swap", swap.reads > reads)
+        val threads = swap.readThreads.drop(reads)
+        assertFalse("no slot read on main: $threads", threads.contains(mainName))
         assertTrue("still swapped: ${movable.map { it.state }}", movable.all { it.state == TileState.SWAPPED })
         assertEquals(ResidencyState.PARKED, masked.residency)
+        assertEquals("every pin is let go of", 0, masked.pins)
+        assertEquals("the copies' TRANSIENT bytes are back", transient, transient())
     }
+
+    /** v1.10 A8 (7/7): a small parked layer with a SWAPPED tile is read off main too, from a snapshot, exactly. */
+    @Test
+    fun aSmallParkedLayerWithASwappedTileIsReadOffMain() {
+        val d = doc(400, 300)
+        assertTrue(400L * 300 <= LayerBoundsCache.SYNC_PIXELS)
+        val layers = d.layers.take(2)
+        val flat = scan(LayerBoundsCache(scope, detectLines = true) {}, layers)
+        parkAllButActive(d)
+        val movable = layers.flatMap { A8Kit.tilesOf(it) }.filter { it.solid == null }
+        assertTrue(movable.isNotEmpty())
+        TileOps.nextEpoch()
+        movable.forEach { assertTrue("queued", TileWorker.writeOut(it)) }
+        A8Kit.drain()
+        assertTrue(movable.all { it.state == TileState.SWAPPED })
+        val reads = swap.reads
+        val materialized = PixelFacade.materializations
+
+        val parked = scan(LayerBoundsCache(scope, detectLines = true) {}, layers)
+        assertEquals(flat.bounds, parked.bounds)
+        assertEquals(flat.lines, parked.lines)
+        val threads = swap.readThreads.drop(reads)
+        assertTrue("read from the swap", threads.isNotEmpty())
+        assertFalse("no slot read on main: $threads", threads.contains(mainName))
+        assertTrue("still swapped", movable.all { it.state == TileState.SWAPPED })
+        assertEquals(materialized, PixelFacade.materializations)
+        layers.forEach { assertEquals(0, it.pins) }
+    }
+
+    private val mainName: String get() = android.os.Looper.getMainLooper().thread.name
 
     @Test
     fun aSmallParkedLayerIsReadFromACopyOfItsTiles() {
