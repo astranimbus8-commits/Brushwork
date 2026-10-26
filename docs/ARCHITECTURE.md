@@ -3988,8 +3988,9 @@ stays. `FolderThumbnails.key` mixes the children's `pixelGeneration`, `contentVe
   A failed read keeps the placeholder until the key changes. An EVICTED store keeps the
   placeholder (F1 has no reload). Pictures from tiles hold at most `TILE_PICTURES_BYTES`
   (16 MiB) per panel; the oldest go first.
-- No park notification exists before A8's `ResidencyPolicy`, so the picture is made when a row
-  first shows a parked layer without one, not at park time.
+- A8's `ResidencyPolicy` gives the UI no park notification (its `onParked` is a test hook; a
+  park observer is left to Gate 2), so the picture is made when a row first shows a parked layer
+  without one, not at park time.
 - A worker that refuses the read (`RejectedExecutionException`, shut down) closes the pin at
   once and keeps the placeholder until the key changes, as a failed read does.
 - A folder's picture never reads on main either. When some layer of its block holds tiles that
@@ -4035,8 +4036,8 @@ check's M5 <= 30 ms; `ProjectionRules.aboveOn`), `LiveAdjust.aboveProjection`
   `exactAfterGesture()` with `projectionsOff` (I33), and every other `update` /
   `updateBudgeted` with `gestureDown` false does the same first, so no caller (the live
   adjustment's frames too) leaves approximate pixels shown. Its cost is the composite of every
-  part the stroke touched: `AboveBuildTimingTest` measures about 18 ms on the PC for a stroke
-  over 4 x 256 px at N = 200.
+  part the stroke touched: `AboveBuildTimingTest` measures a PC median of 10.5 ms (x6 = 63 ms)
+  for a stroke over 4 x 256 px at N = 200.
 - Q7's frame (layer 100 of 200, both projections built, the finger down) is timed by
   `StrokeFrame200TimingTest` against the design's 2.3 ms. `Qa110AboveProjectionCanvasUiTest`
   paints with a finger on the canvas view under 10 Normal layers: the frames draw through the
