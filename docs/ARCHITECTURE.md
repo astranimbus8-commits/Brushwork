@@ -4153,8 +4153,8 @@ layer whose content equals its last save (`SavedFileRef`) and that was not read 
 epochs, coldest first (`NativeWatch.evictionOrder`). The layer then holds an EVICTED
 `TiledPixels` (`evictedTo`, no tiles, no `pixelGeneration` change) and comes back through
 `NativeWatch.reload` (the whole Deflate stream, until A11's streamed load). Nothing calls it yet:
-the residency policy (A8) knows the saved files but neither evicts nor reloads, and `TileOps`
-refuses an EVICTED store (LeadRequest).
+nothing keeps a layer's saved-file reference after a save (A11), the residency policy (A8)
+neither evicts nor reloads, and `TileOps` refuses an EVICTED store (LeadRequest).
 
 **The activation ring (design 2.7).** `EngineEditorChrome` shows a small ring with
 `EngineLabels110.PREPARING_LAYER` in the pill slot (`ChromeLayout.pillTop`) when a layer's
@@ -4219,7 +4219,8 @@ and park cuts). No thread of its own.
 
 Tests: `test:v110/a10/` (the decision, the marker, the runner's triggers and resumes, the
 notices, the stored result and state, the sheet and its texts, swap round trip, slab reuse, CRC,
-I/O error, disk full, kill mid-write, janitor purge, slow reads, eviction, the ring, the exit
+I/O error, disk full, kill mid-write, janitor purge, slow reads, the session's install
+(`EditorSessionSwapStoreTest`), eviction, the ring, the exit
 watch and step-down, the pressure net, the stats rings, the low-storage message, the read-ahead's
 neighbours, waits, drops and faults in `ReadAheadNeighboursTest`) and `Soak500LayersTest`: random
 edits at FULL with park chaos and swap, replayed at CLASSIC and compared bit for bit at each

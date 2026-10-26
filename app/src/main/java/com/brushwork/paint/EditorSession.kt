@@ -253,8 +253,10 @@ class EditorSession(private val app: BrushworkApp, val projectId: String) {
     init {
         // v1.10 (A10, design 2.8): at FULL the session's swap store (noBackupFilesDir/swap/<uuid>)
         // is installed once the engine session is open (the init above; initializers run in
-        // source order), before the editor exists, so before any tile can be written out; the
-        // session's end (EngineConfig.closeSession) closes it and deletes its directory.
+        // source order), while open() still waits for the load, so before the editor exists and
+        // before any tile can be written out (only TileWorker jobs write, posted by the residency
+        // policy the editor attaches); the session's end (EngineConfig.closeSession) closes it
+        // and deletes its directory.
         // openWithFullStorage opens the engine session again without a store; EngineEditorChrome
         // installs one then.
         com.brushwork.paint.engine.tiles.SlabSwapStore.installIfFull(app)

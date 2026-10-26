@@ -37,6 +37,8 @@ class AutoCheckNeverDuringEditorTest {
 
     @Test
     fun withAnEditorOpenNothingIsMeasured() {
+        // The rule opened its session with budgets read from the probe (Budgets.compute, A7): count from here.
+        val snapshots = memory.snapshots
         val env = A10Kit.Env()
         env.editorOpen = true
         val steps = A10Kit.Steps(app)
@@ -44,7 +46,7 @@ class AutoCheckNeverDuringEditorTest {
         assertEquals(AutoCheckRunner.Outcome.STOPPED, runner.runIfDue { false })
         assertEquals(AutoCheckRunner.Outcome.STOPPED, runner.launchIfDue().get(10, TimeUnit.SECONDS))
         assertEquals("not even M1", 0, steps.calls.values.sum())
-        assertEquals(0, memory.snapshots)
+        assertEquals(snapshots, memory.snapshots)
         assertEquals(0, memory.probeCalls)
         assertTrue(storage.dirs.isEmpty())
         assertNull(CheckStore.read(app))
