@@ -32,8 +32,9 @@ import com.brushwork.paint.model.Layer
  *   the split (identity, `pixelGeneration`, `contentVersion`, eye, opacity, blend, clipping, mask
  *   switch, parent, folder state; the colour mode and the safe-compositing switch), plus the
  *   active layer and its index. Any mismatch drops the whole projection; eligibility is decided
- *   again only then. Edits of the active layer (and of the layers clipped to it, which draw every
- *   frame) never change it.
+ *   again only then. Edits of the active layer never change it. The layers clipped to it draw
+ *   every frame but are in `[a + 1, n)`, so an edit of one (made while it is the active layer)
+ *   drops the projection too.
  * - **Lifetime:** persistent across strokes while the active layer and the key stay; a display
  *   tile is built when a stroke frame first renders a part of it, at most one per update
  *   ([beginUpdate]), and only when every layer it reads holds resident tiles there (else the part

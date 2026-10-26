@@ -40,8 +40,9 @@ import kotlinx.coroutines.delay
  * layer bitmap may be replaced or recycled by any edit), within the §6.3 budget of 30 ms each.
  *
  * v1.10 A9: never a read on main. When some layer of the block holds tiles that are not resident
- * (PACKED or SWAPPED, content or enabled mask), [render] reads them first on [worker] under pins
- * (`BandAssembler.readOff`), at most [readLimit] bytes, and composites on main later with the
+ * (PACKED or SWAPPED, content or enabled mask), [render] reads them first on [worker]
+ * (`BandAssembler.readOff`), at most [readLimit] bytes, with every layer the picture draws pinned
+ * (none is parked, packed or swapped out meanwhile), and composites on main later with the
  * copies lent to their tiles (`BandAssembler.lend`, as the waiting display tiles do, P4); the
  * picture lands then, when the key is still the one read. A block that needs more keeps its last
  * picture (or the glyph) until its layers are resident again.
@@ -97,21 +98,27 @@ internal class FolderThumbnails(
         if (i < 0 || !folder.isFolder || folder.id in reading) return false
         val key = key(doc.layers, i)
         val need = ArrayList<Tile>()
-        val pins = ArrayList<PixelPin>()
+        val drawn = ArrayList<Layer>()
         var bytes = 0L
         val seen = IdentityHashMap<Tile, Boolean>()
         for (j in LayerTree.block(doc.layers, i)) {
             val l = doc.layers[j]
             if (l.isFolder || !l.visible || l.opacity <= 0f) continue
-            val before = need.size
+            drawn += l
             bytes += collect(l.pixels, need, seen)
             if (l.maskEnabled) bytes += collect(l.maskPixels, need, seen)
-            if (need.size > before) pins += l.pin()
         }
         if (need.isEmpty()) return renderNow(compositor, doc, folder, key)
-        if (bytes > readLimit) {
+        if (bytes > readLimit) return false
+        // Every layer the picture draws is pinned until it lands, not only those read now: a
+        // pinned layer is never parked and its tiles are never committed PACKED or SWAPPED (rule
+        // (2) of Tile), and neither bumps the key, so the composite on main reads no tile.
+        val pins = ArrayList<PixelPin>(drawn.size)
+        try {
+            for (l in drawn) pins += l.pin()
+        } catch (e: RuntimeException) {
             pins.forEach { it.close() }
-            return false
+            throw e
         }
         reading += folder.id
         val read = Runnable {

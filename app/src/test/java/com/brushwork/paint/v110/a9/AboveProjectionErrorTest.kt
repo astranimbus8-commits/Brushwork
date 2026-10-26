@@ -209,10 +209,20 @@ class AboveProjectionErrorTest {
      * [clippedToActive]; inside a pass-through folder with a Normal layer under and over it when
      * [activeInFolder]), then one unit per entry of [kinds], bottom first.
      */
-    private inner class Stack(seed: Long, kinds: List<Kind>, below: Int = 9, clippedToActive: Boolean = false, activeInFolder: Boolean = false) {
+    private inner class Stack(
+        seed: Long,
+        kinds: List<Kind>,
+        below: Int = 9,
+        clippedToActive: Boolean = false,
+        activeInFolder: Boolean = false,
+        activeOnTop: Boolean = false,
+    ) {
         private val r = Random(seed)
         val doc: Document = A9Docs.track(Document("above$seed", "above$seed", A9Docs.W, A9Docs.H))
         val active: Layer
+
+        /** The pass-through folder the active layer is in ([activeInFolder]), or null. */
+        val activeFolder: Layer?
         private val maskSeed = seed * 31
 
         init {
@@ -220,13 +230,15 @@ class AboveProjectionErrorTest {
             val modes = LayerBlendMode.entries
             repeat(below) { doc.layers += layer("B$it", blend = modes[r.nextInt(modes.size)], opacity = opacity()) }
             val folder = if (activeInFolder) Layer.newFolder(doc.newLayerId(), "Active folder", FolderSpec(passThrough = true)) else null
+            activeFolder = folder
             val parent = folder?.id ?: Layer.ROOT_ID
             if (folder != null) doc.layers += layer("Under", parent, opacity = opacity())
             active = layer("Active", parent, opacity = opacity())
             doc.layers += active
             if (clippedToActive) doc.layers += layer("Clipped to active", parent, LayerBlendMode.MULTIPLY).apply { clipping = true }
             if (folder != null) {
-                doc.layers += layer("Over", parent, opacity = opacity())
+                // [activeOnTop]: the active unit is the top of its folder (the cut is at the folder's own index).
+                if (!activeOnTop) doc.layers += layer("Over", parent, opacity = opacity())
                 doc.layers += folder
             }
             for ((i, k) in kinds.withIndex()) unit(k, "U$i", Layer.ROOT_ID)
@@ -348,6 +360,22 @@ class AboveProjectionErrorTest {
     @Test
     fun passThroughFoldersAt100StayWithinTheBound() {
         case("pass-through folders at 100 %", Stack(14L, listOf(Kind.PASS_100, Kind.NORMAL, Kind.PASS_100, Kind.NORMAL, Kind.PASS_100)), 14L)
+    }
+
+    /**
+     * The active layer is the top unit of its pass-through folder: the cut is at the folder's own
+     * index ([ProjectionRules.aboveStart]), so the cache starts with the folder's row (which draws
+     * nothing of its children) and goes on at the root. With and without a layer clipped to it.
+     */
+    @Test
+    fun theActiveLayerOnTopOfItsFolderStaysWithinTheBound() {
+        for (clipped in listOf(false, true)) {
+            val seed = if (clipped) 17L else 16L
+            val st = Stack(seed, List(5) { Kind.NORMAL } + Kind.CLIP_GROUP + Kind.PASS_100 + Kind.MASKED, clippedToActive = clipped, activeInFolder = true, activeOnTop = true)
+            val folder = st.activeFolder!!
+            assertEquals("the cut is at the folder's own index", st.doc.indexOf(folder), ProjectionRules.aboveStart(st.doc, st.active))
+            case("the active layer on top of its folder" + if (clipped) ", a layer clipped to it" else "", st, seed)
+        }
     }
 
     /** 200 parked layers (each sparse, Normal at 95 %), the active one at index 10: 189 units above, as the timings use. */

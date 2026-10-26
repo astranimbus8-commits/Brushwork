@@ -3994,9 +3994,11 @@ stays. `FolderThumbnails.key` mixes the children's `pixelGeneration`, `contentVe
   once and keeps the placeholder until the key changes, as a failed read does.
 - A folder's picture never reads on main either. When some layer of its block holds tiles that
   are not resident (content, or an enabled mask), `FolderThumbnails.render` reads them on the
-  waiting tiles' worker under pins and composites later on main with the copies lent
-  (`BandAssembler.lend`, as the waiting tiles do). The picture lands only when the key is still
-  the one read. At most `FOLDER_READ_BYTES` (16 MiB: two waiting chunks) per picture; a block
+  waiting tiles' worker and composites later on main with the copies lent
+  (`BandAssembler.lend`, as the waiting tiles do). Every layer the picture draws is pinned until
+  then, not only the ones read: a pinned layer is never parked and its tiles are never packed or
+  swapped out (neither bumps the key), so the composite on main reads no tile. The picture lands
+  only when the key is still the one read. At most `FOLDER_READ_BYTES` (16 MiB: two waiting chunks) per picture; a block
   that needs more keeps its last picture, or the glyph, until its layers are resident again
   (`FolderThumbnailReadsTest`).
 
@@ -4035,6 +4037,12 @@ check's M5 <= 30 ms; `ProjectionRules.aboveOn`), `LiveAdjust.aboveProjection`
   adjustment's frames too) leaves approximate pixels shown. Its cost is the composite of every
   part the stroke touched: `AboveBuildTimingTest` measures about 18 ms on the PC for a stroke
   over 4 x 256 px at N = 200.
+- Q7's frame (layer 100 of 200, both projections built, the finger down) is timed by
+  `StrokeFrame200TimingTest` against the design's 2.3 ms. `Qa110AboveProjectionCanvasUiTest`
+  paints with a finger on the canvas view under 10 Normal layers: the frames draw through the
+  projection within 4 LSB, the first frame after the lift leaves nothing approximate and the
+  display equals the full draw; Undo and Redo give back the frames bit for bit; a second stroke
+  reuses the projection without a build.
 
 Tests: `test:v110/a9/` (`TiledCompositeGoldenTest`, `BlankSkipExactTest`, `Api28BlendParityTest`,
 `WaitingTileOverTileRamTest`, `BelowProjectionExactTest`, `PixelReadsTiledTest`,
@@ -4043,9 +4051,10 @@ Tests: `test:v110/a9/` (`TiledCompositeGoldenTest`, `BlankSkipExactTest`, `Api28
 `BandAssemblerTimingTest`, `FullRerender500TimingTest`, `FirstCompositeEvictedTimingTest`, `StrokeFrame200TimingTest`,
 `StrokeFrame100PlainTimingTest`, `BelowRebuildTimingTest`, `ThumbnailAtParkTimingTest`,
 `AboveBuildTimingTest`) and
-`test:qa110/Qa110TiledCanvasUiTest`. That UI test runs 200 layers at TILES (parked, then packed
-after an eye toggle) on the canvas, bit-equal to Classic, at 392 and 360 dp and font scale 1,
-1.3 and 2.0, with no text overflowing in either editor.
+`test:qa110/Qa110TiledCanvasUiTest` and `Qa110AboveProjectionCanvasUiTest`. The first runs 200
+layers at TILES (parked, then packed after an eye toggle) on the canvas, bit-equal to Classic, at
+392 and 360 dp and font scale 1, 1.3 and 2.0, with no text overflowing in either editor; the
+second paints through the above projection at 392 and 360 dp.
 
 <!-- /v110-A9 -->
 

@@ -31,8 +31,11 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executor
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 /**
  * v1.10 A9 (the lead's gap "FolderThumbnails renders folder blocks synchronously on main"): a
@@ -154,5 +157,55 @@ class FolderThumbnailReadsTest {
         assertEquals(reads, swap.readThreads.size)
         assertSame("the last picture stays", picture, thumbs.image(folder.id))
         assertEquals(0, a.pins + b.pins)
+    }
+
+    /**
+     * Review 7/7: while a folder's tiles are read off main, every layer its picture draws is
+     * pinned, not only the ones read: a sibling with resident tiles is then never packed or swapped
+     * out (Tile rule (2)) and a flat sibling never parked before the composite on main, which
+     * would otherwise read on main under the same key. Every pin closes when the picture lands.
+     */
+    @Test
+    fun everyLayerThePictureDrawsIsPinnedWhileTheReadsRun() {
+        val d = A9Docs.track(Document("pins", "pins", A9Docs.W, A9Docs.H))
+        val folder = Layer.newFolder(d.newLayerId(), "Folder", FolderSpec(passThrough = false))
+        val resident = layer(d, masked = true).apply { parentId = folder.id }
+        val swapped = layer(d, masked = false).apply { parentId = folder.id; opacity = 0.8f; blendMode = LayerBlendMode.MULTIPLY }
+        val flat = layer(d, masked = false).apply { parentId = folder.id; opacity = 0.6f; blendMode = LayerBlendMode.SCREEN }
+        d.layers += resident
+        d.layers += swapped
+        d.layers += flat
+        d.layers += folder
+        val compositor = Compositor(d) { null }
+        val first = FolderThumbnails()
+        assertTrue("flat: rendered at once", first.render(compositor, d, folder))
+        val expected = keep(first.image(folder.id)!!.asAndroidBitmap().copy(Bitmap.Config.ARGB_8888, false))
+        assertTrue(ChaosResidency().park(resident))
+        parkAndSwap(swapped)
+        assertTrue("the resident sibling holds tiles", (resident.pixels as TiledPixels).tiles.any { it != null && BandAssembler.isResident(it) })
+        val gate = CountDownLatch(1)
+        val pool = realWorker()
+        val thumbs = FolderThumbnails(worker = Executor { r -> pool.execute { gate.await(30, TimeUnit.SECONDS); r.run() } }, main = Handler(Looper.getMainLooper()))
+        try {
+            assertFalse("the reads go off main first", thumbs.render(compositor, d, folder))
+            assertEquals(1, thumbs.pending)
+            assertTrue("the layer with resident tiles is pinned while the reads run", resident.pins > 0)
+            assertTrue("the layer read is pinned", swapped.pins > 0)
+            assertTrue("the flat layer is pinned", flat.pins > 0)
+            assertFalse("so it is never parked meanwhile", ChaosResidency().park(flat))
+        } finally {
+            gate.countDown()
+        }
+        val until = System.currentTimeMillis() + 30_000L
+        while (thumbs.pending > 0) {
+            shadowOf(Looper.getMainLooper()).idle()
+            if (thumbs.pending == 0) break
+            assertTrue("the reads complete", System.currentTimeMillis() < until)
+            Thread.sleep(1)
+        }
+        assertEquals("the picture landed (last failure: ${thumbs.lastFailure})", 1, thumbs.landedAfterReads)
+        A9Docs.assertBitEqual("the folder's picture", expected, thumbs.image(folder.id)!!.asAndroidBitmap())
+        assertEquals("every pin is closed", 0, resident.pins + swapped.pins + flat.pins)
+        assertTrue("the flat layer parks again once the picture landed", ChaosResidency().park(flat))
     }
 }
