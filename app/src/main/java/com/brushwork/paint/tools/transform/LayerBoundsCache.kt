@@ -47,14 +47,16 @@ import kotlinx.coroutines.withContext
  * `pixelGeneration` (and whether a mask applies), never by the identity of a bitmap, so a park, an
  * unpark or a materialization (the same pixels in another store) keeps what is known. Nothing here
  * materializes a layer or makes its tiles resident. A FLAT layer is read as in v1.9. A parked one
- * (tiled) larger than [SYNC_PIXELS] gets its bounds at once from its occupied tiles, refined by
- * reading only the tiles along the content's edges ([edgeScan], under a pin); a smaller one is read
- * from a full-size copy of its tiles taken on the main thread (the TRANSIENT bytes reserved first;
- * no room = nothing to snap to, as a v1.9 copy out of memory). Main never reads a slot here: a
- * layer whose content or applying mask holds a SWAPPED tile gets its bounds in the background, from
- * a `snapshot()` taken on main under a pin and read off main (edge tiles only), and the lines of
- * any parked layer are read there from a full-size copy of such a snapshot. A blank layer has
- * nothing to snap to; an evicted one (A11) is not looked at until it is reloaded.
+ * (tiled) larger than [SYNC_PIXELS] goes to the background, as a large FLAT one does: a
+ * `snapshot()` taken on main under a pin is read off main, first for its bounds alone (its occupied
+ * tiles, refined by reading only the tiles along the content's edges, [edgeScan]), then, after the
+ * bounds of every queued layer, for its lines from a full-size copy (7/7 review: the edge scan on
+ * main cost about 15 ms per phone-size layer on the PC). A smaller parked one is read at once from
+ * a full-size copy of its tiles taken on the main thread (the TRANSIENT bytes reserved first; no
+ * room = nothing to snap to, as a v1.9 copy out of memory). Main never reads a slot here: a layer
+ * whose content or applying mask holds a SWAPPED tile is read only in the background, whatever its
+ * size. A blank layer has nothing to snap to; an evicted one (A11) is not looked at until it is
+ * reloaded.
  */
 class LayerBoundsCache(
     private val scope: CoroutineScope,
@@ -131,16 +133,9 @@ class LayerBoundsCache(
             return false
         }
         if (p.width.toLong() * p.height <= SYNC_PIXELS) return scanNow(layer)
-        if (p is TiledPixels) {
-            // v1.10 (A8): bounds now from the tiles, lines in the background.
-            val m = layer.maskPixels?.takeIf { maskOn(layer) }
-            val flatMask = if (m is FlatPixels) layer.mask?.takeIf { !it.isRecycled } else null
-            val scan = layer.pin().use { tiledBounds(p, m?.takeIf { it !is FlatPixels }, flatMask) } ?: return false
-            val lines = if (!detectLines || scan.bounds == null) emptyList<DetectedLine>() else null
-            store(layer, scan.bounds, lines)
-            if (lines == null) queue.addLast(layer)
-            return true
-        }
+        // A larger layer, FLAT or parked, in the background (v1.9's rule). v1.10 (A8, 7/7 review):
+        // a parked one's edge scan on main cost about 15 ms per 1080 x 2408 layer on the PC
+        // (x6 on the T606), so a Transform over 200 parked layers stalled main for seconds.
         queue.addLast(layer)
         return false
     }
@@ -192,9 +187,13 @@ class LayerBoundsCache(
                     val masked = maskOn(layer)
                     // Bounds already known (a small or a parked layer): only its lines are missing.
                     val known = current(layer)
+                    // v1.10 (A8): a parked layer's bounds first, from its edge tiles only (no
+                    // full-size copy); it then goes back in the queue for its lines, so every
+                    // queued parked layer has its bounds before any of them has its lines.
+                    val boundsFirst = known == null && detectLines && layer.pixels is TiledPixels
                     // v1.9 (H4): what the background reads, taken here on the main thread. v1.10
                     // (A8): a FLAT store as a copy, a parked one as a snapshot under a pin.
-                    val plan = plan(layer)
+                    val plan = if (boundsFirst) plan(layer, full = false) else plan(layer)
                     if (plan == null) {
                         // Out of memory for the copy: nothing to snap to in this content.
                         store(layer, known?.bounds, emptyList())
@@ -213,7 +212,7 @@ class LayerBoundsCache(
                                 snap != null -> tiledBounds(snap, m?.store, m?.flat?.image) { !isActive }
                                 else -> c.image()?.let { scanBounds(it, m?.image()) { !isActive } }
                             }
-                            if (bounds == null || !detectLines || bounds.bounds == null) {
+                            if (bounds == null || !detectLines || bounds.bounds == null || boundsFirst) {
                                 bounds
                             } else {
                                 val bmp = c.image()
@@ -233,6 +232,12 @@ class LayerBoundsCache(
                     if (layer.contentVersion != version || layer.pixelGeneration != generation || own?.isRecycled == true ||
                         maskOn(layer) != masked
                     ) continue
+                    if (boundsFirst && scan.bounds != null) {
+                        store(layer, scan.bounds, null)
+                        queue.addLast(layer)
+                        onUpdated()
+                        continue
+                    }
                     store(layer, scan.bounds, if (detectLines) scan.lines ?: emptyList() else emptyList())
                     onUpdated()
                 }
@@ -327,10 +332,10 @@ class LayerBoundsCache(
      * change and recycling of a layer's bitmaps): immutable copies of a FLAT content and mask (when
      * one applies), or null when one could not be made (out of memory; nothing is left allocated
      * then). v1.10 (A8): a parked store is taken as a `snapshot()` under a pin (its tiles read
-     * only off main: main never reads a slot here), a full-size copy of it reserved for the lines.
+     * only off main: main never reads a slot here), a full-size copy of it reserved for the lines
+     * ([full]; false for a parked layer's bounds alone).
      */
-    private fun plan(layer: Layer): Plan? {
-        val full = detectLines || layer.pixels is FlatPixels
+    private fun plan(layer: Layer, full: Boolean = detectLines || layer.pixels is FlatPixels): Plan? {
         val tiled = layer.pixels is TiledPixels || (maskOn(layer) && layer.maskPixels is TiledPixels)
         val pin = if (tiled) layer.pin() else null
         val content = partOf(layer, mask = false, full)
@@ -434,11 +439,11 @@ class LayerBoundsCache(
      * it: the rect of its occupied tiles, refined by reading the tiles along the content's edges
      * ([edgeScan]), then trimmed the same way by the mask that applies: [flatMask] (a FLAT mask's
      * bitmap), or [mask] (a tiled or blank one, read the same way). A tile that is not resident
-     * is read into a scratch tile (inflated or read back) and stays as it was. On main (under a
-     * pin, only when no tile is SWAPPED) or off main (a snapshot under a pin; [flatMask] a copy).
-     * Null when a tile could not be read or the scan was [cancelled].
+     * is read into a scratch tile (inflated or read back) and stays as it was. Off main only (a
+     * snapshot under a pin; [flatMask] a copy). Null when a tile could not be read or the scan was
+     * [cancelled].
      */
-    private fun tiledBounds(p: TiledPixels, mask: PixelStore?, flatMask: Bitmap?, cancelled: () -> Boolean = { false }): Scan? =
+    private fun tiledBounds(p: TiledPixels, mask: PixelStore?, flatMask: Bitmap?, cancelled: () -> Boolean): Scan? =
         guarded(cancelled, { Scan(null) }) {
             val occupied = Rect()
             if (!p.occupiedBounds(occupied)) return@guarded Scan(null)

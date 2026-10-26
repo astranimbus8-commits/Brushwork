@@ -40,11 +40,11 @@ import org.robolectric.RobolectricTestRunner
 
 /**
  * v1.10 A8 step 5 (design 2.2 "occupiedBounds and pins", J5, I28): the smart-guide cache over
- * parked layers. A parked layer larger than `SYNC_PIXELS` gets its bounds at once from its
- * occupied tiles refined by its edge tiles, and its lines in the background, equal to what its
- * FLAT self gives (content and mask); a smaller one the same from a copy of its tiles. Nothing is
- * materialized, no tile changes state (a swapped one is read where it is and stays swapped, only
- * off main: a layer with one is read in the background from a snapshot, 7/7), and the TRANSIENT
+ * parked layers. A parked layer larger than `SYNC_PIXELS` gets its bounds in the background from
+ * its occupied tiles refined by its edge tiles (a snapshot read off main, 7/7 review), then its
+ * lines, equal to what its FLAT self gives (content and mask); a smaller one the same at once from
+ * a copy of its tiles. Nothing is materialized, no tile changes state (a swapped one is read where
+ * it is and stays swapped, only off main: a layer with one is read in the background, 7/7), and the TRANSIENT
  * bytes of the copies come back. An entry follows the content version and the pixel
  * generation, not a bitmap: a park, an unpark or a materialization keeps it, a replacement or a
  * mask turned off does not. A blank layer has nothing to snap to and is not materialized.
@@ -153,7 +153,7 @@ class LayerBoundsOnTilesTest {
     private fun transient(): Long = EngineConfig.budget.ledger.of(LedgerCategory.TRANSIENT)
 
     @Test
-    fun aLargeParkedLayerGetsItsFlatBoundsAtOnceAndItsLinesFromItsTiles() {
+    fun aLargeParkedLayerGetsItsFlatBoundsThenItsLinesFromItsTilesInTheBackground() {
         val d = doc(800, 400)
         assertTrue(800L * 400 > LayerBoundsCache.SYNC_PIXELS)
         val layers = d.layers.take(3)
@@ -167,10 +167,19 @@ class LayerBoundsOnTilesTest {
         val states = layers.map { l -> A8Kit.tilesOf(l).map { it.state } }
         val tiles = A8Kit.tiles()
         val transient = transient()
-        val cache = LayerBoundsCache(scope, detectLines = true) {}
+        // 7/7 review: nothing is read on main (an edge scan there cost about 15 ms per phone-size
+        // layer); every queued layer gets its bounds before any of them gets its lines.
+        lateinit var cache: LayerBoundsCache
+        val seen = ArrayList<Pair<Int, Int>>()
+        cache = LayerBoundsCache(scope, detectLines = true) {
+            seen += layers.count { cache.bounds(it) != null } to layers.count { cache.isKnown(it) }
+        }
         cache.request(layers)
-        assertEquals("the bounds at once", flat.bounds, layers.map { cache.bounds(it) })
+        assertTrue("nothing known on main", layers.all { cache.bounds(it) == null && !cache.isKnown(it) })
+        assertTrue("queued", cache.isBusy)
         val parked = scan(cache, layers)
+        assertTrue("updates came: $seen", seen.isNotEmpty())
+        assertTrue("every bounds before any lines: $seen", seen.all { (b, k) -> k == 0 || b == layers.size })
         assertEquals(flat.bounds, parked.bounds)
         assertEquals("the lines of the FLAT layers", flat.lines, parked.lines)
 

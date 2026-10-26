@@ -3709,9 +3709,13 @@ and its tiles never leave RAM (`PinPreventsParkTest`, `PinPreventsSwapOutTest`).
 nothing in (`PinNeverSwapsInTest`); `pinResident()` makes every tile resident first. `DataLift`
 pins the lifted layer from `lift` to `release` (region `v110-A8 pins`).
 
-**Activation in the editor (region `v110-A8 activate`).** `prepareLayer` (the press on a layer
-row) starts the unpark before the release selects the row, so the switch usually finds the layer
-FLAT. `selectLayer` sets the index, and the setter activates. While an asynchronous activation
+**Activation in the editor (region `v110-A8 activate`).** `prepareLayer` starts the unpark of a
+layer about to be selected, so the switch finds it FLAT. It is meant for the press on a layer
+row, before the release selects the row, but nothing calls it yet: the layers panel (A7's
+`ui/layers/LayersPanel.kt`) calls only `selectLayer` (a LeadRequest). `selectLayer` prepares the
+layer itself and then sets the index, and the setter activates: a layer whose tiles are all
+resident is FLAT before the tool sees it, and one with tiles out of RAM is read by the worker
+while `activating` holds input. While an asynchronous activation
 holds input, undo and redo wait in order (`UndoManager.beginWaiting`;
 `ActivationAsyncHoldsInputTest`). `LayerSwitchTimingTest` measures a switch to a resident layer on
 the PC, and `LayerSwitchBigTimingTest` a switch to a swapped 4000 x 5000 layer (512 x 512 on CI).
@@ -3770,13 +3774,21 @@ and Duplicate folder copy every content and mask store by its kind:
 - A parked store becomes a `snapshot()` that shares its tiles: one reference more on each, no
   bytes, nothing read or materialized.
 - A blank store becomes another blank store.
-- A flat bitmap is copied as in v1.9, through the facade; so is an evicted store.
+- A flat bitmap is copied as in v1.9, through the facade; so is an evicted store. The active
+  layer is FLAT, so a duplicate of it costs a full copy, as in v1.9.
+
+The copy of a layer becomes the active layer, as in v1.9. So the end-of-task activation makes a
+parked copy FLAT: its own bitmap, read from the shared tiles, at the cost of a switch to a parked
+layer (`LayerSwitchTimingTest`). The snapshot is then released. When the copy parks again it is
+cut into tiles of its own (see Known gaps). The sharing lasts for the copies inside a duplicated
+folder, which stay parked until used.
 
 Duplicate selection of a parked layer draws its copy from the tiles (`TiledPixels.materialize`)
 and leaves the layer parked. While undone, `AddLayerAction` holds the added layer's tiles. Its
 `dispose` lets go of the tiled stores of a layer that no document or pin holds, so an undone
 duplicate dropped from the redo stack gives its references back (`DuplicateIsCowTest`).
-`DuplicateCowTimingTest` measures the duplicate of a parked 1080 x 2408 layer (PC budget 2 ms).
+`DuplicateCowTimingTest` measures the duplicate of a parked 1080 x 2408 layer (PC budget 2 ms),
+up to the activation at the end of the task.
 
 **Snapping bounds (`LayerBoundsCache`).** An entry is keyed on `contentVersion`,
 `pixelGeneration`, whether a mask applies, and the store's size. It is never keyed on bitmap
@@ -3789,18 +3801,23 @@ asking for them materializes nothing. Main never reads a swap slot here:
 - A small layer (at most 512 x 512 px) with every tile in RAM is scanned at once. A flat bitmap
   is scanned where it is; any other store is scanned from a copy read from its tiles
   (`TileOps.readRegion`, TRANSIENT).
-- A big parked layer with every tile in RAM gets its bounds at once from `occupiedBounds`,
-  narrowed by an edge scan. The scan reads only the outer tiles that hold content, one 256 px
-  cell at a time, under a plain `pin()`. It trims the bounds by the mask's hidden cells, from a
-  flat mask or from the mask's own tiles. The design asks for `pinResident()` here, which would
-  read every swapped tile of the layer on main.
-- A layer whose content or applying mask holds a SWAPPED tile goes to the worker. On main the
-  worker takes a `snapshot()` of each tiled store (sharing its tiles) under a plain pin, and
-  reserves the copy's bytes under TRANSIENT. It reads the snapshot with `TileOps.readRegion` on
-  `Dispatchers.Default`, and gives the snapshot, the pin and the bytes back on main, as A11 reads
-  a layer for a save. The swapped tiles stay SWAPPED (`LayerBoundsOnTilesTest`).
-- The worker finds a big parked layer's lines later, on a TRANSIENT copy. With no room for the
-  copy, the layer has no lines; the cache never materializes it.
+- A big layer goes to the cache's worker, parked or FLAT (v1.9's rule for a big flat layer). A
+  big parked layer's edge scan used to run on main: 14.7 ms per 1080 x 2408 layer on the PC,
+  about 17.5 s at x6 for a Transform over 199 parked layers. Asking for 24 such layers now costs
+  main 0.375 ms on the PC (2.3 ms at x6; `A8BoundsRequestTimingTest`, budget 2.5 ms).
+- A layer whose content or applying mask holds a SWAPPED tile also goes to the worker, at any
+  size.
+- On main the worker takes a `snapshot()` of each tiled store (sharing its tiles) under a plain
+  pin. It reads the snapshot on `Dispatchers.Default` and gives the snapshot and the pin back on
+  main, as A11 reads a layer for a save. Swapped tiles stay SWAPPED (`LayerBoundsOnTilesTest`).
+- A parked layer's bounds come first: `occupiedBounds`, narrowed by an edge scan that reads only
+  the outer tiles holding content, one 256 px cell at a time, then trimmed by the mask's hidden
+  cells (a flat mask's copy or the mask's own tiles). No full-size copy is made for this.
+- The layer then goes back in the queue, so every queued layer has its bounds before any has its
+  lines. Its lines come from a full-size copy of the snapshot, its bytes reserved under
+  TRANSIENT. With no room for the copy the layer has no lines; the cache never materializes it.
+- The design asks for `pinResident()` here, which would read every swapped tile on main. A
+  plain pin and reads off main keep every tile where it is.
 - A blank layer has nothing to snap to. An evicted layer is skipped.
 
 **Facade (section 2.2, I28).** Under `PixelFacade.strict` nothing in this area materializes a
@@ -3819,8 +3836,10 @@ The layers panel is A9's.
 - Pixel edits through `beginEdit` settle a waiting undo first. Two kinds of edit do not, yet (a
   LeadRequest for `EditorController.withToolPaused()` and `editScope`):
   - Clear layer without a selection swaps in a blank store, with no recorder. Made while an undo
-    of the same layer waits, it is applied before that undo, and the undo then writes its tiles
-    over the cleared layer.
+    of the same layer waits, it is applied before that undo. The undo then applies nothing (the
+    layer's store is no longer the flat one it waited on), and the Clear's push drops it from the
+    history. So an undo of the Clear brings the content back with the edit, and that edit can no
+    longer be undone.
   - A tool's lift or proxy, read in `onActivate` while an undo waits, reads the pixels from before
     that undo.
 - A settle reads the waiting step's SWAPPED tiles on main, by design: the edit cannot wait for the
@@ -3832,6 +3851,9 @@ The layers panel is A9's.
   synchronously and reads its SWAPPED tiles on main. Running `onActivate` when the activation ends
   needs `EditorController` outside the A8 region (a LeadRequest).
 - A park does not reuse the last edit's tiles (design 2.6): a parked layer's tiles are cut anew.
+- Nothing calls `prepareLayer` at the press on a layer row yet, so the unpark starts at the
+  release (`selectLayer`), not at the press (design 2.7; a LeadRequest for A7's
+  `ui/layers/LayersPanel.kt`).
 
 <!-- /v110-A8 -->
 
