@@ -121,6 +121,16 @@ android {
                 // core/Parallel's threads keep evicted sandboxes reachable: one JVM for the whole
                 // suite (~2650 tests) runs out of memory, so start a fresh one every 40 classes.
                 it.forkEvery = 40
+                // v1.10 lead (CI fix at A8's merge): the ubuntu-26.04 runners keep /tmp in a small
+                // tmpfs with a quota, and every fork above unpacks Robolectric's native runtime (about
+                // 200 MB) there, beside each test's app folders: the shards of the first run on that
+                // image stopped with "Disk quota exceeded". On a GitHub runner the test JVMs keep their
+                // temporary files on the runner's disk ($RUNNER_TEMP) instead; locally nothing changes.
+                System.getenv("RUNNER_TEMP")?.takeIf { t -> t.isNotBlank() }?.let { runnerTemp ->
+                    val testTmp = File(runnerTemp, "test-jvm-tmp")
+                    it.doFirst { testTmp.mkdirs() }
+                    it.systemProperty("java.io.tmpdir", testTmp.absolutePath)
+                }
                 // v1.8 (CI2): on CI the non-timing tests run in two JVMs, and the timing tests
                 // (@Category(Timing), every class that reads a clock) run alone in a second, serial
                 // step (-PtimingOnly), so two JVMs sharing cores never skew a budget. Locally nothing

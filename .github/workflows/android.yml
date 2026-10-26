@@ -25,10 +25,13 @@ concurrency:
 # level (-PunitFull: -PengineMode=full with ChaosResidency, without the Timing, ClassicOnly and
 # EngineGolden tests and the classes of app/src/test/unit-full-backlog.txt), and test-count checks
 # its floor too (app/src/test/test-count-full.txt).
+# v1.10 lead (CI fix at A8's merge): every job runs on ubuntu-24.04, not ubuntu-latest: the first run
+# on ubuntu-26.04 stopped every test shard with "Disk quota exceeded" in /tmp (app/build.gradle.kts
+# now also keeps the test JVMs' temporary files in $RUNNER_TEMP).
 jobs:
   unit:
     name: Unit tests (shard ${{ matrix.testShard }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -72,7 +75,7 @@ jobs:
   # v1.10 F1: the suite at FULL (app/build.gradle.kts, -PunitFull), three shards like unit.
   unit-full:
     name: Unit tests at FULL (shard ${{ matrix.testShard }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -116,7 +119,7 @@ jobs:
   # The @Category(Timing) tests, alone in one JVM (app/build.gradle.kts, -PtimingOnly).
   timing:
     name: Timing tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
       CI: 'true'
@@ -149,7 +152,7 @@ jobs:
   test-count:
     name: Test count
     needs: [ unit, unit-full ]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
@@ -216,7 +219,7 @@ jobs:
   release:
     name: Build release APK
     needs: [ unit, unit-full, timing, test-count ]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7

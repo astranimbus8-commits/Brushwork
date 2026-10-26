@@ -6,6 +6,7 @@ name: Soak tests
 # A workflow of its own, so its schedule neither changes the triggers of "Build APK" nor shares
 # its concurrency group (a nightly run never cancels a push build of main, nor the reverse).
 # v1.10 F1: the nightly chaos job (below) runs beside it.
+# v1.10 lead (CI fix at A8's merge): ubuntu-24.04, as in android.yml (/tmp quota on ubuntu-26.04).
 on:
   schedule:
     - cron: '30 2 * * *'
@@ -21,7 +22,7 @@ concurrency:
 jobs:
   soak:
     name: Soak tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
       CI: 'true'
@@ -68,7 +69,7 @@ jobs:
   # test, no class of app/src/test/unit-full-backlog.txt).
   chaos:
     name: Park chaos (shard ${{ matrix.testShard }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     strategy:
       fail-fast: false
