@@ -122,8 +122,8 @@ class DisplayTiles(val docWidth: Int, val docHeight: Int, val tileSize: Int = 51
 
     /**
      * v1.10 A9 step 7 (design 2.5, X5): draws the units above the active unit from a cache of
-     * their composite onto transparency, while a finger paints ([gestureDown]). Within 2 LSB per
-     * channel of the full draw, never exact: the parts it drew are re-rendered exactly once the
+     * their composite onto transparency, while a finger paints ([gestureDown]). A few LSB per
+     * channel from the full draw (design 2; measured at most 4), never exact: the parts it drew are re-rendered exactly once the
      * gesture ends ([exactAfterGesture]). Main thread.
      */
     internal interface AboveRenderer {
@@ -175,6 +175,15 @@ class DisplayTiles(val docWidth: Int, val docHeight: Int, val tileSize: Int = 51
         }
         approxCount = 0
         return true
+    }
+
+    /**
+     * X5 for every caller: an update with the finger up ([gestureDown] false) first marks what the
+     * above projection drew for rendering again ([exactAfterGesture]), so no caller (the view, the
+     * live adjustments' frames) leaves approximate pixels shown once the gesture ended.
+     */
+    private fun exactWhenFingerUp() {
+        if (!gestureDown && approxCount > 0) exactAfterGesture()
     }
 
     /** Marks part [part] of tile [idx] dirty (a waiting job there is cancelled, its part joins), without telling the hooks: nothing changed in the document. */
@@ -280,6 +289,7 @@ class DisplayTiles(val docWidth: Int, val docHeight: Int, val tileSize: Int = 51
      * only pays for what is on screen). Null renders every dirty tile.
      */
     fun update(compositor: Compositor, visibleDoc: Rect? = null): Boolean {
+        exactWhenFingerUp()
         if (dirtyCount == 0) return false
         if (gestureDown && !projectionsOff) aboveRenderer?.beginUpdate()
         var changed = false
@@ -445,6 +455,7 @@ class DisplayTiles(val docWidth: Int, val docHeight: Int, val tileSize: Int = 51
         skip: ((Int) -> Boolean)? = null,
         center: PointF? = null,
     ): TileUpdate {
+        exactWhenFingerUp()
         if (dirtyCount == 0) return TileUpdate.of(changed = false, hasMore = false)
         var n = 0
         val tr = budgetRect

@@ -101,11 +101,70 @@ class AboveBuildTimingTest {
         }
     }
 
+    /**
+     * The first update after a gesture that drew through the projection on all 4 display tiles of
+     * the 512 px document (a scribble whose dabs reach every edge of every tile): every part the
+     * projection drew is rendered again exactly with the projections off (X5, I33), here the whole
+     * document at N = 200. The stroke frames are not timed; only the lift is.
+     */
+    @Test
+    fun liftAfterFourTileStroke() {
+        val kit = StrokeFrameKit(WaitingTimingKit.stack(N, 177L), ACTIVE)
+        val above = AboveProjection({ kit.doc }, { kit.active }, { null })
+        try {
+            above.install(kit.tiles)
+            val paint = Paint().apply { isAntiAlias = true }
+            var step = 0
+            val stroke = {
+                for (y in DABS) for (x in DABS) {
+                    val b = (kit.active.pixels as FlatPixels).bitmap
+                    step++
+                    paint.color = Color.argb(200, step * 31 and 255, step * 17 and 255, 90)
+                    Canvas(b).drawCircle(x.toFloat(), y.toFloat(), 12f, paint)
+                    kit.tiles.invalidate(Rect(x - 14, y - 14, x + 14, y + 14))
+                    kit.tiles.gestureDown = true
+                    kit.tiles.update(kit.compositor)
+                    kit.tiles.gestureDown = false
+                }
+            }
+            val lift = {
+                kit.tiles.exactAfterGesture()
+                kit.tiles.projectionsOff = true
+                kit.tiles.update(kit.compositor)
+                kit.tiles.projectionsOff = false
+            }
+            val ms = PerfBudget.measuredWithin(PerfBudget.ms(LIFT_BUDGET_MS), what = "the lift after a 4-tile stroke, N = 200") {
+                repeat(3) { stroke(); lift() }
+                val times = DoubleArray(15) {
+                    stroke()
+                    assertTrue("the stroke drew through the projection on every tile", (0 until kit.tiles.tileCount).all { kit.tiles.approxPart(it) != null })
+                    PerfBudget.timeMs(lift)
+                }
+                times.sort()
+                times[times.size / 2]
+            }
+            println("AboveBuildTimingTest: lift after a 4-tile stroke, median $ms ms (budget ${PerfBudget.ms(LIFT_BUDGET_MS)} ms, self-chosen)")
+            assertTrue("nothing approximate after the lift", !kit.tiles.hasApprox)
+            val expected = ProjectionOracle.frame(kit.doc, display = true)
+            A9Docs.assertBitEqual("the display after the lift against the oracle", expected, WaitingTimingKit.shown(kit.tiles))
+            expected.recycle()
+        } finally {
+            above.freeAll()
+            kit.release()
+        }
+    }
+
     private companion object {
         const val N = 200
         const val ACTIVE = 10
 
-        /** Self-chosen (no design budget): the PC median times 6. */
-        const val BUDGET_MS = 60.0
+        /** Self-chosen (no design budget): the frame that builds one 256 px tile stays under 48 ms at x6 (PC median about 2.5-3.7 ms). */
+        const val BUDGET_MS = 8.0
+
+        /** Self-chosen (no design budget): the lift after a stroke over 4 x 256 px at N = 200 stays under 180 ms at x6 (PC median about 17 ms). */
+        const val LIFT_BUDGET_MS = 30.0
+
+        /** Dab centres reaching every edge of the 4 display tiles of 256 px (radius 12, parts of 28 px). */
+        val DABS = intArrayOf(14, 242, 270, 498)
     }
 }

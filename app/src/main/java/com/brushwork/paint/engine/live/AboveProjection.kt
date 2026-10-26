@@ -23,7 +23,8 @@ import com.brushwork.paint.model.Layer
  * active unit's top (from the below projection's cache, X4) plus this cache drawn over them with
  * SRC_OVER. Every unit above then draws onto what is below it as source-over
  * ([ProjectionRules.aboveEligible]), which is associative in exact arithmetic; the 8-bit rounding
- * happens at other places, so a frame is within 2 LSB per channel of the full draw, never exact.
+ * happens at other places, so a frame differs from the full draw by a few LSB per channel (the
+ * design says 2; `AboveProjectionErrorTest` measures 2 on the bulk and at most 4), never exact.
  * The parts it drew are re-rendered exactly by the first update after the gesture
  * (`DisplayTiles.exactAfterGesture`, with the projections off: I33).
  *

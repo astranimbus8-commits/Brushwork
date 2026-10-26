@@ -98,7 +98,7 @@ class WaitingTileOverTileRamTest {
                 for (row in 0 until t.rows) for (col in 0 until t.cols) {
                     val tile = t.tileAt(col, row) ?: continue
                     if (tile.solidColor != null) continue
-                    swap.swapOut(tile)
+                    A9Docs.swapOut(swap, tile)
                     bytes += tile.bytes
                 }
             }

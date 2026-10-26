@@ -20,6 +20,7 @@ import com.brushwork.paint.engine.tiles.Tile
 import com.brushwork.paint.engine.tiles.TiledPixels
 import com.brushwork.paint.model.Layer
 import java.util.concurrent.Executor
+import java.util.concurrent.RejectedExecutionException
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -228,7 +229,7 @@ class LayerThumbnails internal constructor(
             return done(r)
         }
         val pin = r.layer.pin()
-        worker.execute {
+        val read = Runnable {
             val held = ArrayList<Cell>()
             var failure: Throwable? = null
             for (cell in need) {
@@ -247,6 +248,16 @@ class LayerThumbnails internal constructor(
                 }
             }
             main.post { readDone(r, pin, inter, canvas, held, failure, w, h, big, sx, sy) }
+        }
+        try {
+            worker.execute(read)
+        } catch (e: RejectedExecutionException) {
+            // The worker refused the read (shut down): the pin is closed now and the placeholder
+            // stays until the key changes, as after a failed read.
+            pin.close()
+            inter.recycle()
+            failed += r.want
+            done(r)
         }
     }
 

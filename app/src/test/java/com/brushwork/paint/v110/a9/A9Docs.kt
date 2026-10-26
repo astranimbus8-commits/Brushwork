@@ -12,11 +12,14 @@ import com.brushwork.paint.engine.CompositeTarget
 import com.brushwork.paint.engine.Compositor
 import com.brushwork.paint.engine.EngineConfig
 import com.brushwork.paint.engine.EngineLevel
+import com.brushwork.paint.engine.budget.LedgerCategory
+import com.brushwork.paint.engine.tiles.Tile
 import com.brushwork.paint.masks.AdjustmentSpec
 import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.FolderSpec
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.LayerBlendMode
+import com.brushwork.paint.testing.FakeSwapStore
 import org.junit.Assert.fail
 import java.util.Random
 import kotlin.math.ceil
@@ -132,6 +135,18 @@ object A9Docs {
      */
     fun dispose(d: Document) {
         for (l in d.layers) l.recycleBitmaps()
+    }
+
+    /**
+     * Swaps [t] out through [swap] (`FakeSwapStore.swapOut`) and gives its bytes back to the
+     * ledger, as a real swap-out does: `FakeSwapStore.swapOut` drops the tile's bitmap without
+     * `ledger.sub`, so every tile swapped that way stayed in the JVM's shared ledger (TILES) for
+     * good, and a later test with a known budget found no room for a band.
+     */
+    fun swapOut(swap: FakeSwapStore, t: Tile) {
+        val held = t.bitmap != null && t.solidColor == null
+        swap.swapOut(t)
+        if (held) EngineConfig.budget.ledger.sub(LedgerCategory.TILES, t.bytes.toLong())
     }
 
     /** [dispose] of every [track]ed document (each A9 test's `@After`). */

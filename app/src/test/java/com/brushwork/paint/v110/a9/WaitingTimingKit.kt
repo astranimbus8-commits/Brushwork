@@ -9,6 +9,8 @@ import android.os.Looper
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.Compositor
 import com.brushwork.paint.engine.DisplayTiles
+import com.brushwork.paint.engine.EngineConfig
+import com.brushwork.paint.engine.budget.LedgerCategory
 import com.brushwork.paint.engine.live.WaitingTiles
 import com.brushwork.paint.engine.tiles.ChaosResidency
 import com.brushwork.paint.engine.tiles.TileOps
@@ -73,7 +75,7 @@ object WaitingTimingKit {
         for (s in stores) for (row in 0 until s.rows) for (col in 0 until s.cols) {
             val t = s.tileAt(col, row) ?: continue
             if (t.solidColor != null) continue
-            swap.swapOut(t)
+            A9Docs.swapOut(swap, t)
             n++
         }
         return n
@@ -91,6 +93,8 @@ object WaitingTimingKit {
                 t.packed = packed
                 t.bitmap = null
             }
+            // As a real pack: the bitmap's bytes leave the ledger (else they stay there for every later test).
+            EngineConfig.budget.ledger.sub(LedgerCategory.TILES, t.bytes.toLong())
             n++
         }
         return n

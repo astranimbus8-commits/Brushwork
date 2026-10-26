@@ -87,7 +87,7 @@ class PixelReadsTiledTest {
                 val t = store as? TiledPixels ?: continue
                 for (row in 0 until t.rows) for (col in 0 until t.cols) {
                     val tile = t.tileAt(col, row) ?: continue
-                    if (tile.solidColor == null) swap.swapOut(tile)
+                    if (tile.solidColor == null) A9Docs.swapOut(swap, tile)
                 }
             }
         }

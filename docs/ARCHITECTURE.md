@@ -3877,7 +3877,7 @@ the compositor, the display and every reader of a layer that may be inactive wor
 layers (TILED stores) exactly as on flat ones, and never materialize them. Code:
 `engine/tiles/BandAssembler.kt` (new), `engine/Compositor.kt`, `engine/FolderComposite.kt`,
 `engine/AdjustmentStage.kt`, `engine/RenderScaled.kt`, `engine/DisplayTiles.kt`,
-`engine/live/WaitingTiles.kt`, `ProjectionRules.kt`, `BelowProjection.kt` (new),
+`engine/live/WaitingTiles.kt`, `ProjectionRules.kt`, `BelowProjection.kt` (new), `AboveProjection.kt` (new),
 `StrokeBelowCache.kt`, `LiveAdjust.kt`, `engine/tiles/PixelReads.kt`, `ui/editor/CanvasView.kt`,
 the C-REG readers and `ui/layers/LayerThumbnails.kt`, `FolderThumbnails.kt`. No document change.
 
@@ -3990,16 +3990,58 @@ stays. `FolderThumbnails.key` mixes the children's `pixelGeneration`, `contentVe
   (16 MiB) per panel; the oldest go first.
 - No park notification exists before A8's `ResidencyPolicy`, so the picture is made when a row
   first shows a parked layer without one, not at park time.
-Not built (cut 2, empty commit 7/7): the above projection (X5). `EngineConfig.aboveProjection`
-is read by nothing in the engine, and stroke frames draw the layers above the split on the plain
-path.
+- A worker that refuses the read (`RejectedExecutionException`, shut down) closes the pin at
+  once and keeps the placeholder until the key changes, as a failed read does.
+- A folder's picture never reads on main either. When some layer of its block holds tiles that
+  are not resident (content, or an enabled mask), `FolderThumbnails.render` reads them on the
+  waiting tiles' worker under pins and composites later on main with the copies lent
+  (`BandAssembler.lend`, as the waiting tiles do). The picture lands only when the key is still
+  the one read. At most `FOLDER_READ_BYTES` (16 MiB: two waiting chunks) per picture; a block
+  that needs more keeps its last picture, or the glyph, until its layers are resident again.
+
+**Above projection (X5, J7, step 7).** At TILES and FULL with `EngineConfig.aboveProjection` (the
+check's M5 <= 30 ms; `ProjectionRules.aboveOn`), `LiveAdjust.aboveProjection`
+(`engine/live/AboveProjection.kt`) is the display's `AboveRenderer`, installed by
+`attachProjection` next to the below projection.
+- It is used only while a finger paints the active layer: `CanvasView` sets
+  `DisplayTiles.gestureDown` around its update. A dirty part is then the below projection's cache
+  (or a CLEAR) plus `drawSplit(k, u)`, then the cache of units `[u, n)` composited onto
+  transparency, drawn with SRC_OVER. `u` is `ProjectionRules.aboveStart`: the first unit above
+  the active unit, after the layers clipped to the active layer.
+- Eligible (`aboveEligible`, design 2.5): the active layer is drawn as is and not clipped; at
+  least 8 visible units above; every unit above, at every level out to the root, is a Normal
+  layer, a clip group with a Normal base, an isolated Normal folder, or a pass-through folder at
+  100 % whose children qualify; no visible adjustment layer there. Pass-through below 100 % is
+  not eligible (A8's coverage lerp is not source-over). Never while a render override draws a
+  layer above.
+- `BelowKey` over the layers above the active layer (`[a + 1, n)`), plus the active layer and its
+  index. Edits of the active layer never change it. Any mismatch drops the whole projection, and
+  eligibility is decided again then.
+- Built a whole display tile at a time, at most one per update (`beginUpdate`), and only when
+  every layer it reads is resident there (`WaitingTiles.needsReads(from = u)`); otherwise the part
+  takes the exact paths, which may wait (P4). Persistent across strokes while the key stays. At
+  most `min(displayHeld, R / 8)` bytes; registered with `MemoryGovernor` as "above-projection"
+  at priority 20, freed above NORMAL.
+- Not exact: per-step 8-bit rounding differs between drawing the units onto the backdrop and
+  onto transparency. Measured by `AboveProjectionErrorTest` against the full draw: 2 LSB on the
+  200-layer stack and on most constructs, 3 LSB on 30 Normal layers (0.1 % of the drawn bytes
+  over 2 LSB), at most 4 LSB on random eligible stacks (0.006 % over 2 LSB). The design's
+  "<= 2 LSB" therefore holds for the bulk, not as a maximum (a reported deviation).
+- `DisplayTiles` records each part the projection drew (`approxPart`; `isExact` is false there).
+  The first update with the finger up renders them again exactly: `CanvasView` calls
+  `exactAfterGesture()` with `projectionsOff` (I33), and every other `update` /
+  `updateBudgeted` with `gestureDown` false does the same first, so no caller (the live
+  adjustment's frames too) leaves approximate pixels shown. Its cost is the composite of every
+  part the stroke touched: `AboveBuildTimingTest` measures about 17 ms on the PC for a stroke
+  over 4 x 256 px at N = 200.
 
 Tests: `test:v110/a9/` (`TiledCompositeGoldenTest`, `BlankSkipExactTest`, `Api28BlendParityTest`,
 `WaitingTileOverTileRamTest`, `BelowProjectionExactTest`, `PixelReadsTiledTest`,
 `CRegToolsParkedLayerTest`, `PanelNoMaterializeTest`, `BelowProjectionWaitingTest`, `WaitingReadOwnershipTest`,
-`ThumbnailFromTilesTest`, and the Timing classes `BandAssemblerTimingTest`,
+`ThumbnailFromTilesTest`, `AboveProjectionErrorTest`, and the Timing classes `BandAssemblerTimingTest`,
 `FullRerender500TimingTest`, `FirstCompositeEvictedTimingTest`, `StrokeFrame200TimingTest`,
-`StrokeFrame100PlainTimingTest`, `BelowRebuildTimingTest`, `ThumbnailAtParkTimingTest`) and
+`StrokeFrame100PlainTimingTest`, `BelowRebuildTimingTest`, `ThumbnailAtParkTimingTest`,
+`AboveBuildTimingTest`) and
 `test:qa110/Qa110TiledCanvasUiTest`. That UI test runs 200 layers at TILES (parked, then packed
 after an eye toggle) on the canvas, bit-equal to Classic, at 392 and 360 dp and font scale 1,
 1.3 and 2.0, with no text overflowing in either editor.

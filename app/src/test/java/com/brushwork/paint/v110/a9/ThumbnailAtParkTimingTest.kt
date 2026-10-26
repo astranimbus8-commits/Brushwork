@@ -67,7 +67,7 @@ class ThumbnailAtParkTimingTest {
         val l = Layer(d.newLayerId(), "Painted", b).also { d.layers += it }
         assertTrue(ChaosResidency().park(l))
         val t = l.pixels as TiledPixels
-        for (row in 0 until t.rows) for (col in 0 until t.cols) t.tileAt(col, row)?.let { if (it.solidColor == null) swap.swapOut(it) }
+        for (row in 0 until t.rows) for (col in 0 until t.cols) t.tileAt(col, row)?.let { if (it.solidColor == null) A9Docs.swapOut(swap, it) }
         val inline = Executor { it.run() }
         val main = Handler(Looper.getMainLooper())
         val make = {

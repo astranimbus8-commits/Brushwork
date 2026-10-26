@@ -407,6 +407,26 @@ class AboveProjectionErrorTest {
         release(s)
     }
 
+    /**
+     * X5 for every caller: an update with the finger up that is not the view's lift (the live
+     * adjustments' `updateBudgeted`, without `exactAfterGesture` or `projectionsOff`) renders what
+     * the projection drew again; nothing approximate stays shown.
+     */
+    @Test
+    fun anyUpdateWithTheFingerUpIsExact() {
+        val stack = Stack(42L, List(10) { Kind.NORMAL })
+        val s = setup(stack.doc, stack.active)
+        assertWithinBound("the stroke", stroke(s, Random(42L), 6))
+        assertTrue(s.tiles.hasApprox)
+        s.tiles.updateBudgeted(s.compositor, null, Long.MAX_VALUE)
+        assertExact("a budgeted update with the finger up", s)
+        assertWithinBound("a second stroke", stroke(s, Random(43L), 6))
+        assertTrue(s.tiles.hasApprox)
+        s.tiles.update(s.compositor)
+        assertExact("a plain update with the finger up", s)
+        release(s)
+    }
+
     /** A stroke that must not draw through the above projection: its frames are exact. */
     private fun assertNotUsed(name: String, s: Setup, seed: Long) {
         val hits = s.above.hits
