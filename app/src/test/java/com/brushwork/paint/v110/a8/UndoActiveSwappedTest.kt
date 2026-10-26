@@ -543,6 +543,43 @@ class UndoActiveSwappedTest {
     }
 
     /**
+     * Lead (A8): a canvas operation started while an undo waits (`CanvasOps.run`) settles it
+     * before it takes its snapshot, so it works on the undone layer: rotated back, the layer is
+     * the undone one, and the undone stroke is nowhere in it.
+     */
+    @Test
+    fun aRotationStartedWhileAnUndoWaitsWorksOnTheUndoneLayer() {
+        val c = editor()
+        val l = c.doc.layers[2]
+        val before = A8Kit.pixelsOf(l).first
+        A8Kit.paint(c, l, Rect(100, 50, 400, 250), 0xFF3366AA.toInt())
+        swapOutNewest(c)
+
+        c.undo()
+        assertSame(l, c.activating)
+        assertTrue("started", rotate(c, com.brushwork.paint.engine.CanvasRotation.CW_90))
+        assertNull("settled before the snapshot", c.activating)
+        assertEquals("rotated", 300, c.doc.width)
+        assertFalse("the rotation dropped the redo side", c.undoManager.canRedo)
+        assertTrue("rotated back", rotate(c, com.brushwork.paint.engine.CanvasRotation.CCW_90))
+        assertEquals(512, c.doc.width)
+        assertArrayEquals("the undone layer, never the stroke", before, A8Kit.pixelsOf(l).first)
+    }
+
+    /** Runs a rotation of the canvas through `CanvasOps` to its end. */
+    private fun rotate(c: EditorController, r: com.brushwork.paint.engine.CanvasRotation): Boolean {
+        if (!com.brushwork.paint.engine.CanvasOps.applyRotate(c, r)) return false
+        repeat(4000) {
+            if (c.busyMessage == null) return@repeat
+            A8Kit.idle()
+            Thread.sleep(2)
+        }
+        A8Kit.drain()
+        assertNull("the rotation ended", c.busyMessage)
+        return true
+    }
+
+    /**
      * Lead (A8, lead note): a rollback over [a rotation, a stroke whose tiles are SWAPPED]: the
      * stroke's undo waits for its tiles, the rotation's undo (`CanvasOps`' canvas step, applied
      * directly by the rollback, not through the manager) waits behind it, and both apply before
