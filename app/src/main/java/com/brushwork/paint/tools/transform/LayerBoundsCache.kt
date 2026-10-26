@@ -205,7 +205,7 @@ class LayerBoundsCache(
                     try {
                         scan = withContext(Dispatchers.Default) {
                             val c = plan.content
-                            val m = plan.mask
+                            val m = plan.shown
                             val snap = c.store as? TiledPixels
                             val bounds = when {
                                 known != null -> Scan(known.bounds)
@@ -312,12 +312,12 @@ class LayerBoundsCache(
         }
     }
 
-    /** v1.10 (A8): the [content] and applying [mask] a background scan reads; [pin] keeps the snapshots' tiles where they are. */
-    private class Plan(val content: Part, val mask: Part?, private val pin: AutoCloseable?) {
+    /** v1.10 (A8): the [content] and the applying mask ([shown]) a background scan reads; [pin] keeps the snapshots' tiles where they are. */
+    private class Plan(val content: Part, val shown: Part?, private val pin: AutoCloseable?) {
         /** Main: lets go of both parts and the pin. */
         fun done() {
             content.done()
-            mask?.done()
+            shown?.done()
             pin?.close()
         }
     }
