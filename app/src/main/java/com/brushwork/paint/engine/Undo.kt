@@ -476,22 +476,59 @@ class CompositeAction(override val label: String, private val actions: List<Undo
  * selects [activeBefore] again, the row that was active before the add (by reference, as
  * [LayerTreeAction] does); without it (or when it is gone) the index is clamped as before. Redo
  * selects the added layer.
+ *
+ * v1.10 (A8, design 2.6): created applied (the insert is made first). A duplicate of a parked
+ * layer adds a copy-on-write store sharing the source's tiles (`LayerStructure.copyOf`): while
+ * undone, the added layer's tiles are held by this step alone (redo-only, [TileHolder]; P3 walks
+ * the undo stack only, so they are no swap-out candidates until dropped), and [dispose] (the step
+ * dropped from the redo stack) then lets go of its tiled stores, never those of a layer the
+ * document holds or a pin holds (a flat bitmap is left to the GC, as in v1.9).
  */
 class AddLayerAction(
     private val layer: Layer,
     private val index: Int,
     override val label: String = "Add layer",
     private val activeBefore: Layer? = null,
-) : UndoAction {
+) : UndoAction, TileHolder {
     override val byteSize: Long get() = 0 // the layer bitmap is owned by the document while present
-    override fun undo(c: EditorController) = c.structural {
-        c.doc.layers.remove(layer)
-        val i = activeBefore?.let { c.doc.indexOf(it) } ?: -1
-        if (i >= 0) c.doc.activeLayerIndex = i
+
+    /** True while the layer is in the document (by this step). */
+    private var applied = true
+
+    /** The document this step was last applied to: [dispose] never lets go of a layer it holds. */
+    private var doc: Document? = null
+
+    override fun undo(c: EditorController) {
+        c.structural {
+            c.doc.layers.remove(layer)
+            val i = activeBefore?.let { c.doc.indexOf(it) } ?: -1
+            if (i >= 0) c.doc.activeLayerIndex = i
+        }
+        applied = false
+        doc = c.doc
     }
-    override fun redo(c: EditorController) = c.structural {
-        c.doc.layers.add(index.coerceIn(0, c.doc.layers.size), layer)
-        c.doc.activeLayerIndex = c.doc.indexOf(layer)
+
+    override fun redo(c: EditorController) {
+        c.structural {
+            c.doc.layers.add(index.coerceIn(0, c.doc.layers.size), layer)
+            c.doc.activeLayerIndex = c.doc.indexOf(layer)
+        }
+        applied = true
+        doc = c.doc
+    }
+
+    /** The added layer while undone (its tiles are this step's); null while applied, so P3's undo-age count is as before. */
+    override val tileLayer: Layer? get() = if (applied) null else layer
+
+    override fun forEachTile(block: (Tile) -> Unit) {
+        if (applied) return
+        forEachTileOf(layer.pixels, block)
+        forEachTileOf(layer.maskPixels, block)
+    }
+
+    override fun dispose() {
+        if (applied || layer.pins > 0 || doc?.indexOf(layer)?.let { it >= 0 } == true) return
+        for (s in arrayOf(layer.pixels, layer.maskPixels)) if (s is TiledPixels) TileOps.releaseStore(s)
     }
 }
 
