@@ -4,6 +4,9 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Matrix
 import android.graphics.PorterDuff
+import com.brushwork.paint.engine.tiles.BandAssembler
+import com.brushwork.paint.engine.tiles.FlatPixels
+import com.brushwork.paint.engine.tiles.PixelStore
 import com.brushwork.paint.model.Document
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -34,7 +37,7 @@ object RenderScaled {
     /** What a render draws, taken on the main thread. */
     class Source private constructor(
         internal val doc: Document?,
-        internal val layer: Bitmap?,
+        internal val layer: PixelStore?,
         /** The source's size (document px). */
         val width: Int,
         val height: Int,
@@ -50,7 +53,15 @@ object RenderScaled {
             }
 
             /** One layer's pixels (main thread; read, never changed or recycled by a render). */
-            fun layer(bitmap: Bitmap): Source = Source(null, bitmap, bitmap.width, bitmap.height)
+            fun layer(bitmap: Bitmap): Source = Source(null, FlatPixels(bitmap), bitmap.width, bitmap.height)
+
+            /**
+             * v1.10 (A9): one layer's store as it is now (main thread): flat, blank or parked; a
+             * parked one is read tile by tile and scaled through `BandAssembler` (X2), never
+             * materialized. The caller keeps the store readable meanwhile (a `snapshot()` of a
+             * tiled store, or a pin).
+             */
+            fun layer(store: PixelStore): Source = Source(null, store, store.width, store.height)
         }
     }
 
@@ -78,12 +89,8 @@ object RenderScaled {
     /** [source] at [w] x [h] (at most its own size; Color select's proxy size); as [render]. */
     fun renderAt(source: Source, w: Int, h: Int, withPaper: Boolean): Bitmap {
         require(w in 1..source.width && h in 1..source.height) { "render size ${w}x$h of ${source.width}x${source.height}" }
-        source.layer?.let { bmp ->
-            if (w == bmp.width && h == bmp.height) {
-                return bmp.copy(Bitmap.Config.ARGB_8888, false) ?: throw OutOfMemoryError("layer copy ${bmp.width}x${bmp.height}")
-            }
-            return Bitmap.createScaledBitmap(bmp, w, h, true)
-        }
+        // A layer: a copy at its own size, else scaled (a flat one as v1.9, a parked one in bands).
+        source.layer?.let { store -> return BandAssembler.scaled(store, w, h) }
         val doc = requireNotNull(source.doc)
         val compositor = Compositor(doc) { null }
         if (w == doc.width && h == doc.height) return compositor.renderFlattened(withPaper = withPaper)

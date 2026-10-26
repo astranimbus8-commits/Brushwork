@@ -9,6 +9,7 @@ import android.graphics.PorterDuffXfermode
 import android.graphics.Rect
 import android.graphics.RectF
 import android.os.Looper
+import com.brushwork.paint.engine.tiles.BandAssembler
 import com.brushwork.paint.engine.tiles.BlankPixels
 import com.brushwork.paint.engine.tiles.FlatPixels
 import com.brushwork.paint.engine.tiles.FolderPixels
@@ -111,6 +112,9 @@ class CompositeTarget(
  * above one draws unclipped). Without adjustment layers the drawing is exactly v1.4's (I5).
  */
 class Compositor(private val doc: Document, private val overrideProvider: () -> LayerRenderOverride?) {
+
+    /** v1.10 A9 (P4): the document this compositor draws (`engine/live/WaitingTiles` reads its stores). */
+    internal val document: Document get() = doc
 
     private val maskPaint = BitmapUtils.newMaskApplyPaint()
     internal val dstInPaint = Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN) }
@@ -335,7 +339,9 @@ class Compositor(private val doc: Document, private val overrideProvider: () -> 
      * it. Flat: that call (v1.9). Blank: nothing, or a transparent rect where [paint]'s mode
      * clears under a transparent source (API 26-28). Tiled: the tiles inside the clip on an
      * integer-translate canvas (X1; null tiles as transparent rects where the mode clears), else
-     * a band of the clip copied out of the tiles (X2 fallback until A9's `BandAssembler`).
+     * through `BandAssembler.draw` (X2, v1.10 A9: bands of 256 target rows, bit for bit the flat
+     * draw; a null tile is transparent in its band, so a clearing mode clears there as the flat
+     * bitmap's transparent pixels do).
      */
     internal fun drawLayerPixels(c: Canvas, layer: Layer, paint: Paint?) {
         val clears = paint != null && BlendModes.clearsOnTransparent(layer.blendMode)
@@ -348,7 +354,7 @@ class Compositor(private val doc: Document, private val overrideProvider: () -> 
                     if (clears) TileOps.clearNullTiles(p, c, paint, clip)
                     p.drawTo(c, paint ?: plainPaint, clip)
                 } else {
-                    TileOps.drawBand(p, c, paint ?: plainPaint)
+                    BandAssembler.draw(c, p, paint ?: plainPaint)
                 }
             }
             FolderPixels -> c.drawBitmap(Layer.FOLDER_BITMAP, 0f, 0f, paint ?: plainPaint)
@@ -359,7 +365,8 @@ class Compositor(private val doc: Document, private val overrideProvider: () -> 
      * v1.10 (F1, design 2.5): [layer]'s mask through [maskPaint] (DST_IN, luminance to alpha), as
      * `drawBitmap(layer.mask, 0, 0, maskPaint)` draws it; nothing without a mask. Blank: a
      * transparent rect (a transparent mask hides). Tiled: a null tile as a transparent rect, a
-     * solid white tile skipped (X1), or a band where the canvas scales (X2 fallback).
+     * solid white tile skipped (X1), or `BandAssembler.drawMask` where the canvas scales (X2; a
+     * null tile is transparent in its band, which DST_IN draws as a clear).
      */
     internal fun drawMaskPixels(c: Canvas, layer: Layer, maskPaint: Paint) {
         when (val m = layer.maskPixels ?: return) {
@@ -367,7 +374,7 @@ class Compositor(private val doc: Document, private val overrideProvider: () -> 
             is BlankPixels -> c.drawRect(0f, 0f, m.width.toFloat(), m.height.toFloat(), Paint(maskPaint).apply { color = 0 })
             is TiledPixels -> {
                 val clip = TileOps.clipOf(c) ?: return
-                if (TileOps.isUnitTranslate(c)) m.drawMaskTo(c, maskPaint, clip) else TileOps.drawBand(m, c, maskPaint)
+                if (TileOps.isUnitTranslate(c)) m.drawMaskTo(c, maskPaint, clip) else BandAssembler.drawMask(c, m, maskPaint)
             }
             FolderPixels -> c.drawBitmap(Layer.FOLDER_BITMAP, 0f, 0f, maskPaint)
         }
@@ -392,9 +399,33 @@ class Compositor(private val doc: Document, private val overrideProvider: () -> 
         val c = Canvas(out)
         val matte = bg != null && hasLiveAdjustment()
         if (bg != null && !matte) c.drawColor(bg)
-        drawDocument(c, null, useOverrides = false, target = CompositeTarget.identity(out))
+        drawBanded(c, CompositeTarget.identity(out))
         if (matte) c.drawColor(bg, PorterDuff.Mode.DST_OVER)
         return out
+    }
+
+    /**
+     * v1.10 (A9 step 1): [drawDocument] at 1:1 onto [target] (the whole document, no overrides)
+     * in bands of [flattenBand] rows, each clipped to its rows: every `saveLayer` (a masked layer,
+     * a clip group) and adjustment chunk is then at most a band, not the document, which a big
+     * canvas with many layers needs. At scale 1 every step of the composite is per pixel, so the
+     * bands draw exactly what one pass draws; a document of one band is that one pass, as before.
+     */
+    private fun drawBanded(c: Canvas, target: CompositeTarget) {
+        val rows = flattenBand
+        if (doc.height <= rows) {
+            drawDocument(c, null, useOverrides = false, target = target)
+            return
+        }
+        var top = 0
+        while (top < doc.height) {
+            val band = Rect(0, top, doc.width, minOf(doc.height, top + rows))
+            val save = c.save()
+            c.clipRect(band)
+            drawDocument(c, band, useOverrides = false, target = target)
+            c.restoreToCount(save)
+            top = band.bottom
+        }
     }
 
     /**
@@ -436,5 +467,14 @@ class Compositor(private val doc: Document, private val overrideProvider: () -> 
         val out = Bitmap.createScaledBitmap(mid, w, h, true)
         if (out !== mid) mid.recycle()
         return out
+    }
+
+    companion object {
+        /** v1.10 (A9): rows per band of a 1:1 flatten ([renderFlattened], `FolderComposite.renderBlock`): the folder tile. */
+        const val FLATTEN_BAND = FolderComposite.TILE
+
+        /** The band height in use: [FLATTEN_BAND] (tests lower it to band a document of at most 512 rows). */
+        @Volatile
+        internal var flattenBand: Int = FLATTEN_BAND
     }
 }

@@ -12,6 +12,8 @@ import com.brushwork.paint.AppSettings
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.ViewTransform
+import com.brushwork.paint.engine.tiles.FlatPixels
+import com.brushwork.paint.engine.tiles.PixelReads
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.Selection
 import com.brushwork.paint.model.SelectionMode
@@ -115,6 +117,18 @@ internal object PixelSnapshot {
         // v1.9 (design 2.4.9): the composite on the paper, if any, as the Color select proxy sees it.
         if (source == SampleSource.CANVAS || layerBitmap === Layer.FOLDER_BITMAP) controller.compositor.renderFlattened(withPaper = true)
         else layerBitmap.copy(Bitmap.Config.ARGB_8888, false)
+
+    /**
+     * v1.10 A9 (C-REG): [take] of [layer]: the flattened canvas (CANVAS, or a folder), else a copy
+     * of the layer's pixels read from its store (`PixelReads.region`), so a layer that is not
+     * flat is never materialized. MUST be called on the main thread; the caller recycles the result.
+     */
+    fun take(controller: EditorController, source: SampleSource, layer: Layer): Bitmap =
+        if (source == SampleSource.CANVAS || layer.isFolder) controller.compositor.renderFlattened(withPaper = true)
+        else when (val p = layer.pixels) {
+            is FlatPixels -> p.bitmap.copy(Bitmap.Config.ARGB_8888, false)
+            else -> PixelReads.region(layer, Rect(0, 0, p.width, p.height))
+        }
 
     /**
      * Builds the [RegionFill] map for a seed at (sx, sy) by reading [snapshot] in bands (no full

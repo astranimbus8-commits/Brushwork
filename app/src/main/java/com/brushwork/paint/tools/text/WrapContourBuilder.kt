@@ -3,6 +3,11 @@ package com.brushwork.paint.tools.text
 import android.graphics.Bitmap
 import android.graphics.Rect
 import com.brushwork.paint.core.Parallel
+import com.brushwork.paint.engine.BitmapUtils
+import com.brushwork.paint.engine.tiles.BlankPixels
+import com.brushwork.paint.engine.tiles.FlatPixels
+import com.brushwork.paint.engine.tiles.PixelStore
+import com.brushwork.paint.engine.tiles.TiledPixels
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.tools.select.MarchingSquares
 import kotlin.math.abs
@@ -253,7 +258,10 @@ object WrapContourBuilder {
  * (and the second event of the same edit finds it ready).
  */
 class WrapContours {
-    private class Entry(val version: Long, val bitmapId: Int, val maskId: Int, val outline: WrapContourBuilder.Outline)
+    // v1.10 A9 step 4: keyed on the layer's pixelGeneration (bumped when its content or mask store is
+    // replaced) and the mask switch, never on identityHashCode(bitmap): reading a parked layer's
+    // `bitmap` would materialize it, and an identity hash may be reused.
+    private class Entry(val version: Long, val generation: Long, val masked: Boolean, val outline: WrapContourBuilder.Outline)
 
     private val entries = object : LinkedHashMap<Long, Entry>(8, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Long, Entry>?): Boolean = size > CAPACITY
@@ -263,24 +271,43 @@ class WrapContours {
     var traces: Int = 0
         private set
 
-    private fun maskOf(layer: Layer): Bitmap? = layer.mask?.takeIf { layer.maskEnabled }
+    /** The pixels of [store] as a bitmap: a flat store's own (not to recycle), else a copy read without materializing (the caller recycles it). */
+    private fun read(store: PixelStore): Bitmap? = when (store) {
+        is FlatPixels -> store.bitmap
+        is TiledPixels -> BitmapUtils.createLayerBitmap(store.width, store.height).also { store.copyRegion(Rect(0, 0, store.width, store.height), it, 0, 0) }
+        else -> null
+    }
 
     /** The outline of [layer]'s current pixels, or null when there is not enough memory to trace it. */
     fun outline(layer: Layer): WrapContourBuilder.Outline? {
-        val mask = maskOf(layer)
-        val bitmapId = System.identityHashCode(layer.bitmap)
-        val maskId = mask?.let { System.identityHashCode(it) } ?: 0
+        val masked = layer.maskEnabled && layer.hasMask
+        val generation = layer.pixelGeneration
         entries[layer.id]?.let { e ->
-            if (e.version == layer.contentVersion && e.bitmapId == bitmapId && e.maskId == maskId) return e.outline
+            if (e.version == layer.contentVersion && e.generation == generation && e.masked == masked) return e.outline
         }
-        if (layer.bitmap.isRecycled) return null
-        val outline = try {
-            WrapContourBuilder.outline(WrapContourBuilder.scan(layer.bitmap, mask))
-        } catch (e: OutOfMemoryError) {
-            return null
+        val content = layer.pixels
+        val maskStore = if (masked) layer.maskPixels else null
+        if (content is FlatPixels && content.bitmap.isRecycled) return null
+        val outline = if (content is BlankPixels || maskStore is BlankPixels) {
+            // Transparent pixels, or an enabled transparent mask (it hides everything): nothing
+            // blocks text, as the scan of v1.9's transparent bitmap found; no copy is made.
+            WrapContourBuilder.Outline.EMPTY
+        } else {
+            var bitmap: Bitmap? = null
+            var mask: Bitmap? = null
+            try {
+                bitmap = read(content) ?: return null
+                mask = maskStore?.let { read(it) }
+                WrapContourBuilder.outline(WrapContourBuilder.scan(bitmap, mask))
+            } catch (e: OutOfMemoryError) {
+                return null
+            } finally {
+                if (content !is FlatPixels) bitmap?.recycle()
+                if (maskStore !is FlatPixels) mask?.recycle()
+            }
         }
         traces++
-        entries[layer.id] = Entry(layer.contentVersion, bitmapId, maskId, outline)
+        entries[layer.id] = Entry(layer.contentVersion, generation, masked, outline)
         return outline
     }
 

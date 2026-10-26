@@ -399,6 +399,8 @@ class LiveAdjust(private val c: EditorController) {
         freeBuffers()
         handler?.removeCallbacks(idleWake)
         strokeBelow.release()
+        belowProjection.freeAll()
+        aboveProjection.freeAll()
     }
 
     /**
@@ -406,6 +408,49 @@ class LiveAdjust(private val c: EditorController) {
      * its layer from ([StrokeBelowCache]; one per editor, holding nothing between strokes).
      */
     internal val strokeBelow: StrokeBelowCache = StrokeBelowCache(c)
+
+    /**
+     * v1.10 A9 step 3 (design 2.5, X4): the below projection of the display at TILES and FULL
+     * ([BelowProjection]; one per editor, persistent across strokes while the key stays).
+     */
+    internal val belowProjection: BelowProjection = BelowProjection(
+        { c.doc },
+        { c.doc.layers.getOrNull(c.doc.activeLayerIndex) },
+        { c.renderOverride },
+    )
+
+    /**
+     * v1.10 A9 step 3: before each canvas update, the display's below renderer: the below
+     * projection at TILES and FULL while no stroke uses Classic's [strokeBelow]; at CLASSIC it is
+     * taken off and freed.
+     */
+    internal fun attachProjection(t: DisplayTiles) {
+        if (strokeBelow.isActive) return
+        if (ProjectionRules.on) {
+            belowProjection.install(t)
+        } else {
+            belowProjection.uninstall(t)
+            if (belowProjection.bytes > 0L) belowProjection.freeAll()
+        }
+        // v1.10 A9 step 7 (X5): the above projection, when the check allowed it.
+        if (ProjectionRules.aboveOn) {
+            aboveProjection.install(t)
+        } else {
+            aboveProjection.uninstall(t)
+            if (aboveProjection.bytes > 0L) aboveProjection.freeAll()
+        }
+    }
+
+    /**
+     * v1.10 A9 step 7 (design 2.5, X5): the above projection of the display at TILES and FULL when
+     * `EngineConfig.aboveProjection` is on ([AboveProjection]; one per editor, used only while a
+     * finger paints, persistent across strokes while the key stays).
+     */
+    internal val aboveProjection: AboveProjection = AboveProjection(
+        { c.doc },
+        { c.doc.layers.getOrNull(c.doc.activeLayerIndex) },
+        { c.renderOverride },
+    )
 
     // ------------------------------------------------------------------ frames
 

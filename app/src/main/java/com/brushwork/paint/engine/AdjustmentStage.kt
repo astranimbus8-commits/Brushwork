@@ -10,6 +10,9 @@ import android.graphics.Rect
 import android.graphics.RectF
 import com.brushwork.paint.ColorModeOps
 import com.brushwork.paint.core.Parallel
+import com.brushwork.paint.engine.tiles.BandAssembler
+import com.brushwork.paint.engine.tiles.PixelStore
+import com.brushwork.paint.engine.tiles.TiledPixels
 import com.brushwork.paint.filters.PixelMapper
 import com.brushwork.paint.masks.AdjustmentEffects
 import com.brushwork.paint.masks.AdjustmentSpec
@@ -72,32 +75,38 @@ class AdjustmentScratch {
         return m
     }
 
-    // Painted-mask bounds, per mask bitmap and layer content version (a few adjustment layers).
-    // Weak: a deleted layer's mask must not be kept alive by the cache.
-    private val boundsMasks = arrayOfNulls<java.lang.ref.WeakReference<Bitmap>>(BOUNDS_CACHE)
+    // Painted-mask bounds, per mask store and layer content version (a few adjustment layers).
+    // Weak: a deleted layer's mask must not be kept alive by the cache. v1.10 (A9): keyed on the
+    // store (a replaced mask is a new store, and bumps the layer's pixel generation), never on a
+    // bitmap, so a parked mask is not materialized.
+    private val boundsMasks = arrayOfNulls<java.lang.ref.WeakReference<PixelStore>>(BOUNDS_CACHE)
     private val boundsVersions = LongArray(BOUNDS_CACHE)
+    private val boundsGenerations = LongArray(BOUNDS_CACHE)
     private val boundsValues = arrayOfNulls<Rect>(BOUNDS_CACHE)
     private var boundsNext = 0
 
     /**
      * Document area where [layer]'s [mask] lets the effect through (null = nowhere): the spec's
      * coverage bounds for an editable mask (its pixels are the spec's rendering, I1), else the
-     * bounds of the non-black pixels of a painted mask (cached per content version).
+     * bounds of the non-black pixels of a painted mask (cached per content version and pixel
+     * generation; v1.10: read from the store, tile by tile when parked).
      */
-    internal fun maskCoverage(layer: Layer, mask: Bitmap): Rect? {
+    internal fun maskCoverage(layer: Layer, mask: PixelStore): Rect? {
         layer.maskSpec?.let { return specCoverage(it, mask.width, mask.height) }
         for (i in 0 until BOUNDS_CACHE) {
             if (boundsMasks[i]?.get() === mask) {
-                if (boundsVersions[i] == layer.contentVersion) return boundsValues[i]?.let { Rect(it) }
-                val r = nonBlackBounds(mask)
+                if (boundsVersions[i] == layer.contentVersion && boundsGenerations[i] == layer.pixelGeneration) return boundsValues[i]?.let { Rect(it) }
+                val r = BandAssembler.nonBlackBounds(mask)
                 boundsVersions[i] = layer.contentVersion
+                boundsGenerations[i] = layer.pixelGeneration
                 boundsValues[i] = r
                 return r?.let { Rect(it) }
             }
         }
-        val r = nonBlackBounds(mask)
+        val r = BandAssembler.nonBlackBounds(mask)
         boundsMasks[boundsNext] = java.lang.ref.WeakReference(mask)
         boundsVersions[boundsNext] = layer.contentVersion
+        boundsGenerations[boundsNext] = layer.pixelGeneration
         boundsValues[boundsNext] = r
         boundsNext = (boundsNext + 1) % BOUNDS_CACHE
         return r?.let { Rect(it) }
@@ -218,35 +227,6 @@ class AdjustmentScratch {
         const val EFFECT_CACHE = 8
         const val BOUNDS_CACHE = 8
         const val SPEC_CACHE = 8
-
-        /** Bounds of the pixels of [mask] whose color isn't black, or null when all are black. */
-        fun nonBlackBounds(mask: Bitmap): Rect? {
-            val w = mask.width; val h = mask.height
-            if (w <= 0 || h <= 0) return null
-            val row = IntArray(w)
-            fun rowHas(y: Int): Boolean {
-                mask.getPixels(row, 0, w, 0, y, w, 1)
-                for (x in 0 until w) if (row[x] and 0xFFFFFF != 0) return true
-                return false
-            }
-            var top = 0
-            while (top < h && !rowHas(top)) top++
-            if (top == h) return null
-            var bottom = h - 1
-            while (bottom > top && !rowHas(bottom)) bottom--
-            var left = w; var right = -1
-            for (y in top..bottom) {
-                mask.getPixels(row, 0, w, 0, y, w, 1)
-                var x = 0
-                while (x < left && row[x] and 0xFFFFFF == 0) x++
-                if (x < left) left = x
-                x = w - 1
-                while (x > right && row[x] and 0xFFFFFF == 0) x--
-                if (x > right) right = x
-                if (left == 0 && right == w - 1) break
-            }
-            return if (right < left) null else Rect(left, top, right + 1, bottom + 1)
-        }
     }
 }
 
@@ -292,7 +272,7 @@ class MaskFactorCache {
      * The factors (0..255, row-major over the whole target bitmap) of [layer]'s [mask] on
      * [target]: cached, or sampled now over the whole target as the fused path samples a chunk.
      */
-    internal fun factors(layer: Layer, mask: Bitmap, target: CompositeTarget, scratch: AdjustmentScratch, sample: (Matrix, Int, Int, IntArray) -> Unit): ByteArray {
+    internal fun factors(layer: Layer, mask: PixelStore, target: CompositeTarget, scratch: AdjustmentScratch, sample: (Matrix, Int, Int, IntArray) -> Unit): ByteArray {
         val bmp = target.bitmap
         target.docToTarget.getValues(probe)
         val cur = bytes
@@ -406,7 +386,7 @@ object AdjustmentStage {
         val bmp = target.bitmap
         if (bmp.isRecycled || bmp.config != Bitmap.Config.ARGB_8888) return
         val ov = if (override != null && override.layer === layer) override else null
-        val mask = if (layer.maskEnabled) layer.mask else null
+        val mask: PixelStore? = if (layer.maskEnabled) layer.maskPixels else null
         // The mask the effect goes through: the layer's (enabled) mask, or the preview of the
         // mask a layer without one is getting (see MaskCoverageHint).
         val masked = mask != null || (!layer.hasMask && ov is MaskCoverageHint)
@@ -509,7 +489,7 @@ object AdjustmentStage {
         layer: Layer,
         mapper: PixelMapper,
         mode: ColorMode,
-        mask: Bitmap?,
+        mask: PixelStore?,
         ov: LayerRenderOverride?,
         masked: Boolean,
         target: CompositeTarget,
@@ -548,7 +528,7 @@ object AdjustmentStage {
                     if (ov != null && drawOverrideMask(ov, m, cw, ch, factors, scratch)) {
                         kind = FACTORS_ALPHA
                     } else if (mask != null && tx != NOT_INTEGER && ty != NOT_INTEGER) {
-                        readMask(mask, x - tx, y - ty, cw, ch, factors)
+                        readMask(mask, x - tx, y - ty, cw, ch, factors, scratch)
                         kind = FACTORS_LUMINANCE
                     } else if (mask != null && cache != null && ov == null) {
                         // A live proxy: the factors sampled once for the whole target, reused while
@@ -615,26 +595,27 @@ object AdjustmentStage {
     }
 
     /** Mask pixels ([mx], [my]) + [cw] x [ch] into [factors]; outside the mask white (the DST_IN draw leaves those). */
-    private fun readMask(mask: Bitmap, mx: Int, my: Int, cw: Int, ch: Int, factors: IntArray) {
+    private fun readMask(mask: PixelStore, mx: Int, my: Int, cw: Int, ch: Int, factors: IntArray, scratch: AdjustmentScratch) {
         val r = Rect(mx, my, mx + cw, my + ch)
         if (r.left < 0 || r.top < 0 || r.right > mask.width || r.bottom > mask.height) {
             factors.fill(-1, 0, cw * ch)
             if (!r.intersect(0, 0, mask.width, mask.height)) return
         }
-        mask.getPixels(factors, (r.top - my) * cw + (r.left - mx), cw, r.left, r.top, r.width(), r.height())
+        val tmp = if (mask is TiledPixels) scratch.maskChunkCanvas(r.width(), r.height()).first else null
+        BandAssembler.readPixels(mask, r, factors, (r.top - my) * cw + (r.left - mx), cw, tmp)
     }
 
     /**
      * [mask] resampled onto the chunk with [m] (a scaled target: thumbnails, live proxies), with
      * the sampling of the v1.5 mask paint but no color filter; outside the mask white.
      */
-    private fun sampleMask(mask: Bitmap, m: Matrix, cw: Int, ch: Int, factors: IntArray, scratch: AdjustmentScratch) {
+    private fun sampleMask(mask: PixelStore, m: Matrix, cw: Int, ch: Int, factors: IntArray, scratch: AdjustmentScratch) {
         val (mb, mc) = scratch.maskChunkCanvas(cw, ch)
         val save = mc.save()
         mc.clipRect(0, 0, cw, ch)
         mc.drawColor(-1, PorterDuff.Mode.SRC)
         mc.concat(m)
-        mc.drawBitmap(mask, 0f, 0f, scratch.maskSamplePaint)
+        BandAssembler.drawStore(mc, mask, scratch.maskSamplePaint)
         mc.restoreToCount(save)
         mb.getPixels(factors, 0, cw, 0, 0, cw, ch)
     }
@@ -728,9 +709,9 @@ object AdjustmentStage {
     }
 
     /** The layer's [mask] (or the override's preview of it, or of the mask it is getting) as DST_IN, in document px. */
-    private fun drawMask(canvas: Canvas, mask: Bitmap?, ov: LayerRenderOverride?, scratch: AdjustmentScratch) {
+    private fun drawMask(canvas: Canvas, mask: PixelStore?, ov: LayerRenderOverride?, scratch: AdjustmentScratch) {
         if (ov != null && ov.drawMask(canvas, scratch.maskPaint)) return
-        if (mask != null) canvas.drawBitmap(mask, 0f, 0f, scratch.maskPaint)
+        if (mask != null) BandAssembler.drawMaskStore(canvas, mask, scratch.maskPaint)
     }
 
     private fun floorInt(v: Float): Int = if (v.isNaN()) 0 else floor(v.toDouble()).coerceIn(-1e9, 1e9).toInt()

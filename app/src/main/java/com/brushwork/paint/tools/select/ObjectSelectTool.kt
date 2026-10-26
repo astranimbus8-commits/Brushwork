@@ -111,7 +111,7 @@ class ObjectSelectTool(controller: EditorController) : Tool(controller) {
         val target = onCanvas(prompt, w, h) ?: return
         val s = settings
         val snapshot: Bitmap = try {
-            PixelSnapshot.take(controller, s.source, controller.activeLayer.bitmap)
+            PixelSnapshot.take(controller, s.source, controller.activeLayer)
         } catch (e: OutOfMemoryError) {
             controller.toast("Not enough memory for object select")
             return

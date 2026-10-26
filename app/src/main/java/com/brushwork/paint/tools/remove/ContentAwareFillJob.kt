@@ -14,6 +14,8 @@ import com.brushwork.paint.engine.CompositeAction
 import com.brushwork.paint.engine.CompositeTarget
 import com.brushwork.paint.engine.EditTarget
 import com.brushwork.paint.engine.UndoAction
+import com.brushwork.paint.engine.tiles.FlatPixels
+import com.brushwork.paint.engine.tiles.PixelReads
 import com.brushwork.paint.inpaint.ContentAwareFill
 import com.brushwork.paint.inpaint.HoleMask
 import com.brushwork.paint.inpaint.IRect
@@ -325,7 +327,13 @@ object ContentAwareFillJob {
     private fun readSource(controller: EditorController, layer: Layer, source: CafSource, roi: IRect): PixelBuffer {
         val rect = Rect(roi.left, roi.top, roi.right, roi.bottom)
         return when (source) {
-            CafSource.LAYER -> BitmapUtils.toPixelBuffer(layer.bitmap, rect)
+            // v1.10 A9 (C-REG): a flat store's bitmap as before, else a region read (never materializes).
+            CafSource.LAYER -> when (val p = layer.pixels) {
+                is FlatPixels -> BitmapUtils.toPixelBuffer(p.bitmap, rect)
+                else -> PixelReads.region(layer, rect).let { b ->
+                    try { BitmapUtils.toPixelBuffer(b, Rect(0, 0, rect.width(), rect.height())) } finally { b.recycle() }
+                }
+            }
             CafSource.ALL_LAYERS -> {
                 val bmp = BitmapUtils.createLayerBitmap(rect.width(), rect.height())
                 try {

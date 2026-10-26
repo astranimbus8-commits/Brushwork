@@ -151,8 +151,24 @@ object FolderComposite {
         if (f < 0 || !folder.isFolder) return out
         val block = LayerTree.block(doc.layers, f)
         val pass = Pass(Compositor(doc) { null }, doc, null, doc.layers.indices)
-        val surface = Surface(Canvas(out), CompositeTarget.identity(out), RectF(doc.bounds), direct = true)
-        pass.level(surface, folder.id, block.first until f)
+        val canvas = Canvas(out)
+        val target = CompositeTarget.identity(out)
+        val rows = Compositor.flattenBand
+        if (doc.height <= rows) {
+            pass.level(Surface(canvas, target, RectF(doc.bounds), direct = true), folder.id, block.first until f)
+            return out
+        }
+        // v1.10 (A9 step 1): in bands of TILE rows (the scratch grid stays the one-pass grid), so
+        // no saveLayer inside is bigger than a band; at 1:1 the bands draw what one pass draws.
+        var top = 0
+        while (top < doc.height) {
+            val band = Rect(0, top, doc.width, min(doc.height, top + rows))
+            val save = canvas.save()
+            canvas.clipRect(band)
+            pass.level(Surface(canvas, target, RectF(band), direct = true), folder.id, block.first until f)
+            canvas.restoreToCount(save)
+            top = band.bottom
+        }
         return out
     }
 
