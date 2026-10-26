@@ -145,6 +145,30 @@ object A9Docs {
         EngineConfig::class.java.getDeclaredField("level").apply { isAccessible = true }.set(null, level)
     }
 
+    /** Sets `EngineConfig.aboveProjection` inside a test (the check's switch; private setter; `EngineRule` restores it). */
+    fun setAboveProjection(on: Boolean) {
+        EngineConfig::class.java.getDeclaredField("aboveProjection").apply { isAccessible = true }.set(null, on)
+    }
+
+    /**
+     * The differences of the bytes of [a] and [b] (same size, ARGB_8888) as stored, premultiplied
+     * channels: entry d counts the bytes that differ by d (0..255), over rect [r] of the bitmaps
+     * (the whole bitmaps when null).
+     */
+    fun premultipliedErrorHistogram(a: Bitmap, b: Bitmap, r: android.graphics.Rect? = null): LongArray {
+        val pa = java.nio.ByteBuffer.allocate(a.byteCount).also { a.copyPixelsToBuffer(it) }
+        val pb = java.nio.ByteBuffer.allocate(b.byteCount).also { b.copyPixelsToBuffer(it) }
+        val area = r ?: android.graphics.Rect(0, 0, a.width, a.height)
+        val h = LongArray(256)
+        for (y in area.top until area.bottom) {
+            val row = y * a.rowBytes
+            for (i in row + area.left * 4 until row + area.right * 4) {
+                h[kotlin.math.abs((pa.get(i).toInt() and 0xFF) - (pb.get(i).toInt() and 0xFF))]++
+            }
+        }
+        return h
+    }
+
     /**
      * The document of [context] with the case's [mode] (design 2.16), built the same each time.
      * Every context holds a backdrop, the subject ([SUBJECT], [mode], 80 %), and an empty layer of

@@ -470,9 +470,15 @@ class CanvasView(context: Context, private val controller: EditorController) : V
             tiles.onWaitingDone = waitingDone
             controller.liveAdjust.attachProjection(tiles)
             if (liftPending) tiles.projectionsOff = true
+            // v1.10 A9 step 7 (X5): the above projection only while a finger paints the active
+            // layer; the first update after it renders what it drew again, exactly (I33).
+            val painting = !liftPending && mode == Mode.DRAW && controller.isPaintTool && controller.isInteracting
+            tiles.gestureDown = painting
+            if (!painting && tiles.exactAfterGesture()) tiles.projectionsOff = true
             val composeStart = SystemClock.uptimeMillis()
             val composed = tiles.update(controller.compositor, visible)
             tiles.projectionsOff = false
+            tiles.gestureDown = false
             liftPending = false
             if (composed) {
                 val now = SystemClock.uptimeMillis()
@@ -632,6 +638,7 @@ class CanvasView(context: Context, private val controller: EditorController) : V
             // Input is blocked while a long operation runs; drop whatever was in progress.
             abortGesture()
             mode = if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) Mode.NONE else Mode.IGNORE
+            frameAfterPainting()
             return true
         }
         when (action) {
@@ -642,7 +649,13 @@ class CanvasView(context: Context, private val controller: EditorController) : V
             MotionEvent.ACTION_UP -> onLastUp(e)
             MotionEvent.ACTION_CANCEL -> { abortGesture(); mode = Mode.NONE; ignoredMask = 0L }
         }
+        frameAfterPainting()
         return true
+    }
+
+    /** v1.10 A9 step 7 (X5): a painting gesture that ended (lifted, cancelled, turned into another) asks for the frame that draws its parts exactly. */
+    private fun frameAfterPainting() {
+        if (mode != Mode.DRAW && controller.tiles.hasApprox) postInvalidateOnAnimation()
     }
 
     private fun onFirstDown(e: MotionEvent) {

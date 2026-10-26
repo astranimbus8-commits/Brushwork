@@ -400,6 +400,7 @@ class LiveAdjust(private val c: EditorController) {
         handler?.removeCallbacks(idleWake)
         strokeBelow.release()
         belowProjection.freeAll()
+        aboveProjection.freeAll()
     }
 
     /**
@@ -431,7 +432,25 @@ class LiveAdjust(private val c: EditorController) {
             belowProjection.uninstall(t)
             if (belowProjection.bytes > 0L) belowProjection.freeAll()
         }
+        // v1.10 A9 step 7 (X5): the above projection, when the check allowed it.
+        if (ProjectionRules.aboveOn) {
+            aboveProjection.install(t)
+        } else {
+            aboveProjection.uninstall(t)
+            if (aboveProjection.bytes > 0L) aboveProjection.freeAll()
+        }
     }
+
+    /**
+     * v1.10 A9 step 7 (design 2.5, X5): the above projection of the display at TILES and FULL when
+     * `EngineConfig.aboveProjection` is on ([AboveProjection]; one per editor, used only while a
+     * finger paints, persistent across strokes while the key stays).
+     */
+    internal val aboveProjection: AboveProjection = AboveProjection(
+        { c.doc },
+        { c.doc.layers.getOrNull(c.doc.activeLayerIndex) },
+        { c.renderOverride },
+    )
 
     // ------------------------------------------------------------------ frames
 

@@ -104,7 +104,7 @@ internal class BelowProjection(
 
     override fun render(tiles: DisplayTiles, index: Int, tr: Rect, d: Rect, canvas: Canvas, target: CompositeTarget, compositor: Compositor): Boolean {
         val k = prepare(tiles, index, tr, compositor)
-        return k > 0 && renderSplit(tiles, index, tr, d, canvas, target, compositor, k)
+        return k > 0 && renderSplit(tiles, index, tr, d, canvas, target, compositor, k, Int.MAX_VALUE)
     }
 
     /**
@@ -151,11 +151,17 @@ internal class BelowProjection(
         builds++
     }
 
-    /** The render after [prepare] returned [k]: the cache tile (built here when it is not yet) copied in, then `drawSplit(k, n)` of [d]. */
-    override fun renderSplit(tiles: DisplayTiles, index: Int, tr: Rect, d: Rect, canvas: Canvas, target: CompositeTarget, compositor: Compositor, k: Int): Boolean {
+    /**
+     * The render after [prepare] returned [k]: the cache tile (built here when it is not yet)
+     * copied in, then `drawSplit(k, until)` of [d] (`until`: the layer count, or the first unit
+     * the above projection draws, step 7).
+     */
+    override fun renderSplit(tiles: DisplayTiles, index: Int, tr: Rect, d: Rect, canvas: Canvas, target: CompositeTarget, compositor: Compositor, k: Int, until: Int): Boolean {
         if (tiles !== this.tiles || k != split) return false
         val cache = bitmaps.getOrNull(index) ?: return false
         val doc = compositor.document
+        val end = minOf(until, doc.layers.size)
+        if (end < k) return false
         try {
             if (!built[index]) {
                 val cv = canvases[index]!!
@@ -172,7 +178,7 @@ internal class BelowProjection(
                 builds++
             }
             canvas.drawBitmap(cache, tr.left.toFloat(), tr.top.toFloat(), ProxyTiles.copyPaint)
-            compositor.drawSplit(canvas, d, target, k, doc.layers.size)
+            compositor.drawSplit(canvas, d, target, k, end)
         } catch (e: IllegalArgumentException) {
             // A cut the compositor refuses (never expected: splitFor follows its rules).
             dropAll()

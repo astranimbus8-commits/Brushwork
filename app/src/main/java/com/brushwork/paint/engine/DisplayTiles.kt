@@ -98,9 +98,13 @@ class DisplayTiles(val docWidth: Int, val docHeight: Int, val tileSize: Int = 51
          */
         fun prepare(tiles: DisplayTiles, index: Int, tr: Rect, compositor: Compositor): Int = -1
 
-        /** v1.10 A9: [render] after [prepare] returned [k] (> 0) for the same tile, in the same render. */
-        fun renderSplit(tiles: DisplayTiles, index: Int, tr: Rect, d: Rect, canvas: Canvas, target: CompositeTarget, compositor: Compositor, k: Int): Boolean =
-            render(tiles, index, tr, d, canvas, target, compositor)
+        /**
+         * v1.10 A9: [render] after [prepare] returned [k] (> 0) for the same tile, in the same
+         * render. Step 7 (X5): with [until] below the layer count, only the units `[0, until)`
+         * (the above projection draws the rest); a renderer that cannot stop there draws nothing.
+         */
+        fun renderSplit(tiles: DisplayTiles, index: Int, tr: Rect, d: Rect, canvas: Canvas, target: CompositeTarget, compositor: Compositor, k: Int, until: Int = Int.MAX_VALUE): Boolean =
+            until >= compositor.document.layers.size && render(tiles, index, tr, d, canvas, target, compositor)
 
         /** v1.10 A9 (P4): tile [index]'s cache of units `[0, k)` when it is built (after [prepare] returned k), else null. */
         fun builtCache(index: Int): Bitmap? = null
@@ -115,6 +119,87 @@ class DisplayTiles(val docWidth: Int, val docHeight: Int, val tileSize: Int = 51
 
     /** v1.9 A6 (P3): the [BelowRenderer] [render] asks first (null: none). */
     internal var belowRenderer: BelowRenderer? = null
+
+    /**
+     * v1.10 A9 step 7 (design 2.5, X5): draws the units above the active unit from a cache of
+     * their composite onto transparency, while a finger paints ([gestureDown]). Within 2 LSB per
+     * channel of the full draw, never exact: the parts it drew are re-rendered exactly once the
+     * gesture ends ([exactAfterGesture]). Main thread.
+     */
+    internal interface AboveRenderer {
+        /**
+         * The first flat index `u` above the active unit when tile [index] (document rect [tr]) may
+         * draw the units `[u, n)` from this renderer's cache: the key checked, the cache tile
+         * allocated within the cap and built; -1 when it would not draw the tile that way.
+         */
+        fun prepare(tiles: DisplayTiles, index: Int, tr: Rect, compositor: Compositor): Int
+
+        /** Draws tile [index]'s cache (document rect [tr]) over [canvas] (document px, clipped to the part) with SRC_OVER, after [prepare]. */
+        fun drawAbove(tiles: DisplayTiles, index: Int, tr: Rect, canvas: Canvas)
+
+        /** An update (of [DisplayTiles.update] or [DisplayTiles.updateBudgeted]) starts while a finger paints. */
+        fun beginUpdate() = Unit
+    }
+
+    /** v1.10 A9 step 7: the [AboveRenderer] used while [gestureDown] (null: none). */
+    internal var aboveRenderer: AboveRenderer? = null
+
+    /**
+     * v1.10 A9 step 7 (X5): set by the view around its update while a finger paints the active
+     * layer (never for the update that follows the gesture); only then may [aboveRenderer] draw.
+     */
+    internal var gestureDown: Boolean = false
+
+    /** v1.10 A9 step 7: the part of each tile the [aboveRenderer] drew (approximate), null when none; entries are [approxRects]. */
+    private val approx = arrayOfNulls<Rect>(cols * rows)
+    private val approxRects = Array(cols * rows) { Rect() }
+    private var approxCount = 0
+
+    /** v1.10 A9 step 7: true while some tile shows a part the above projection drew (approximate: `AboveProjection`). */
+    val hasApprox: Boolean get() = approxCount > 0
+
+    /** Tests: a copy of the part of tile [idx] the above projection drew (document px), null when none. */
+    internal fun approxPart(idx: Int): Rect? = approx.getOrNull(idx)?.let { Rect(it) }
+
+    /**
+     * v1.10 A9 step 7 (X5, I33): marks every part the above projection drew for rendering again,
+     * so the next update draws it exactly (the view calls this, with [projectionsOff], for the
+     * first update after a gesture). True when there was such a part.
+     */
+    fun exactAfterGesture(): Boolean {
+        if (approxCount == 0) return false
+        for (idx in approx.indices) {
+            val a = approx[idx] ?: continue
+            approx[idx] = null
+            markDirty(idx, a)
+        }
+        approxCount = 0
+        return true
+    }
+
+    /** Marks part [part] of tile [idx] dirty (a waiting job there is cancelled, its part joins), without telling the hooks: nothing changed in the document. */
+    private fun markDirty(idx: Int, part: Rect) {
+        val r = partRect
+        r.set(part)
+        waiting?.cancel(idx)?.let { r.union(it) }
+        val d = dirty[idx]
+        if (d != null) d.union(r)
+        else { dirty[idx] = dirtyRects[idx].apply { set(r) }; dirtyCount++ }
+    }
+
+    private fun markApprox(idx: Int, d: Rect) {
+        val a = approx[idx]
+        if (a != null) a.union(d)
+        else { approx[idx] = approxRects[idx].apply { set(d) }; approxCount++ }
+    }
+
+    /** An exact render of part [d] of tile [idx]: an approximate part inside it is exact now. */
+    private fun clearApprox(idx: Int, d: Rect) {
+        val a = approx[idx] ?: return
+        if (!d.contains(a)) return
+        approx[idx] = null
+        approxCount--
+    }
 
     /**
      * v1.10 A9 step 2 (design 2.0 P4): the waiting tiles, made when a part first needs a tile that
@@ -135,7 +220,8 @@ class DisplayTiles(val docWidth: Int, val docHeight: Int, val tileSize: Int = 51
      * v1.10 A9 (P4): true when tile [index] shows exactly the current composite: rendered, not
      * dirty and not waiting (a waiting tile shows stale content, or nothing, until it completes).
      */
-    fun isExact(index: Int): Boolean = tiles.getOrNull(index) != null && dirty[index] == null && waiting?.isWaiting(index) != true
+    fun isExact(index: Int): Boolean =
+        tiles.getOrNull(index) != null && dirty[index] == null && waiting?.isWaiting(index) != true && approx[index] == null
 
     /**
      * v1.10 A9 step 2 (design 4.4 A9): set by the view for the first update after a gesture lifts;
@@ -155,6 +241,7 @@ class DisplayTiles(val docWidth: Int, val docHeight: Int, val tileSize: Int = 51
         c.clipRect(d)
         c.drawBitmap(acc, tr.left.toFloat(), tr.top.toFloat(), srcPaint)
         c.restoreToCount(save)
+        clearApprox(index, d)
     }
 
     /**
@@ -194,6 +281,7 @@ class DisplayTiles(val docWidth: Int, val docHeight: Int, val tileSize: Int = 51
      */
     fun update(compositor: Compositor, visibleDoc: Rect? = null): Boolean {
         if (dirtyCount == 0) return false
+        if (gestureDown && !projectionsOff) aboveRenderer?.beginUpdate()
         var changed = false
         val tr = updateRect
         for (idx in tiles.indices) {
@@ -233,6 +321,16 @@ class DisplayTiles(val docWidth: Int, val docHeight: Int, val tileSize: Int = 51
         val below = if (projectionsOff) null else belowRenderer
         // v1.10 A9 (X4): a projection draws the units below its split from its cache.
         val k = below?.prepare(this, idx, tr, compositor) ?: -1
+        // v1.10 A9 step 7 (X5): while a finger paints, the units above the active unit from the
+        // above projection's cache; a part that would read a tile not resident takes the paths below.
+        val above = if (projectionsOff || !gestureDown) null else aboveRenderer
+        var u = above?.prepare(this, idx, tr, compositor) ?: -1
+        if (u > 0 && waitingEnabled && aboveReads(compositor, idx, tr, d, below, k, u)) u = -1
+        if (u > 0 && above != null && renderAbove(compositor, idx, tr, d, c, target, below, k, u, above)) {
+            markApprox(idx, d)
+            c.restoreToCount(save)
+            return
+        }
         // v1.10 A9 (P4): sources not resident: the part waits (the tile keeps what it shows).
         if (waitingEnabled && queueWaiting(compositor, idx, tr, d, below, k)) {
             c.restoreToCount(save)
@@ -255,6 +353,39 @@ class DisplayTiles(val docWidth: Int, val docHeight: Int, val tileSize: Int = 51
             compositor.drawDocument(c, d, target = target)
         }
         c.restoreToCount(save)
+        clearApprox(idx, d)
+    }
+
+    /**
+     * v1.10 A9 step 7 (X5): part [d] of tile [idx] as `below + [k or 0, u) + above`: the below
+     * projection's cache (or a CLEAR) and the units up to the active unit's top drawn as usual,
+     * then the above projection's cache with SRC_OVER. False when a cut was refused (never
+     * expected: the renderers follow the compositor's rules); the caller then renders exactly.
+     */
+    private fun renderAbove(compositor: Compositor, idx: Int, tr: Rect, d: Rect, c: Canvas, target: CompositeTarget, below: BelowRenderer?, k: Int, u: Int, above: AboveRenderer): Boolean {
+        try {
+            val drawn = below != null && k in 1 until u && below.renderSplit(this, idx, tr, d, c, target, compositor, k, until = u)
+            if (!drawn) {
+                c.drawColor(0, PorterDuff.Mode.CLEAR)
+                compositor.drawSplit(c, d, target, 0, u)
+            }
+        } catch (e: IllegalArgumentException) {
+            return false
+        }
+        above.drawAbove(this, idx, tr, c)
+        return true
+    }
+
+    /**
+     * v1.10 A9 step 7: true when the above path of part [d] would read a tile that is not
+     * resident: the units `[k, u)` inside [d] once the below projection's cache tile is built
+     * (with no split: `[0, u)`), and before that also `[0, k)` across the whole tile (its build).
+     * The above projection's own cache is built only from resident tiles.
+     */
+    private fun aboveReads(compositor: Compositor, idx: Int, tr: Rect, d: Rect, below: BelowRenderer?, k: Int, u: Int): Boolean {
+        if (below == null || k <= 0) return WaitingTiles.needsReads(compositor, d, until = u)
+        if (below.builtCache(idx) == null && WaitingTiles.needsReads(compositor, tr, until = k)) return true
+        return WaitingTiles.needsReads(compositor, d, from = k, until = u)
     }
 
     private fun waitingTiles(): WaitingTiles = waiting ?: WaitingTiles(this).also { waiting = it }
@@ -335,6 +466,7 @@ class DisplayTiles(val docWidth: Int, val docHeight: Int, val tileSize: Int = 51
             order[k] = idx; orderDist[k] = dist
         }
         if (n == 0) return TileUpdate.of(changed = false, hasMore = false)
+        if (gestureDown && !projectionsOff) aboveRenderer?.beginUpdate()
         val start = nanoClock()
         var done = 0
         var pos = 0
@@ -403,5 +535,7 @@ class DisplayTiles(val docWidth: Int, val docHeight: Int, val tileSize: Int = 51
         for (i in tiles.indices) { tiles[i]?.recycle(); tiles[i] = null; canvases[i] = null; targets[i] = null }
         tileBytes.fill(0)
         heldBytes = 0L
+        approx.fill(null)
+        approxCount = 0
     }
 }

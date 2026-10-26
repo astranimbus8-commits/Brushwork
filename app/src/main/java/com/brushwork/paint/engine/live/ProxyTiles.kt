@@ -33,42 +33,55 @@ import com.brushwork.paint.model.Layer
 internal class BelowKey {
     private var refs = arrayOfNulls<Any>(0)
     private var nums = LongArray(0)
+    private var from = 0
     private var split = -1
     private var colorMode: ColorMode? = null
     private var safe = false
 
     /** True when the below-cache captured with [capture] is still what layers [0, split) draw. */
-    fun matches(doc: Document, split: Int, safe: Boolean, override: LayerRenderOverride?): Boolean {
-        if (this.split != split || colorMode != doc.colorMode || this.safe != safe) return false
-        if (overrideBelow(doc, split, override)) return false
+    fun matches(doc: Document, split: Int, safe: Boolean, override: LayerRenderOverride?): Boolean = matches(doc, 0, split, safe, override)
+
+    /**
+     * v1.10 A9 step 7 (X5): true when the layers `[from, until)` are still those [capture] saw
+     * (the above projection keys the layers above the active layer this way). `until` is the
+     * layer count there: a layer added or removed above changes it.
+     */
+    fun matches(doc: Document, from: Int, until: Int, safe: Boolean, override: LayerRenderOverride?): Boolean {
+        if (this.from != from || this.split != until || colorMode != doc.colorMode || this.safe != safe) return false
+        if (overrideIn(doc, from, until, override)) return false
         val layers = doc.layers
-        if (split > layers.size) return false
-        for (i in 0 until split) {
+        if (until > layers.size || from < 0) return false
+        for (i in from until until) {
             val l = layers[i]
-            val r = i * REFS
+            val r = (i - from) * REFS
             if (refs[r] !== l || refs[r + 1] !== l.adjustment || refs[r + 2] !== l.maskSpec) return false
-            val n = i * NUMS
+            val n = (i - from) * NUMS
             if (nums[n] != l.contentVersion || nums[n + 1] != packed(l) || nums[n + 2] != l.parentId || nums[n + 3] != l.pixelGeneration) return false
         }
         return true
     }
 
     /** Remembers what layers [0, split) are now (after the below-cache was drawn). */
-    fun capture(doc: Document, split: Int, safe: Boolean) {
-        if (refs.size < split * REFS) refs = arrayOfNulls(split * REFS)
-        if (nums.size < split * NUMS) nums = LongArray(split * NUMS)
+    fun capture(doc: Document, split: Int, safe: Boolean) = capture(doc, 0, split, safe)
+
+    /** v1.10 A9 step 7: remembers what layers `[from, until)` are now. */
+    fun capture(doc: Document, from: Int, until: Int, safe: Boolean) {
+        val count = (until - from).coerceAtLeast(0)
+        if (refs.size < count * REFS) refs = arrayOfNulls(count * REFS)
+        if (nums.size < count * NUMS) nums = LongArray(count * NUMS)
         refs.fill(null)
-        for (i in 0 until split) {
+        for (i in from until until) {
             val l = doc.layers[i]
-            val r = i * REFS
+            val r = (i - from) * REFS
             refs[r] = l; refs[r + 1] = l.adjustment; refs[r + 2] = l.maskSpec
-            val n = i * NUMS
+            val n = (i - from) * NUMS
             nums[n] = l.contentVersion
             nums[n + 1] = packed(l)
             nums[n + 2] = l.parentId
             nums[n + 3] = l.pixelGeneration
         }
-        this.split = split
+        this.from = from
+        this.split = until
         colorMode = doc.colorMode
         this.safe = safe
     }
@@ -76,6 +89,7 @@ internal class BelowKey {
     /** Forgets the capture (the next [matches] is false); drops the references. */
     fun clear() {
         refs.fill(null)
+        from = 0
         split = -1
         colorMode = null
     }
@@ -96,14 +110,17 @@ internal class BelowKey {
         private const val NUMS = 4
 
         /** True when [override] draws a layer of [0, split) (what it draws may change at any time). */
-        fun overrideBelow(doc: Document, split: Int, override: LayerRenderOverride?): Boolean {
-            if (override == null || split <= 0) return false
+        fun overrideBelow(doc: Document, split: Int, override: LayerRenderOverride?): Boolean = overrideIn(doc, 0, split, override)
+
+        /** v1.10 A9 step 7: true when [override] draws a layer of `[from, until)` (a folder's preview included). */
+        fun overrideIn(doc: Document, from: Int, until: Int, override: LayerRenderOverride?): Boolean {
+            if (override == null || until <= from) return false
             if (override is MultiLayerRenderOverride) {
-                if (doc.indexOf(override.layer) in 0 until split) return true
-                for (l in override.layers) if (doc.indexOf(l) in 0 until split) return true
+                if (doc.indexOf(override.layer) in from until until) return true
+                for (l in override.layers) if (doc.indexOf(l) in from until until) return true
                 return false
             }
-            return doc.indexOf(override.layer) in 0 until split
+            return doc.indexOf(override.layer) in from until until
         }
     }
 }
