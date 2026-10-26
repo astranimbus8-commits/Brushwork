@@ -3738,12 +3738,14 @@ settle first too (the lead, at A8's merge), for the edits that change a store wi
 - `withToolPaused()`, before the tool's `onDeactivate`, so the operation and the `onActivate`
   after it;
 - `selectTool`, before the new tool's `onActivate`;
+- a canvas operation (`CanvasOps.run`, before its snapshot, and `CanvasOps.commit`, before the
+  step's first apply);
 - a rollback (`rollbackTo`, `restoreUiMark`), before it takes the steps back, and again after
   their undos and before it disposes them: an undo among them that waits for its tiles, and the
   undos queued behind it, apply first (a disposed step would apply nothing).
 
-`UndoActiveSwappedTest` covers Clear, an `editScope` action, a tool switch and two rollbacks made
-while an undo waits.
+`UndoActiveSwappedTest` covers Clear, an `editScope` action, a tool switch, a rotation and two
+rollbacks made while an undo waits.
 
 **Undo on tiles (section 2.6, `engine/Undo.kt`).** `PixelEditAction` holds ONE map of undo tiles
 by tile index (null = transparent), each held once by the step. It swaps them with the layer's
@@ -3854,6 +3856,10 @@ The layers panel is A9's.
   synchronously and reads its SWAPPED tiles on main. Running `onActivate` when the activation ends
   needs `EditorController` outside the A8 region and the tools' lifecycle (a LeadRequest, left to
   Gate 2: the pixels are right, only main reads).
+- An entry point outside `editScope` and `withToolPaused` that applies a step deferring itself
+  (`addMask`: `MaskChangeAction.redo`, then `pushUndo`) while an undo waits queues that first
+  apply behind the undo. The order holds, but until the undo applies the step is in the history
+  and not yet in the layer.
 - A park does not reuse the last edit's tiles (design 2.6): a parked layer's tiles are cut anew.
 - Nothing calls `prepareLayer` at the press on a layer row yet, so the unpark starts at the
   release (`selectLayer`), not at the press (design 2.7; a LeadRequest for A7's
