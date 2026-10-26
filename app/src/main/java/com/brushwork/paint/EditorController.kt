@@ -549,8 +549,14 @@ class EditorController(
      * mark taken inside a scope stay grouped also when the history is full.
      */
     inline fun <T> editScope(block: () -> T): T {
-        // A pending live edit records its step before this action's steps (see [DeferredStep]).
-        if (editDepth == 0) flushDeferredSteps()
+        if (editDepth == 0) {
+            // v1.10 (lead, A8 LR1): an undo still waiting for its tiles, or an activation, finishes
+            // first (UndoManager.settle), so this action lands after it and is never overwritten by
+            // it, also when it changes a store without a PixelEditRecorder (Clear layer).
+            undoManager.settle()
+            // A pending live edit records its step before this action's steps (see [DeferredStep]).
+            flushDeferredSteps()
+        }
         editDepth++
         undoManager.holdTrim()
         try {
@@ -684,6 +690,8 @@ class EditorController(
 
     /** [rollbackTo]: the number of steps taken back, or -1 when the history no longer holds [marker]. */
     private fun rollbackSteps(marker: UndoMarker): Int {
+        // v1.10 (lead, A8 LR1): an undo still waiting for its tiles finishes first, as before an edit.
+        undoManager.settle()
         if (editDepth == 0) flushDeferredSteps()
         landSavedSelections()
         settleVectorWork()
@@ -703,6 +711,9 @@ class EditorController(
             val steps = um.takeSince(keep)
             count = steps.size
             for (a in steps.asReversed()) a.undo(this)
+            // v1.10 (lead, A8): an undo above that waits for its SWAPPED tiles, and the parts queued
+            // behind it, apply now, in order: a step disposed first would apply nothing.
+            um.settle()
             // Undone and never redone: released like a step leaving the redo stack.
             for (a in steps) a.dispose()
             true
@@ -1077,6 +1088,9 @@ class EditorController(
 
     fun selectTool(id: ToolId) {
         if (id == activeToolId) return
+        // v1.10 (lead, A8 LR1): an undo still waiting for its tiles, or an activation, finishes
+        // first: the new tool's onActivate may read the layer (a lift, a proxy), never from before it.
+        undoManager.settle()
         filterSession?.cancel()
         currentTool.onDeactivate()
         val from = activeToolId
@@ -1554,6 +1568,9 @@ class EditorController(
      * after), so pending work is baked in first and the tool re-targets the active layer after.
      */
     internal inline fun <T> withToolPaused(block: () -> T): T {
+        // v1.10 (lead, A8 LR1): an undo still waiting for its tiles, or an activation, finishes
+        // first, so the operation (and the tool's onActivate after it) never runs before it.
+        undoManager.settle()
         // Object edits queued behind a vector render (v1.5) land first, while the tool is still
         // active: one of them may lift its objects again, which the pause then commits or lets go
         // (never a lift of the content as it was before this operation, left open across it).

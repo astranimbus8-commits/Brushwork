@@ -1335,7 +1335,17 @@ object CanvasOps {
         private var gridBefore: GridSettings? = null
         private var gridAfter: GridSettings? = null
 
+        /**
+         * v1.10 (lead, A8): dropped from the history; an undo or redo still queued behind a waiting
+         * apply changes nothing (the stores [inner] held are gone), as in [DocumentBitmapsAction].
+         */
+        private var disposed = false
+
         override fun redo(c: EditorController) {
+            // v1.10 (lead, A8): while an apply waits for its tiles (a pixel undo of the active
+            // layer, also one a rollback started), this waits behind it, as DocumentBitmapsAction
+            // does: the layers never move before the waiting tiles go back where they were taken.
+            if (disposed || c.undoManager.deferIfWaiting { redo(c) }) return
             val tool = c.currentTool
             tool.onDeactivate()
             val ruler = c.ruler
@@ -1354,6 +1364,7 @@ object CanvasOps {
         }
 
         override fun undo(c: EditorController) {
+            if (disposed || c.undoManager.deferIfWaiting { undo(c) }) return
             val tool = c.currentTool
             tool.onDeactivate()
             val ruler = c.ruler
@@ -1384,7 +1395,10 @@ object CanvasOps {
             c.doc.grid = c.grid
         }
 
-        override fun dispose() = inner.dispose()
+        override fun dispose() {
+            disposed = true
+            inner.dispose()
+        }
     }
 
     /** Resolution / color-mode change without pixel changes. */

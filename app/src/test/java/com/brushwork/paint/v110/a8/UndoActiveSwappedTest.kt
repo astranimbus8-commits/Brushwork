@@ -432,4 +432,145 @@ class UndoActiveSwappedTest {
         assertArrayEquals(after, A8Kit.pixelsOf(l).first)
         assertEquals("then the props part applied", 0.5f, l.opacity, 0f)
     }
+
+    /**
+     * Lead (A8 LR1): Clear layer (a blank store swapped in: no `PixelEditRecorder`) asked while an
+     * undo of the same layer waits for its tiles settles that undo first (`withToolPaused` and
+     * `editScope`), so the clear lands after it: undoing the clear gives the undone pixels back.
+     * Before, the clear swapped the store first, the late apply found no flat store and applied
+     * nothing, and undoing the clear brought back the pixels of the undone stroke.
+     */
+    @Test
+    fun aClearAskedWhileAnUndoWaitsLandsAfterIt() {
+        val c = editor()
+        val l = c.doc.layers[2]
+        val before = A8Kit.pixelsOf(l).first
+        A8Kit.paint(c, l, Rect(100, 50, 400, 250), 0xFF3366AA.toInt())
+        val tiles = swapOutNewest(c)
+        val steps = c.undoManager.undoCount
+
+        c.undo()
+        assertSame(l, c.activating)
+        assertNull("no selection", c.selection)
+        c.clearLayer(l)
+        assertNull("the clear settled the undo first", c.activating)
+        assertTrue("cleared", A8Kit.pixelsOf(l).first.all { it == 0 })
+        assertEquals("the clear is the newest step", steps, c.undoManager.undoCount)
+        assertEquals("Clear", A8Kit.newestStep(c).label)
+        assertFalse(c.undoManager.canRedo)
+
+        A8Kit.drain()
+        assertNull(c.activating)
+        assertTrue("the late reads applied nothing", A8Kit.pixelsOf(l).first.all { it == 0 })
+        assertTrue("the undone step was let go", tiles.all { it.refs <= 0 && it.pins == 0 && it.slot == null })
+        c.undo()
+        A8Kit.drain()
+        assertArrayEquals("undoing the clear gives the undone pixels", before, A8Kit.pixelsOf(l).first)
+    }
+
+    /**
+     * Lead (A8 LR1): any editor action (`editScope`, here a layer property change of another
+     * layer) settles a waiting undo before it runs, so the undo is never applied after it.
+     */
+    @Test
+    fun anEditScopeSettlesAWaitingUndoFirst() {
+        val c = editor()
+        val l = c.doc.layers[2]
+        val other = c.doc.layers[0]
+        val before = A8Kit.pixelsOf(l).first
+        A8Kit.paint(c, l, Rect(100, 50, 400, 250), 0xFF3366AA.toInt())
+        swapOutNewest(c)
+        val steps = c.undoManager.undoCount
+
+        c.undo()
+        assertSame(l, c.activating)
+        c.editScope { c.setLayerProps(other, other.props().copy(opacity = 0.5f), "Opacity") }
+        assertNull("settled before the action ran", c.activating)
+        assertArrayEquals("the undo applied first", before, A8Kit.pixelsOf(l).first)
+        assertEquals(0.5f, other.opacity, 0f)
+        assertEquals("the action is the newest step", steps, c.undoManager.undoCount)
+        assertEquals("Opacity", A8Kit.newestStep(c).label)
+        assertFalse(c.undoManager.canRedo)
+        A8Kit.drain()
+        assertArrayEquals(before, A8Kit.pixelsOf(l).first)
+    }
+
+    /**
+     * Lead (A8 LR1): a tool switched while an undo waits (a strip tap: only canvas input is held)
+     * settles it before the new tool's `onActivate`, which may read the layer (a lift, a proxy).
+     */
+    @Test
+    fun aToolSwitchedWhileAnUndoWaitsFindsTheLayerUndone() {
+        val c = editor()
+        val l = c.doc.layers[2]
+        val before = A8Kit.pixelsOf(l).first
+        A8Kit.paint(c, l, Rect(100, 50, 400, 250), 0xFF3366AA.toInt())
+        swapOutNewest(c)
+
+        c.undo()
+        assertSame(l, c.activating)
+        val to = if (c.activeToolId == com.brushwork.paint.tools.ToolId.ERASER) com.brushwork.paint.tools.ToolId.BRUSH else com.brushwork.paint.tools.ToolId.ERASER
+        c.selectTool(to)
+        assertEquals(to, c.activeToolId)
+        assertNull("settled before the switch", c.activating)
+        assertArrayEquals("undone", before, A8Kit.pixelsOf(l).first)
+        A8Kit.drain()
+        assertArrayEquals(before, A8Kit.pixelsOf(l).first)
+    }
+
+    /**
+     * Lead (A8 LR1): a rollback asked while an undo waits settles it first, then takes back the
+     * steps after the mark: both strokes are gone, none is lost to a disposed step.
+     */
+    @Test
+    fun aRollbackWhileAnUndoWaitsTakesBackEveryStep() {
+        val c = editor()
+        val l = c.doc.layers[2]
+        val original = A8Kit.pixelsOf(l).first
+        val marker = c.undoMarker()
+        A8Kit.paint(c, l, Rect(100, 50, 400, 250), 0xFF3366AA.toInt())
+        A8Kit.paint(c, l, Rect(200, 100, 500, 290), 0xFFAA6633.toInt())
+        swapOutNewest(c)
+
+        c.undo()
+        assertSame(l, c.activating)
+        assertTrue(c.rollbackTo(marker))
+        assertNull("settled", c.activating)
+        assertEquals(marker.depth, c.undoManager.undoCount)
+        A8Kit.drain()
+        assertNull(c.activating)
+        assertArrayEquals("both strokes taken back", original, A8Kit.pixelsOf(l).first)
+    }
+
+    /**
+     * Lead (A8, lead note): a rollback over [a rotation, a stroke whose tiles are SWAPPED]: the
+     * stroke's undo waits for its tiles, the rotation's undo (`CanvasOps`' canvas step, applied
+     * directly by the rollback, not through the manager) waits behind it, and both apply before
+     * the rollback disposes the steps: the layer is the original one, at its original size.
+     */
+    @Test
+    fun aRollbackOverARotationAndASwappedStrokeAppliesBothInOrder() {
+        val c = editor()
+        val l = c.doc.layers[2]
+        val original = A8Kit.pixelsOf(l).first
+        val width = c.doc.width
+        val marker = c.undoMarker()
+        assertTrue("started", com.brushwork.paint.engine.CanvasOps.applyRotate(c, com.brushwork.paint.engine.CanvasRotation.CW_90))
+        repeat(4000) {
+            if (c.busyMessage == null) return@repeat
+            A8Kit.idle()
+            Thread.sleep(2)
+        }
+        A8Kit.drain()
+        assertNull("rotated", c.busyMessage)
+        A8Kit.paint(c, l, Rect(50, 100, 250, 400), 0xFF3366AA.toInt())
+        swapOutNewest(c)
+
+        assertTrue(c.rollbackTo(marker))
+        A8Kit.drain()
+        assertNull(c.activating)
+        assertEquals(marker.depth, c.undoManager.undoCount)
+        assertEquals("the original size", width, c.doc.width)
+        assertArrayEquals("the original pixels", original, A8Kit.pixelsOf(l).first)
+    }
 }
