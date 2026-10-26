@@ -257,7 +257,7 @@ internal class LayerStructure(private val c: EditorController) {
             if (p.evictedTo == null) p.snapshot()
             else com.brushwork.paint.engine.tiles.FlatPixels(BitmapUtils.copy(if (mask) layer.mask!! else layer.bitmap))
         is com.brushwork.paint.engine.tiles.BlankPixels -> com.brushwork.paint.engine.tiles.BlankPixels(p.width, p.height)
-        is com.brushwork.paint.engine.tiles.FlatPixels -> com.brushwork.paint.engine.tiles.FlatPixels(BitmapUtils.copy(p.bitmap))
+        is com.brushwork.paint.engine.tiles.FlatPixels -> com.brushwork.paint.engine.tiles.FlatPixels(BitmapUtils.copy(if (mask) layer.mask!! else layer.bitmap))
         com.brushwork.paint.engine.tiles.FolderPixels -> com.brushwork.paint.engine.tiles.FolderPixels
     }
 
@@ -271,7 +271,7 @@ internal class LayerStructure(private val c: EditorController) {
     private fun selectedCopy(layer: Layer, selMask: android.graphics.Bitmap): com.brushwork.paint.engine.tiles.PixelStore {
         val bitmap = when (val p = layer.pixels) {
             is com.brushwork.paint.engine.tiles.BlankPixels -> return com.brushwork.paint.engine.tiles.BlankPixels(p.width, p.height)
-            is com.brushwork.paint.engine.tiles.FlatPixels -> BitmapUtils.copy(p.bitmap)
+            is com.brushwork.paint.engine.tiles.FlatPixels -> BitmapUtils.copy(layer.bitmap)
             is com.brushwork.paint.engine.tiles.TiledPixels -> if (p.evictedTo == null) p.materialize() else BitmapUtils.copy(layer.bitmap)
             com.brushwork.paint.engine.tiles.FolderPixels -> BitmapUtils.copy(layer.bitmap)
         }
