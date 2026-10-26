@@ -79,6 +79,8 @@ internal class LayerStructure(private val c: EditorController) {
         val ins = at ?: insertionPoint()
         val pos = ins.index.coerceIn(0, doc.layers.size)
         if (!layer.isFolder && ins.parentId == Layer.ROOT_ID && !doc.hasFolders) {
+            // This insert cannot be refused: the layer goes in blank when it is (v1.10, A7).
+            blankIfNew(layer)
             // v1.6 (I11): the same mutation and the same action; v1.7: its undo selects the row
             // that was active before the add again.
             val activeBefore = doc.layers.getOrNull(doc.activeLayerIndex)
@@ -89,7 +91,30 @@ internal class LayerStructure(private val c: EditorController) {
             return AddLayerAction(layer, pos, label, activeBefore)
         }
         if (layer.isFolder && folderCount() >= LayerTree.MAX_FOLDERS) { c.toast(FolderLabels.COUNT_LIMIT); return null }
-        return applied(label, LayerTree.inserted(doc.layers, pos, listOf(layer), ins.parentId))
+        // v1.10 (A7): blank only once the tree took it (same main-thread call, nothing drawn in
+        // between), so a refused insert gives the caller its layer and bitmap back untouched.
+        return applied(label, LayerTree.inserted(doc.layers, pos, listOf(layer), ins.parentId))?.also { blankIfNew(layer) }
+    }
+
+    /**
+     * v1.10 (A7, design 2.13): a new layer whose content was never painted (a flat store with
+     * `contentVersion` 0 and no visible pixel: "Add layer", an adjustment or vector layer, an empty
+     * import) goes in as `BlankPixels` and costs 0 bytes until its first write; its bitmap is freed
+     * here, in the insert's own main-thread call, before anything draws the layer. The pixels stay
+     * the same (transparent), so `pixelGeneration` does not move and the insert stays one step; the
+     * mask is kept as it is. A refused insert leaves the layer as its caller made it.
+     *
+     * Every caller of [insert], [place] and [placed] lets go of its own bitmap once the insert
+     * succeeds (it reads the layer through `layer.bitmap`, which materializes a blank layer). The
+     * emptiness check is v1.9's full scan (`TileOps.isTransparent`), on main: about the cost of
+     * allocating the layer; it stops at the first painted pixel of a layer made with content.
+     */
+    private fun blankIfNew(layer: Layer) {
+        val p = layer.pixels
+        if (layer.isFolder || p !is com.brushwork.paint.engine.tiles.FlatPixels || layer.contentVersion != 0L) return
+        if (!p.isEmpty()) return
+        layer.rehouse(com.brushwork.paint.engine.tiles.BlankPixels(p.width, p.height), layer.maskPixels)
+        com.brushwork.paint.engine.tiles.TileOps.dispose(p)
     }
     // endregion
 

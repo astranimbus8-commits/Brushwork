@@ -15,6 +15,7 @@ import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.engine.ViewTransform
 import com.brushwork.paint.model.GridType
 import com.brushwork.paint.model.Layer
+import com.brushwork.paint.model.LayerTree
 import com.brushwork.paint.tools.ObjectPosition
 import com.brushwork.paint.tools.PositionedTool
 import com.brushwork.paint.tools.Tool
@@ -226,7 +227,8 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
         if (story.isOpen) return storyTarget === l
         if (!controller.checkEditable(l)) return false
         val frames = threads.framesOf(item.thread.storyId)
-        val locked = frames.indexOfFirst { doc.effectiveLocked(it.layer) }
+        val tree = LayerTree.index(doc)
+        val locked = frames.indexOfFirst { tree.effectiveLocked(it.layer) }
         if (locked >= 0) {
             controller.toast(threads.lockedMessage(locked))
             return false
@@ -526,8 +528,9 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
         // The selected frame's own out-port keeps the nearest-wins rule with its handles.
         var onPort: Layer? = null
         var onPortD = Float.MAX_VALUE
+        val tree = LayerTree.index(doc)
         for (f in threads.allFrames()) {
-            if (!doc.effectiveVisible(f.layer)) continue
+            if (!tree.effectiveVisible(f.layer)) continue
             val at = FramePorts.outPort(t, FrameGeometry.outerRect(f.item))
             val d = s.distanceTo(at)
             if (d <= t.dp(PORT_HIT_DP) && d < best) {
@@ -855,9 +858,10 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
         val t = controller.viewTransform
         val tol = t.screenToDocLength(t.dp(HIT_TOLERANCE_DP))
         val frames = threads.allFrames()
+        val tree = LayerTree.index(doc)
         for (i in frames.indices.reversed()) {
             val f = frames[i]
-            if (!doc.effectiveVisible(f.layer)) continue
+            if (!tree.effectiveVisible(f.layer)) continue
             val r = FrameGeometry.outerRect(f.item)
             if (p.x >= r.left - tol && p.x <= r.right + tol && p.y >= r.top - tol && p.y <= r.bottom + tol) return f
         }
@@ -876,10 +880,11 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
         frameAt(p)?.let { return it.layer }
         val t = controller.viewTransform
         val tol = t.screenToDocLength(t.dp(HIT_TOLERANCE_DP))
+        val tree = LayerTree.index(doc)
         for (i in doc.layers.indices.reversed()) {
             val l = doc.layers[i]
             val data = l.textData ?: continue
-            if (!doc.effectiveVisible(l) || threads.isFrame(l)) continue
+            if (!tree.effectiveVisible(l) || threads.isFrame(l)) continue
             val cached = hitTexts[l.id]?.takeIf { it.first === data }
             val (items, preps) = if (cached != null) cached.second to cached.third else {
                 val items = TextCodec.decodeAll(data)
@@ -1267,14 +1272,15 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
             val th = (byLayer[f.layer] ?: f.item).thread
             lastOf[th.storyId] = max(lastOf[th.storyId] ?: -1, th.index)
         }
+        val tree = LayerTree.index(doc)
         for (f in all) {
-            if (!doc.effectiveVisible(f.layer)) continue
+            if (!tree.effectiveVisible(f.layer)) continue
             var item = byLayer[f.layer] ?: f.item
             if (f.layer === dragLayer) dragItem?.let { item = it }
             if (f.layer === positionEditLayer) positionEdit?.second?.let { item = it }
             if (story.isOpen && f.layer === storyTarget) story.item?.let { cur -> item = item.copy(cx = cur.cx, cy = cur.cy, spec = FrameGeometry.withFrameBox(item.spec, cur.spec.box)) }
             val th = item.thread
-            list += OverlayFrame(f.layer, FrameGeometry.outerRect(item), th.storyId, th.index, th.overset, th.index < (lastOf[th.storyId] ?: th.index), doc.effectiveLocked(f.layer))
+            list += OverlayFrame(f.layer, FrameGeometry.outerRect(item), th.storyId, th.index, th.overset, th.index < (lastOf[th.storyId] ?: th.index), tree.effectiveLocked(f.layer))
         }
         if (newItem != null) list += OverlayFrame(null, FrameGeometry.outerRect(newItem), PREVIEW_STORY_ID, 0, newItem.thread.overset, false)
         val pulse = if (linkFrom != null) ((SystemClock.uptimeMillis() % PULSE_PERIOD_MS).toFloat() / PULSE_PERIOD_MS).let { if (it < 0.5f) it * 2f else 2f - it * 2f } else 0f

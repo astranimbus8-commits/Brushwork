@@ -10,6 +10,10 @@ import com.brushwork.paint.tools.mask.MaskTool
 /**
  * Adjustment layer commands (v1.5 §4.3; owned by A5): the layers window's "New adjustment layer
  * (Tone)", "Edit adjustment" and "Edit mask", and the Filters panel's "As adjustment layer".
+ *
+ * v1.10 (A7, design 2.13): a new adjustment layer costs no pixel memory. Its content is never
+ * painted, so `LayerStructure` (region `v110-A7 blank`) puts it in as `BlankPixels`; a mask made
+ * for it (from a selection or a spec) is rendered content and stays a flat bitmap.
  */
 object AdjustmentLayerOps {
     /** "New adjustment layer (Tone)": a Tone adjustment above the active layer (one step), then its Adjust sheet. */

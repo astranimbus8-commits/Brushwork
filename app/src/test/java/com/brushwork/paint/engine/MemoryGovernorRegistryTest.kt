@@ -103,7 +103,8 @@ class MemoryGovernorRegistryTest {
     fun theDefaultPolicyIsV18AndTheAppRunsV19() {
         // v1.9 (A7b step 1, design 3.2 A7b, R9): the app runs GovernorPolicyV19 (GovernorPolicyTest
         // pins its levels); MemoryGovernor's own default, until BrushworkApp.onCreate sets it, is v1.8's.
-        assertSame(GovernorPolicyV19, GovernorPolicies.current())
+        // v1.10 (A7 step 2): the app runs GovernorPolicyV110, v1.9's levels with the undo trim on R.
+        assertSame(GovernorPolicyV110, GovernorPolicies.current())
         assertSame(MemoryGovernor.DefaultPolicy, MemoryGovernor.policy)
         var trims = 0
         register("cache", 0, bytes = 1L shl 30, trim = { trims++; 1L })

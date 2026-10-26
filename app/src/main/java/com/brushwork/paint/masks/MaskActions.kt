@@ -188,6 +188,10 @@ object MaskEdits {
      * mask is enabled in the same step). v1.9 (A7b step 6, the lead at A7b's merge): a mask counts
      * in the layer cap, so at the cap nothing is added and the layer-limit message shows, as
      * `EditorController.addMask` does.
+     *
+     * v1.10 (A7, design 2.13): the mask is [spec]'s rendering (a gradient, a shape, brush
+     * strokes), not a uniform one, so it stays a flat bitmap; only a never-painted layer's content
+     * is blank (`LayerStructure`, region `v110-A7 blank`).
      */
     private fun addSpecMask(c: EditorController, layer: Layer, spec: MaskSpec, label: String, brushes: BrushSource?): Boolean {
         if (!c.canAddLayer) { c.toast(c.layerLimitMessage()); return false }

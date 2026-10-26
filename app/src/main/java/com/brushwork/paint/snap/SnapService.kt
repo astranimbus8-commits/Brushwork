@@ -11,6 +11,7 @@ import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.engine.ViewTransform
 import com.brushwork.paint.model.GridType
 import com.brushwork.paint.model.Layer
+import com.brushwork.paint.model.LayerTree
 import com.brushwork.paint.tools.transform.DocBox
 import com.brushwork.paint.tools.transform.LayerBoundsCache
 import com.brushwork.paint.tools.transform.SnapAxis
@@ -89,9 +90,15 @@ class SnapService(private val controller: EditorController) {
         return if (d.isFinite() && d > 0f) d else 0f
     }
 
-    /** Layers whose content can be snapped to: visible, not fully transparent, not in [exclude]. */
-    fun candidateLayers(exclude: Collection<Layer> = emptyList()): List<Layer> =
-        controller.doc.layers.filter { l -> !l.isFolder && controller.doc.effectiveVisible(l) && l.opacity > 0f && exclude.none { it === l } }
+    /**
+     * Layers whose content can be snapped to: visible, not fully transparent, not in [exclude].
+     * v1.10 (A7): the eyes through one `LayerTree.Index` (O(n), not O(n) per layer).
+     */
+    fun candidateLayers(exclude: Collection<Layer> = emptyList()): List<Layer> {
+        val layers = controller.doc.layers
+        val tree = LayerTree.index(layers)
+        return layers.filter { l -> !l.isFolder && tree.effectiveVisible(l) && l.opacity > 0f && exclude.none { it === l } }
+    }
 
     /**
      * Starts finding the bounds and lines of the layers that can be snapped to (except

@@ -3,6 +3,7 @@ package com.brushwork.paint.v19.a7b
 import android.content.Context
 import android.graphics.Color
 import androidx.test.core.app.ApplicationProvider
+import com.brushwork.paint.engine.GovernorPolicyV110
 import com.brushwork.paint.engine.GovernorPolicyV19
 import com.brushwork.paint.engine.MemoryGovernor
 import com.brushwork.paint.filters.FilterRegistry
@@ -45,7 +46,8 @@ class AdmitMarginTest {
     @Test
     fun theMarginIs64MB() {
         assertEquals(64L * mb, GovernorPolicyV19.ADMIT_MARGIN)
-        assertSame("the app's policy decides", GovernorPolicyV19, MemoryGovernor.policy)
+        // v1.10 (A7 step 2): the app's policy is GovernorPolicyV110, whose admit is v1.9's.
+        assertSame("the app's policy decides", GovernorPolicyV110, MemoryGovernor.policy)
     }
 
     @Test

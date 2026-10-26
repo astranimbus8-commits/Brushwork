@@ -3531,7 +3531,91 @@ and 2.0).
 
 <!-- v110-A7 -->
 
-(A7 writes this section.)
+`engine/budget/` holds the two numbers every v1.10 limit reads, once per editor session at open
+(I31): J, the Java heap (`MemSnapshot.javaMax`, else `Runtime.maxMemory`), and R, the native
+budget for layer pixels.
+
+- `Budgets.compute(probe, stepDown)`: `base = min(0.30 × totalMem, availMem − 400 MiB)`,
+  `f = (low-RAM ? 0.6 : 1) × (64-bit ? 1 : 0.6) × {1, 0.8, 0.64}[stepDown]`,
+  `R = clamp(base × f, lo = 0.55 × J, hi = 2 GiB on 64-bit, 700 MiB on 32-bit)`; `lo` wins over
+  `hi`. The T606 (4 GB, J = 512 MiB) gets R ≈ 1.19 GB. J3: a probe that reports
+  `totalMem == 0` (Robolectric, no context) or throws gives `Budgets.v19(maxMemory)` with
+  `known = false`, and every limit below then delegates to `LayerBudgetV19`, so unknown memory
+  keeps v1.9's numbers exactly (I32; `LayerBudgetV19ParityTest` and the v1.9 limit tests run
+  there).
+- `AndroidMemoryProbe` reads `ActivityManager.MemoryInfo`, `isLowRamDevice`, `Process.is64Bit`
+  and the heaps through the context `attach` gave (a lead request: `BrushworkApp.onCreate`
+  calls it; meanwhile it falls back to the process' current application).
+- `MemoryBudget`: the ledger's limit is R (unlimited while unknown). `admitNative` is
+  `PixelLedger.tryReserve`; refused on main, it asks the residency for room (CRITICAL) once and
+  tries again. `tileRam()` is R less what the ledger holds outside TILES. `undoCap`: v1.9's
+  `max(48 MiB, J/4)` at Classic and while unknown, `max(128 MiB, R/8)` at TILES,
+  `max(128 MiB, min(1 GiB, swapCap/8))` at FULL. `cloneSnapshotCap` is `max(48 MiB, R/8)`.
+
+`LayerBudgetV110(budget, level)` is the session's `LayerBudget.current` (section 2.15). L is one
+layer's bytes, `used(doc)` stays v1.9's units (painted layers, masks, array sources; folders 0).
+
+- Classic: `max(v19Cap(J), floor((R − 3.8 L − 184 MB) / L))`, `v19Cap = (0.55 J / L − 3)` in
+  2..100, so a phone whose R sits near its floor keeps v1.9's count. TILES:
+  `max(Classic, 1 + (R − 6 L − 184 MB) / (0.35 L))`. FULL with the session's swap store: no count
+  but the structural guard, `LayerBudget.MAX_LAYERS_GUARD` = 10,000 (`noFixedLimit`), and a new
+  layer needs R or the store to take one more layer. Every count is at most the guard.
+- Refusals (`refusal`): "Layer limit reached (N) for this canvas size" at Classic and TILES (the
+  v1.9 text), `EngineLabels110.STORAGE_FULL` at FULL with swap when neither R nor the store has
+  room for one more layer, `LayersLabels110.GUARD` at the guard (10,000 layers, or an adjustment
+  layer's two at 9,999, at every level and before storage). A refused first write to a BLANK, PARKED or EVICTED layer says `firstWriteRefusal()`:
+  `PAINT_REFUSED`, or `STORAGE_FULL` at FULL with swap (the controller's two first-write toasts,
+  `checkEditable` and `updateLayerData`, show it).
+- The J12 ceiling: `canvasCheck` refuses a canvas whose one painted layer does not fit with
+  `LayersLabels110.canvasTooBig(W, H)`, W × H being `largestCanvas` at the asked aspect, rounded
+  down. `canTransformCanvas`: v1.9's check at Classic, `CANVAS_OP_TOO_BIG` at TILES when twice
+  the layers' logical bytes pass the tile RAM (A11 calls it from the canvas operations).
+  `capacity` is null at FULL; `renderCacheCap` is R/16.
+- `GovernorPolicyV110.trimUndo` (CRITICAL only): v1.9's while unknown; at TILES and FULL P3 runs
+  first (at FULL also `swapUndoTiles`), then only `native − tile bytes − 0.90 R` is dropped from
+  the oldest steps; at Classic v1.9's heap measure against `0.70 J + 0.90 R`.
+
+The gallery reads the same budget: `NewCanvasDialog` shows `LayersLabels110.largestOnPhone`
+("Largest on this phone: about W × H px") under the size fields
+and "No fixed limit" for the layer count at FULL; `NewArtwork` and `GalleryImport` refuse with the
+too-big text only while memory is known; `CloneSource` samples its source layer in place (I28)
+under `cloneSnapshotCap`.
+
+Blank layers (section 2.2's BLANK row): `LayerStructure.placed` (region `v110-A7 blank`) turns a
+new, never-painted (`contentVersion` 0), fully transparent flat layer into `BlankPixels` as it
+goes in (after the tree took it, so a refused insert leaves the caller's layer alone), so a new
+layer, an adjustment layer and a vector layer cost 0 bytes until their first write; the insert
+stays one undo step and the layer counts in `used` like any other. The emptiness check is v1.9's
+full scan on main, about the cost of the allocation the caller already made (a lead request asks
+`EditorController.addLayerWith` and its siblings to build blank layers directly). Masks stay flat
+until A8's solid tiles (a lead request). Until A9 step 4 the panel's row thumbnails read
+`layer.bitmap`, so a blank layer whose row is on screen materializes.
+
+`LayerTree.Index` (`LayerTree.index(layers)` / `index(doc)`): one O(n) build (three passes over
+the list: parents through the nearest id above, block starts, then what each layer inherits from
+its folders), then O(1) answers equal to the per-index queries (`parentOf`, `depth`,
+`descendantCount`, `block`, `shownByAncestors`, `lockedByAncestor`, `showsAsIs`, `isClipped`,
+`isClipBase`, `effectiveVisible`, `effectiveLocked`). The build is lazy: a top-level layer's eye
+and lock need none. It is made once per loop (the document keeps no structure version to cache
+it on) in `SnapService.candidateLayers`, `ExportOptionsSheet`'s notes and `TextFrameTool`'s frame
+loops, which were O(n²) at 10,000 layers.
+
+The layers panel's header (`LayersPanel.headerCount`, tag `layerWindowCount`) keeps v1.9's
+"n / max" in `used` units, red when nothing more can be added, at Classic, TILES and FULL without
+a store; only with `noFixedLimit` it shows "n" alone, read "n layers", never red. The count has
+its own 16 sp line height: Android 14's non-linear font scale keeps the theme's 24 sp line at
+twice the 12 sp font, 48 dp in the 46 dp header at font scale 2.0. The list was
+already a `LazyColumn` keyed by layer id: a scroll frame composes only the rows coming into view,
+the same at 40 layers and at 500 (`PanelScroll500TimingTest`). The rows' model
+(`LayerTreeRows.kt`, not A7's) still asks `LayerTree` per row (a lead request).
+
+Tests: `test:v110/a7/` (`MemoryBudgetFormulaTest`, `LayerBudgetV110Test`, `CanvasCeilingTest`,
+`TrimUndoOnRTest`, `FirstWriteRefusedAtTilesTest`, `FirstWriteRefusedSwapFullTest`,
+`GalleryLimitsOnRTest`, `BlankLayersCostZeroTest`, `LayerTreeIndexTest`,
+`LayersHeaderClassicShowsMaxTest`; timing `LayerTreeIndexBuildTimingTest`,
+`PanelScroll500TimingTest`) and `test:qa110/Qa110LayerLimitsUiTest` (392 and 360 dp, font scale
+1, 1.3 and 2.0: Classic at its limit, FULL without one, every refusal text of 2.13, and the
+editor's layer window header at each: "14 / 14", "103" alone, "10000 / 10000").
 
 <!-- /v110-A7 -->
 

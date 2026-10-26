@@ -107,6 +107,12 @@ data class CanvasSize(
 /**
  * New-canvas presets and the size / memory math behind the new canvas dialog.
  * Pure Kotlin (no Android types) so it is unit-tested on the JVM.
+ *
+ * v1.10 (A7, design 2.13): the heap forms ([check], [maxLayers], [rawMaxLayers]) are v1.9's, which
+ * `LayerBudgetV19` keeps while the phone's memory is unknown. The dialog asks the gallery's
+ * `LayerBudget.current`: with memory known its check is the J12 ceiling on R, its "Layers on this
+ * device" the level's count (`LayersLabels110.NO_FIXED_LIMIT` at FULL), and the largest canvas shows under the
+ * size fields.
  */
 object CanvasPresets {
     /** Longest allowed canvas side in pixels. */
