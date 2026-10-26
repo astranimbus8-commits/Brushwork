@@ -44,6 +44,8 @@ import java.io.File
 import java.io.RandomAccessFile
 import java.time.Duration
 import java.util.Locale
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 /**
  * v1.10 A10 step 8 (cut 1; design 2.7, 2.8 "reads ... ahead", Q5): [SwapReadAhead] reads ahead, on
@@ -360,12 +362,18 @@ class ReadAheadNeighboursTest {
         val above = doc.layers[3]
         val belowTiles = painted(below)
         val ra = readAhead(Host(doc))
+        // An urgent job holds the worker until main has changed the tiles, so the reads are still
+        // queued then (a free worker could read and post them while the clock advances).
+        val hold = CountDownLatch(1)
+        TileWorker.submit(TileWorker.Priority.READ_URGENT, { hold.await(10, TimeUnit.SECONDS) }) { }
         ra.changed()
         advance(SwapReadAhead.IDLE_MS)
-        // The reads are queued (their results wait on main): the layer below is let go of and the
-        // one above is read in on main meanwhile.
+        assertTrue("the reads are queued", TileWorker.pendingJobs > 1)
+        assertEquals(0, ra.copiedTiles)
+        // The layer below is let go of and the one above is read in on main meanwhile.
         for (s in storesOf(below)) TileOps.releaseStore(s)
         for (t in painted(above)) TileOps.makeResident(t)
+        hold.countDown()
         drain()
         assertEquals(0, ra.copiedTiles)
         assertEquals(0L, ra.heldBytes)
