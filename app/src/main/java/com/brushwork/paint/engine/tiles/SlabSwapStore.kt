@@ -3,16 +3,27 @@ package com.brushwork.paint.engine.tiles
 import android.content.Context
 import android.graphics.Bitmap
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import com.brushwork.paint.engine.EngineConfig
 import com.brushwork.paint.engine.EngineLevel
+import com.brushwork.paint.engine.MemoryGovernor
+import com.brushwork.paint.engine.MemoryPressure
+import com.brushwork.paint.engine.NativeWatch
+import com.brushwork.paint.engine.budget.LedgerCategory
 import com.brushwork.paint.engine.budget.StorageProbe
 import com.brushwork.paint.engine.check.AutoCheckRunner
+import com.brushwork.paint.model.Document
+import com.brushwork.paint.model.Layer
 import java.io.File
 import java.io.IOException
 import java.io.RandomAccessFile
+import java.lang.ref.WeakReference
 import java.util.BitSet
+import java.util.Collections
+import java.util.IdentityHashMap
 import java.util.Locale
 import java.util.UUID
 import java.util.zip.CRC32
@@ -44,6 +55,9 @@ import java.util.zip.CRC32
  * **Slow reads (design 2.10).** Every read is timed; when the p95 of the last 50 exceeds 40 ms,
  * [slowReads] turns on and the installed store records `slowSwapReads` (TILES at the next open).
  *
+ * **Read-ahead (step 8).** [readPacked] gives [SwapReadAhead] a slot's checked packed bytes, which
+ * it keeps beside the slot for the tiles of the layers next to the active one.
+ *
  * **Threads.** [write] on the worker (it records the slot in `tile.slot` under the tile's lock and
  * leaves the bitmap: dropping it is main's commit, the `Tile.kt` rules); [read] on the worker or a
  * reader; [free] and [close] on main. [close] closes the slab files at once and deletes [dir] on its
@@ -65,6 +79,9 @@ class SlabSwapStore internal constructor(
     /** True once the p95 of the last [SLOW_WINDOW] reads exceeded [SLOW_READ_MS] this session ([onSlowReads] was called). */
     @Volatile var slowReads = false
         private set
+
+    /** The reads on demand ([read]) this session; a read-ahead's ([readPacked]) is none (tests). */
+    internal val readCount: Int get() = synchronized(latencies) { reads }
 
     /** This session's directory name (a random UUID). */
     val sessionId: String = UUID.randomUUID().toString()
@@ -179,16 +196,27 @@ class SlabSwapStore internal constructor(
     @Throws(IOException::class)
     private fun readSlot(tile: Tile): Bitmap {
         val slot = synchronized(tile.lock) { tile.slot } ?: throw IOException("tile ${tile.w}x${tile.h} is not swapped")
-        if (closed) throw IOException("swap store closed")
-        val slab = synchronized(lock) { slabs.getOrNull(slot.slab) } ?: throw IOException("no slab ${slot.slab}")
-        val bytes = slab.read(slot.offset, slot.length)
-        val crc = CRC32().apply { update(bytes) }.value.toInt()
-        if (crc != slot.crc) throw IOException("CRC mismatch in slot $slot")
+        val bytes = readPacked(slot)
         return try {
             TileOps.inflate(bytes, tile.w, tile.h)
         } catch (e: Exception) {
             throw IOException("slot $slot does not inflate", e)
         }
+    }
+
+    /**
+     * The packed bytes [slot] holds, checked against its CRC and not inflated; `IOException` on
+     * failure. The worker ([SwapReadAhead], A10 step 8) or a reader. Not timed for [slowReads] by
+     * itself: the ring measures the reads someone waits on ([read]).
+     */
+    @Throws(IOException::class)
+    internal fun readPacked(slot: SwapSlot): ByteArray {
+        if (closed) throw IOException("swap store closed")
+        val slab = synchronized(lock) { slabs.getOrNull(slot.slab) } ?: throw IOException("no slab ${slot.slab}")
+        val bytes = slab.read(slot.offset, slot.length)
+        val crc = CRC32().apply { update(bytes) }.value.toInt()
+        if (crc != slot.crc) throw IOException("CRC mismatch in slot $slot")
+        return bytes
     }
 
     override fun free(slot: SwapSlot) {
@@ -369,5 +397,265 @@ class SlabSwapStore internal constructor(
         }
 
         private const val TAG = "BrushworkEngine"
+    }
+}
+
+/**
+ * v1.10 (A10 step 8, cut 1; design 2.7, 2.8 "reads ... ahead", Q5): reads ahead, on A8's
+ * [TileWorker], the SWAPPED tiles of the two layers next to the active one (the nearest pixel layer
+ * above it and the nearest below it in `Document.layers`, folders skipped; content and mask) once
+ * the editor has been idle for [IDLE_MS] (300 ms), so a switch to either finds their pixels without
+ * a read of the swap file.
+ *
+ * **The copy.** A read-ahead copy is the slot's packed bytes ([SlabSwapStore.readPacked]: checked
+ * against the slot's CRC, not inflated), kept in the tile's `packed` beside its slot and counted in
+ * [PackedPool], at most [shareCap] (half the pool's cap: the other half stays for swap-out at TILES
+ * or with a full swap file). The tile stays SWAPPED (its state reads the slot first) and the slot
+ * stays the copy of record, so a copy is dropped at no cost and nothing is written again.
+ * `Tile.bitmapForRead` takes the packed bytes before the slot, so the activation (`TileWorker.readIn`
+ * at READ_URGENT), a waiting display tile, a save or an export inflates them with no swap read;
+ * `TileOps.adoptRead` and a free let go of both, as for any tile.
+ *
+ * **Threads (the `Tile.kt` rules).** Main picks the tiles, leases each (one reference more) and
+ * submits one job per tile at READ_AHEAD (after the urgent reads, before the writes and park cuts);
+ * the worker reads the slot taken at the lease and posts the bytes; main keeps them, in that posted
+ * task, only while the tile is still SWAPPED in that slot with no packed bytes, a store or an undo
+ * step still holds it, the session's store and the neighbours are the same and the pool admits the
+ * bytes; the lease goes either way. A read that fails (I/O, CRC) keeps nothing: the read on demand
+ * meets the same fault and restores the layer (design 2.8).
+ *
+ * **When.** [changed] (the active layer, the layer list or an activation changed) starts a pass
+ * [IDLE_MS] later. A pass waits [IDLE_MS] more while [Host.idle] is false (a gesture, a busy job, a
+ * filter, a tool's pending work, an activation) or while the resident tiles exceed [tileRam] (P3
+ * then swaps tiles out, and reads queued before its writes would delay that). While nothing changes
+ * it looks again every [RECHECK_MS] (2 s), for tiles swapped out since. A pass drops the copies of
+ * tiles no longer next to the active layer. LOW and CRITICAL memory pressure drop every copy (a
+ * `MemoryGovernor` entry of priority 0, trimmed with the display caches) and nothing is read for
+ * [QUIET_MS] (60 s), nor while `NativeWatch.refusingNewLayers` holds; [stop] drops every copy.
+ *
+ * Only with a [SlabSwapStore] installed (FULL); with any other store a pass reads nothing. Main
+ * thread throughout, except the jobs' reads.
+ */
+internal class SwapReadAhead(
+    private val host: Host,
+    /** P3's budget of resident tiles: a pass waits while the TILES ledger is over it. */
+    private val tileRam: () -> Long = { EngineConfig.budget.tileRam() },
+    /** The bytes the copies may hold in [PackedPool]: half its cap. */
+    private val shareCap: () -> Long = { PackedPool.cap() / 2 },
+) {
+    /** What the read-ahead needs of the editor (main thread). */
+    interface Host {
+        /** The open document. */
+        val document: Document
+
+        /** True while nothing goes on: no gesture, busy job, filter, pending tool work or activation. */
+        val idle: Boolean
+    }
+
+    /** A copy kept: its bytes (weakly: a tile freed or read in lets go of them) and their size. */
+    private class Copy(val bytes: WeakReference<ByteArray>, val size: Int)
+
+    private val handler = Handler(Looper.getMainLooper())
+    private val tick = Runnable { pass() }
+    private var stopped = false
+
+    /** The neighbours' stores of the last pass; other ones start a new [generation]. */
+    private var neighbours: List<TiledPixels> = emptyList()
+
+    /** Bumped when the neighbours change and by [stop]: a job of an older one reads and keeps nothing (the worker reads it). */
+    @Volatile private var generation = 0
+
+    /** The copies kept, by tile. */
+    private val copies = IdentityHashMap<Tile, Copy>()
+
+    /** The tiles with a read in flight, and their slots' bytes. */
+    private val pending = IdentityHashMap<Tile, Int>()
+
+    /** No pass before this uptime (after a trim). */
+    private var quietUntil = 0L
+
+    private var registration: MemoryGovernor.Registration? = null
+
+    /** The bytes of the copies kept, at the last count (any thread: the memory entry reads it). */
+    @Volatile var heldBytes = 0L
+        private set
+
+    /** The tiles with a copy kept now (tests). */
+    internal val copiedTiles: Int get() = copies.count { (t, c) -> ours(t, c) }
+
+    /** Main: the active layer, the layer list or the activation changed; a pass runs [IDLE_MS] later. */
+    fun changed() {
+        if (stopped) return
+        handler.removeCallbacks(tick)
+        handler.postDelayed(tick, IDLE_MS)
+    }
+
+    /** Main: the editor goes; every copy is dropped and nothing more is read. */
+    fun stop() {
+        if (stopped) return
+        stopped = true
+        handler.removeCallbacks(tick)
+        generation++
+        dropAll()
+        registration?.close()
+        registration = null
+    }
+
+    /** Main: one pass ([IDLE_MS] after a change, or [RECHECK_MS] after the last one). */
+    internal fun pass() {
+        if (stopped) return
+        handler.removeCallbacks(tick)
+        val store = EngineConfig.swapStore as? SlabSwapStore ?: return
+        val now = SystemClock.uptimeMillis()
+        if (now < quietUntil) {
+            handler.postDelayed(tick, quietUntil - now)
+            return
+        }
+        if (!host.idle || NativeWatch.refusingNewLayers || EngineConfig.budget.ledger.of(LedgerCategory.TILES) > tileRam()) {
+            handler.postDelayed(tick, IDLE_MS)
+            return
+        }
+        val stores = neighbourStores()
+        if (stores.size != neighbours.size || stores.indices.any { stores[it] !== neighbours[it] }) {
+            generation++
+            neighbours = stores
+        }
+        val wanted = Collections.newSetFromMap(IdentityHashMap<Tile, Boolean>())
+        val order = ArrayList<Tile>()
+        for (s in stores) for (t in s.tiles) if (t != null && t.solid == null && wanted.add(t)) order += t
+        val it = copies.entries.iterator()
+        while (it.hasNext()) {
+            val (t, c) = it.next()
+            if (t !in wanted) drop(t, c)
+            if (t !in wanted || !ours(t, c)) it.remove()
+        }
+        count()
+        var room = shareCap() - heldBytes - pending.values.sumOf { it.toLong() }
+        val gen = generation
+        for (t in order) {
+            if (t.refs <= 0 || t.bitmap != null || t.packed != null || pending.containsKey(t) || TileWorker.busy(t)) continue
+            val slot = t.slot ?: continue
+            if (slot.length > room) break
+            room -= slot.length
+            read(t, slot, store, gen)
+        }
+        handler.postDelayed(tick, RECHECK_MS)
+    }
+
+    /** The content and mask stores (parked, not evicted) of the nearest pixel layer above the active one and the nearest below it. */
+    private fun neighbourStores(): List<TiledPixels> {
+        val doc = host.document
+        val layers = doc.layers
+        if (layers.isEmpty()) return emptyList()
+        val active = doc.activeLayerIndex.coerceIn(0, layers.lastIndex)
+        val out = ArrayList<TiledPixels>(4)
+        fun add(l: Layer) {
+            for (p in arrayOf(l.pixels, l.maskPixels)) {
+                val s = p as? TiledPixels ?: continue
+                if (s.evictedTo == null) out += s
+            }
+        }
+        (active + 1 until layers.size).firstOrNull { !layers[it].isFolder }?.let { add(layers[it]) }
+        (active - 1 downTo 0).firstOrNull { !layers[it].isFolder }?.let { add(layers[it]) }
+        return out
+    }
+
+    /** Main: leases [t] and reads [slot] of [store] on the worker; the posted task keeps the bytes ([keep]) and releases the lease. */
+    private fun read(t: Tile, slot: SwapSlot, store: SlabSwapStore, gen: Int) {
+        t.refs++
+        pending[t] = slot.length
+        TileWorker.submit(TileWorker.Priority.READ_AHEAD, { if (gen == generation) store.readPacked(slot) else null }) { r ->
+            pending.remove(t)
+            try {
+                r.getOrNull()?.let { keep(t, slot, store, gen, it) }
+            } finally {
+                TileOps.release(t)
+            }
+        }
+    }
+
+    /** Main, in the job's posted task: [bytes] read from [slot] become [t]'s copy when nothing changed meanwhile and the pool admits them. */
+    private fun keep(t: Tile, slot: SwapSlot, store: SlabSwapStore, gen: Int, bytes: ByteArray) {
+        if (stopped || gen != generation || EngineConfig.swapStore !== store) return
+        // Held besides the lease, still SWAPPED in that slot, nothing read in or kept meanwhile.
+        if (t.refs <= 1 || t.bitmap != null || t.packed != null || t.slot !== slot) return
+        count()
+        val size = bytes.size.toLong()
+        if (heldBytes + size > shareCap() || !PackedPool.tryAdmit(size)) return
+        val kept = synchronized(t.lock) {
+            (t.bitmap == null && t.packed == null && t.slot === slot).also { if (it) t.packed = bytes }
+        }
+        if (!kept) {
+            PackedPool.release(size)
+            return
+        }
+        copies[t] = Copy(WeakReference(bytes), bytes.size)
+        heldBytes += size
+        if (registration == null) registration = MemoryGovernor.register(MEMORY_NAME, MEMORY_PRIORITY, { heldBytes }) { p -> trim(p) }
+    }
+
+    /** True while [c] is still [t]'s packed bytes beside its slot (not read in, freed or dropped). */
+    private fun ours(t: Tile, c: Copy): Boolean {
+        val b = c.bytes.get() ?: return false
+        return t.packed === b && t.slot != null && t.bitmap == null
+    }
+
+    /** Counts [heldBytes] again, forgetting the copies that are no longer kept. */
+    private fun count() {
+        var n = 0L
+        val it = copies.entries.iterator()
+        while (it.hasNext()) {
+            val (t, c) = it.next()
+            if (ours(t, c)) n += c.size else it.remove()
+        }
+        heldBytes = n
+    }
+
+    /** Drops [t]'s copy [c] when it is still kept (the slot stays); the bytes it let go of. */
+    private fun drop(t: Tile, c: Copy): Long {
+        val b = c.bytes.get() ?: return 0L
+        val dropped = synchronized(t.lock) {
+            (t.packed === b && t.slot != null && t.bitmap == null).also { if (it) t.packed = null }
+        }
+        if (!dropped) return 0L
+        PackedPool.release(c.size.toLong())
+        return c.size.toLong()
+    }
+
+    /** Main: drops every copy; the bytes let go of. */
+    private fun dropAll(): Long {
+        var n = 0L
+        for ((t, c) in copies) n += drop(t, c)
+        copies.clear()
+        heldBytes = 0L
+        return n
+    }
+
+    /** The memory entry: LOW and CRITICAL drop every copy and quiet the read-ahead for [QUIET_MS]. */
+    private fun trim(p: MemoryPressure): Long {
+        if (p != MemoryPressure.LOW && p != MemoryPressure.CRITICAL) return 0L
+        val run = {
+            quietUntil = SystemClock.uptimeMillis() + QUIET_MS
+            dropAll()
+        }
+        if (Looper.getMainLooper()?.isCurrentThread == true) return run()
+        handler.post { run() }
+        return 0L
+    }
+
+    companion object {
+        /** A pass runs this long after the last change (and waits this long again while the editor is busy). */
+        const val IDLE_MS = 300L
+
+        /** While nothing changes, a pass looks again this often (tiles swapped out since). */
+        const val RECHECK_MS = 2_000L
+
+        /** After LOW or CRITICAL pressure, nothing is read ahead for this long. */
+        const val QUIET_MS = 60_000L
+
+        /** Trimmed first, with the display caches: the copies are a cache of what the swap file holds. */
+        private const val MEMORY_PRIORITY = 0
+
+        private const val MEMORY_NAME = "read-ahead tiles"
     }
 }

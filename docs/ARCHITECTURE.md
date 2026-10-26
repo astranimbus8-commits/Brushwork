@@ -4124,8 +4124,11 @@ choice (`subtitleOf`) and `EngineLabels110.FOR_THIS_PHONE`. A tap opens `LayerSt
 - Step 7: the `EngineLabels110.DETAILS` row opens the same text on screen, one line per row (tag
   `DETAILS_TAG`), read off main again after each change; a second tap closes it.
 
-**Swap (design 2.8, J9, J10, I34).** At FULL the editor's chrome installs a `SlabSwapStore` as
-`EngineConfig.swapStore` (`SlabSwapStore.installIfFull`); `EngineConfig.closeSession` closes it.
+**Swap (design 2.8, J9, J10, I34).** At FULL `EditorSession` (region `v110-A10 session`) installs
+a `SlabSwapStore` as `EngineConfig.swapStore` (`SlabSwapStore.installIfFull`) once its engine
+session is open, before the editor exists; the editor's chrome installs one when none is (after
+"Open with Full storage", which opens the engine session again without a store).
+`EngineConfig.closeSession` closes it.
 - Place: `noBackupFilesDir/swap/<session UUID>/slab-NNN.bin`, never `cacheDir` or a project
   folder. Slabs of 64 MiB in 4 KiB pages; a tile's packed bytes take the first free run in the
   lowest slab, so freed pages and slabs are reused first. Deflate level 1 on write
@@ -4149,8 +4152,9 @@ choice (`subtitleOf`) and `EngineLabels110.FOR_THIS_PHONE`. A tap opens `LayerSt
 layer whose content equals its last save (`SavedFileRef`) and that was not read in the last 8 frame
 epochs, coldest first (`NativeWatch.evictionOrder`). The layer then holds an EVICTED
 `TiledPixels` (`evictedTo`, no tiles, no `pixelGeneration` change) and comes back through
-`NativeWatch.reload` (the whole Deflate stream, until A11's streamed load). The callers (the
-residency policy, A8) know the saved files.
+`NativeWatch.reload` (the whole Deflate stream, until A11's streamed load). Nothing calls it yet:
+the residency policy (A8) knows the saved files but neither evicts nor reloads, and `TileOps`
+refuses an EVICTED store (LeadRequest).
 
 **The activation ring (design 2.7).** `EngineEditorChrome` shows a small ring with
 `EngineLabels110.PREPARING_LAYER` in the pill slot (`ChromeLayout.pillTop`) when a layer's
@@ -4186,22 +4190,48 @@ chrome feeds the UI frames from the window's frame metrics on a `frame-metrics` 
 stroke, panel scroll or other. Under Robolectric nothing is kept unless a test sets
 `keepUnderRobolectric`.
 
-**Not built (cut 1).** Step 8, the swap read-ahead, needs A8's swap-out and residency policy,
-which this tree does not have yet.
+**Read-ahead (step 8, cut 1; design 2.8, Q5).** `SwapReadAhead` (in `SlabSwapStore.kt`), run by
+the editor's chrome at FULL while the editor shows, reads ahead the SWAPPED tiles of the two layers
+next to the active one (the nearest pixel layer above and the nearest below, folders skipped;
+content and mask) on A8's `TileWorker` at `READ_AHEAD` (after the urgent reads, before the writes
+and park cuts). No thread of its own.
+- When: 300 ms (`IDLE_MS`) after the last change of the layer list, the active layer or the
+  activation. A pass waits 300 ms more while the editor is busy (a gesture, a busy job, a filter,
+  a tool's pending work, an activation), while `NativeWatch.refusingNewLayers` holds, or while the
+  TILES ledger is over the policy's `tileRam` (P3's writes go first). While nothing changes it
+  looks again every 2 s (`RECHECK_MS`) for tiles swapped out since.
+- The copy: the slot's packed bytes (`SlabSwapStore.readPacked`: CRC checked, not inflated), kept
+  in the tile's `packed` beside its slot. The tile stays SWAPPED and the slot stays the copy of
+  record, so a copy is dropped at no cost and nothing is written again (design 2.0's table says a
+  read-ahead lands PACKED; this is the one difference). `Tile.bitmapForRead` takes the packed
+  bytes before the slot, so the activation (`readIn` at `READ_URGENT`), a save or an export
+  inflates them with no read of the swap file; `TileOps.adoptRead` and a free let go of both. The
+  copies count in `PackedPool`, at most half its cap (the other half stays for swap-out).
+- Threads (I29): main leases each tile (one reference more) and submits its read; the worker reads
+  the slot; main keeps the bytes, in the posted task, only while the tile is still SWAPPED in the
+  same slot with no packed bytes, still held besides the lease, the store and the neighbours the
+  same and the pool admits them. The lease goes either way. A failed read (I/O, CRC) keeps nothing:
+  the read on demand meets the fault and restores the layer.
+- Drops: each pass drops the copies of tiles no longer next to the active layer. LOW and CRITICAL
+  pressure (the `MemoryGovernor` entry "read-ahead tiles", priority 0, trimmed with the display
+  caches) drop every copy and quiet the read-ahead for 60 s (`QUIET_MS`). The editor's end stops
+  it and drops the rest. Its reads are not timed for the slow-read rule (only reads on demand are).
 
 Tests: `test:v110/a10/` (the decision, the marker, the runner's triggers and resumes, the
 notices, the stored result and state, the sheet and its texts, swap round trip, slab reuse, CRC,
 I/O error, disk full, kill mid-write, janitor purge, slow reads, eviction, the ring, the exit
-watch and step-down, the pressure net, the stats rings, the low-storage message) and
-`Soak500LayersTest`: random edits at FULL with park chaos and swap, replayed at CLASSIC and
-compared bit for bit at each checkpoint (a small plan in the suite; the 500-layer, 20-minute plan
-under `bw.testSet = soak`, once `-PsoakOnly` includes it: LeadRequest). After the close the tile
-ledger and the swap are back to where they started. Until A8 (undo on tiles) and A11 (canvas
-operations on stores, with pins) are merged, the soak pins the layers for a canvas rotation and
-releases the parked stores that the gate's code lets go of without releasing their tiles: the
-`Layer` setters under an undo or redo of a whole-document step, and the undo history's removed
-layers at the close. `PRE_A8_A11_DROPS = false` turns each such store into a failure. Timing:
-`AutoCheckDurationTimingTest`, `EvictReloadTimingTest`, `UnparkSwappedTimingTest`.
+watch and step-down, the pressure net, the stats rings, the low-storage message, the read-ahead's
+neighbours, waits, drops and faults in `ReadAheadNeighboursTest`) and `Soak500LayersTest`: random
+edits at FULL with park chaos and swap, replayed at CLASSIC and compared bit for bit at each
+checkpoint (a small plan in the suite; the 500-layer, 20-minute plan under `bw.testSet = soak`,
+once `-PsoakOnly` includes it: LeadRequest). After the close the tile ledger and the swap are back
+to where they started. With A8 (undo on tiles) and A11 (canvas operations on stores, with pins)
+merged, `PRE_A8_A11_DROPS` is false: the soak pins nothing, and at the close every store replaced
+during the run (undo steps hold them until then) and every store still held must have let go of
+all its tiles. Timing: `AutoCheckDurationTimingTest`, `EvictReloadTimingTest`,
+`UnparkSwappedTimingTest`, `ReadAheadSwitchTimingTest` (a switch to a read-ahead layer, no read of
+the swap file, within `LayerSwitchBigTimingTest`'s PC 100 ms; the design has no row of its own for
+step 8).
 
 <!-- /v110-A10 -->
 

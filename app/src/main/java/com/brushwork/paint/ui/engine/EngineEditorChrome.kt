@@ -45,10 +45,12 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.engine.EngineConfig
+import com.brushwork.paint.engine.EngineLevel
 import com.brushwork.paint.engine.EngineStats
 import com.brushwork.paint.engine.ExitWatch
 import com.brushwork.paint.engine.NativeWatch
 import com.brushwork.paint.engine.tiles.SlabSwapStore
+import com.brushwork.paint.engine.tiles.SwapReadAhead
 import com.brushwork.paint.ui.common.EngineLabels110
 import com.brushwork.paint.ui.editor.chrome.ChromeLayout
 import com.brushwork.paint.ui.theme.BrushworkColors
@@ -61,13 +63,19 @@ import kotlinx.coroutines.withContext
  * editor (`EditorScreen`): the ring while a layer is made ready (`EditorController.activating`),
  * the low-storage message, the frame metrics. F1: nothing.
  *
- * A10: the session's swap store. Once the editor shows a session that runs at FULL, a
- * [SlabSwapStore] becomes `EngineConfig.swapStore` ([SlabSwapStore.installIfFull]; at CLASSIC and
- * TILES, with a store already installed, or under Robolectric nothing happens); the session's end
- * (`EngineConfig.closeSession`) closes it and deletes its directory. Installed here and not in
- * `EditorSession` (region `v110-A10 session`) until A11's merge (design 4.0, `$Sequential`). With a
- * store installed, [LowStorageNotice] shows [EngineLabels110.LOW_STORAGE] once in the session when
- * the store reads less than 1.5 GiB free (at the start, then every 60 s).
+ * A10: the session's swap store. `EditorSession` (region `v110-A10 session`) installs a
+ * [SlabSwapStore] as `EngineConfig.swapStore` when its engine session runs at FULL; the editor
+ * installs one too when none is ([SlabSwapStore.installIfFull]: after "Open with Full storage",
+ * which opens the engine session again without a store; at CLASSIC and TILES, with a store already
+ * installed, or under Robolectric nothing happens); the session's end (`EngineConfig.closeSession`)
+ * closes it and deletes its directory. With a store installed, [LowStorageNotice] shows
+ * [EngineLabels110.LOW_STORAGE] once in the session when the store reads less than 1.5 GiB free (at
+ * the start, then every 60 s).
+ *
+ * A10 step 8: the read-ahead. At FULL, while the editor shows, a [SwapReadAhead] reads ahead the
+ * swapped tiles of the two layers next to the active one 300 ms after the active layer, the layer
+ * list or the activation last changed, once the editor is idle (no gesture, busy job, filter,
+ * pending tool work or activation); it stops with the editor.
  *
  * A10: the activation ring (design 2.7). While a layer is made ready asynchronously, canvas input
  * is held without a toast; when that lasts [RING_DELAY_MS] (250 ms), the pill slot (under the
@@ -106,6 +114,7 @@ fun EngineEditorChrome(controller: EditorController) {
         }
     }
     if (EngineStats.keepUnderRobolectric || Build.FINGERPRINT != "robolectric") FrameTimes(context)
+    if (EngineConfig.level == EngineLevel.FULL) ReadAhead(controller)
 
     val activating = controller.activating
     var ring by remember { mutableStateOf(false) }
@@ -152,6 +161,29 @@ private fun EditorMarker(controller: EditorController, lifecycle: Lifecycle) {
             ExitWatch.editorShown(context, EngineConfig.level, layers, width, height, lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED))
         }
     }
+}
+
+/**
+ * The read-ahead of the swapped tiles next to the active layer ([SwapReadAhead], A10 step 8): a new
+ * pass 300 ms after each change of the layer list or the active layer (`layersVersion`) or of the
+ * activation; stopped (its copies dropped) when the editor goes.
+ */
+@Composable
+private fun ReadAhead(controller: EditorController) {
+    val readAhead = remember(controller) { SwapReadAhead(EditorReadAheadHost(controller)) }
+    DisposableEffect(readAhead) {
+        onDispose { readAhead.stop() }
+    }
+    LaunchedEffect(readAhead) {
+        snapshotFlow { controller.layersVersion to controller.activating }.collect { readAhead.changed() }
+    }
+}
+
+/** The editor as the read-ahead's [SwapReadAhead.Host]: idle as the residency's `busy` is false, and no activation. */
+private class EditorReadAheadHost(private val c: EditorController) : SwapReadAhead.Host {
+    override val document get() = c.doc
+    override val idle: Boolean
+        get() = c.activating == null && !c.isInteracting && c.busyMessage == null && c.filterSession == null && !c.currentTool.hasPendingWork
 }
 
 /** The UI frames' durations ([EngineStats.frame]) from the window's frame metrics, while the editor shows. */

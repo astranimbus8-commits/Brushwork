@@ -41,7 +41,9 @@ class EditorSession(private val app: BrushworkApp, val projectId: String) {
         private set
 
     // region v110-A10 session
-    // v1.10 (A10): the swap session directory, NativeWatch and the editor-open marker start here.
+    // v1.10 (A10): the session's swap store is installed in the second region of this name (after
+    // the engine session below is open); NativeWatch and the editor-open marker run with the
+    // editor's lifecycle in `EngineEditorChrome`.
     // endregion
 
     private var controller: EditorController? = null
@@ -248,6 +250,16 @@ class EditorSession(private val app: BrushworkApp, val projectId: String) {
     // ------------------------------------------------------------------ closing
 
     // region v110-A10 session
+    init {
+        // v1.10 (A10, design 2.8): at FULL the session's swap store (noBackupFilesDir/swap/<uuid>)
+        // is installed once the engine session is open (the init above; initializers run in
+        // source order), before the editor exists, so before any tile can be written out; the
+        // session's end (EngineConfig.closeSession) closes it and deletes its directory.
+        // openWithFullStorage opens the engine session again without a store; EngineEditorChrome
+        // installs one then.
+        com.brushwork.paint.engine.tiles.SlabSwapStore.installIfFull(app)
+    }
+
     /** Commits pending tool work, saves, releases memory, then calls [onClosed]. */
     fun close(onClosed: () -> Unit) {
         if (closed) return
