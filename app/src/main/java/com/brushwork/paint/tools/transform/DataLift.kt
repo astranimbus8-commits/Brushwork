@@ -256,7 +256,15 @@ internal class DataLift(
     }
 
     // region v110-A8 pins
+    /**
+     * v1.10 (A8, design 2.2, P2): the lifted layer's pin, taken by [DataLiftProvider.lift] and
+     * closed by [release]: the layer is never parked while its object is lifted.
+     */
+    internal var pin: com.brushwork.paint.engine.tiles.PixelPin? = null
+
     override fun release() {
+        pin?.close()
+        pin = null
         if (!floating.isRecycled) floating.recycle()
     }
     // endregion
@@ -302,7 +310,8 @@ internal class DataLiftProvider(private val c: EditorController, private val map
             c.toast("Not enough memory to transform this")
             return false
         }
-        onReady(DataLift(c, layer, kind, m, rect, floating))
+        // v1.10 (A8): pinned until the lift is released (committed, cancelled or dropped).
+        onReady(DataLift(c, layer, kind, m, rect, floating).also { it.pin = layer.pin() })
         return true
     }
     // endregion

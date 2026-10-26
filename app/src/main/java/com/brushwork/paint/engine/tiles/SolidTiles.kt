@@ -12,6 +12,11 @@ import com.brushwork.paint.engine.budget.LedgerCategory
  * and a uniform tile is an ordinary tile. Thread-safe; [release] runs on main (it recycles). A
  * shared bitmap carries no density, as every tile's ([TileOps]): it outlives the default density
  * it was made under.
+ *
+ * v1.10 (A8 step 1): a solid tile owns no pixels, so it is never packed or swapped
+ * (`TileWorker`), and its count goes with the tile whatever state it is found in (`TileOps.free`,
+ * F1 review gap 2). [of] runs on main too in practice: a park cut on the worker only notes the
+ * color (`TileOps.cutPieces`), and main asks for the shared bitmap when it adopts the pieces.
  */
 internal object SolidTiles {
     /** The most colors shared at once. */

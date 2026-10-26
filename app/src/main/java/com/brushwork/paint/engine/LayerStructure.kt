@@ -214,10 +214,17 @@ internal class LayerStructure(private val c: EditorController) {
         val rooms = if (layer.hasMask) 2 else 1
         if (c.effectiveLayerCount + rooms > c.maxLayers) { c.toast(c.layerLimitMessage()); return null }
         val copy = try {
-            val pixels = BitmapUtils.copy(layer.bitmap)
-            if (sel != null) BitmapUtils.maskWith(Canvas(pixels), sel.mask)
+            // v1.10 (A8, design 2.6): the stores are copied by kind ([copyOf]): a parked one as a
+            // copy-on-write snapshot sharing its tiles, so nothing is read or materialized.
+            val pixels = if (sel == null) copyOf(layer, layer.pixels, mask = false) else selectedCopy(layer, sel.mask)
+            val mask = try {
+                layer.maskPixels?.let { copyOf(layer, it, mask = true) }
+            } catch (e: OutOfMemoryError) {
+                com.brushwork.paint.engine.tiles.TileOps.dispose(pixels)
+                throw e
+            }
             Layer(doc.newLayerId(), uniqueName("${layer.name} copy"), pixels).also {
-                it.mask = layer.mask?.let { m -> BitmapUtils.copy(m) }
+                it.maskPixels = mask
                 // A partial copy is no longer the text / shape / vector object: only whole
                 // copies keep the content data (the mask is copied whole, so its spec stays).
                 val data = layer.dataSnapshot()
@@ -231,6 +238,45 @@ internal class LayerStructure(private val c: EditorController) {
         if (!place(copy, above(layer), stepLabel)) { copy.recycleBitmaps(); return null }
         c.queueLayerList(LayerListEvent(LayerListKind.DUPLICATED, copy, layer, stepLabel))
         return copy
+    }
+
+    /**
+     * v1.10 (A8, design 2.6 and 2.16): [p], [layer]'s content (or its mask when [mask]), copied for
+     * a duplicate, by kind. A PARKED store becomes a copy-on-write `snapshot()`: a store of its own
+     * sharing every tile (refs + 1 each), 0 bytes, no pixel read on main, nothing materialized; the
+     * copy's first write replaces tiles in its own store only. A blank store is another blank one;
+     * a flat bitmap is copied as v1.9 did, and so is an EVICTED store, through the facade (A11
+     * reloads it): its saved file is the source's own, rewritten by the source's next save, so a
+     * copy never shares it. The copy is held by the new layer alone: `Layer.recycleBitmaps` (a
+     * refused insert), the add's or the tree step's dispose (an undone duplicate dropped from the
+     * redo stack) let go of its tiles. Throws [OutOfMemoryError] when a flat copy has no room.
+     * Main only.
+     */
+    private fun copyOf(layer: Layer, p: com.brushwork.paint.engine.tiles.PixelStore, mask: Boolean): com.brushwork.paint.engine.tiles.PixelStore = when (p) {
+        is com.brushwork.paint.engine.tiles.TiledPixels ->
+            if (p.evictedTo == null) p.snapshot()
+            else com.brushwork.paint.engine.tiles.FlatPixels(BitmapUtils.copy(if (mask) layer.mask!! else layer.bitmap))
+        is com.brushwork.paint.engine.tiles.BlankPixels -> com.brushwork.paint.engine.tiles.BlankPixels(p.width, p.height)
+        is com.brushwork.paint.engine.tiles.FlatPixels -> com.brushwork.paint.engine.tiles.FlatPixels(BitmapUtils.copy(if (mask) layer.mask!! else layer.bitmap))
+        com.brushwork.paint.engine.tiles.FolderPixels -> com.brushwork.paint.engine.tiles.FolderPixels
+    }
+
+    /**
+     * "Duplicate selection" (v1.6): a flat copy of [layer]'s content holding only the pixels
+     * [selMask] selects. v1.10 (A8): a parked layer is drawn from its tiles into the copy
+     * (`TiledPixels.materialize`; the layer itself stays parked, but a SWAPPED tile is read back
+     * on main, as the compositor does: a known gap of this rare path); a blank one copies to a
+     * blank store. Throws [OutOfMemoryError] when there is no room.
+     */
+    private fun selectedCopy(layer: Layer, selMask: android.graphics.Bitmap): com.brushwork.paint.engine.tiles.PixelStore {
+        val bitmap = when (val p = layer.pixels) {
+            is com.brushwork.paint.engine.tiles.BlankPixels -> return com.brushwork.paint.engine.tiles.BlankPixels(p.width, p.height)
+            is com.brushwork.paint.engine.tiles.FlatPixels -> BitmapUtils.copy(layer.bitmap)
+            is com.brushwork.paint.engine.tiles.TiledPixels -> if (p.evictedTo == null) p.materialize() else BitmapUtils.copy(layer.bitmap)
+            com.brushwork.paint.engine.tiles.FolderPixels -> BitmapUtils.copy(layer.bitmap)
+        }
+        BitmapUtils.maskWith(Canvas(bitmap), selMask)
+        return com.brushwork.paint.engine.tiles.FlatPixels(bitmap)
     }
     // endregion
 
@@ -255,7 +301,16 @@ internal class LayerStructure(private val c: EditorController) {
                 val copy = if (m.isFolder) {
                     Layer.newFolder(id, name, m.folder!!).also { it.folderOpen = m.folderOpen }
                 } else {
-                    Layer(id, name, BitmapUtils.copy(m.bitmap)).also { it.mask = m.mask?.let { mk -> BitmapUtils.copy(mk) } }
+                    // v1.10 (A8, design 2.6): every child and its mask by kind ([copyOf]): a
+                    // parked one as a copy-on-write snapshot sharing its tiles.
+                    val pixels = copyOf(m, m.pixels, mask = false)
+                    val mask = try {
+                        m.maskPixels?.let { copyOf(m, it, mask = true) }
+                    } catch (e: OutOfMemoryError) {
+                        com.brushwork.paint.engine.tiles.TileOps.dispose(pixels)
+                        throw e
+                    }
+                    Layer(id, name, pixels).also { it.maskPixels = mask }
                 }
                 copy.restoreData(m.dataSnapshot())
                 copy.copyPropsFrom(m.props().copy(name = name))
