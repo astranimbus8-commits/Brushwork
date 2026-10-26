@@ -6,6 +6,7 @@ import android.os.Looper
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.engine.CompositeAction
 import com.brushwork.paint.engine.EngineConfig
+import com.brushwork.paint.engine.LayerPropsAction
 import com.brushwork.paint.engine.MaskChangeAction
 import com.brushwork.paint.engine.EngineLevel
 import com.brushwork.paint.engine.tiles.ClassicResidency
@@ -182,10 +183,11 @@ class UndoActiveSwappedTest {
     }
 
     /**
-     * Review fix (7/7): an edit pushed while an undo waits (a panel or menu action: only canvas
-     * input is held) drops the redo steps, but the waiting undo still applies, and its step is
-     * let go after it: before, the push disposed the waiting step, its undo was lost and the
-     * step's change stayed in the pixels with no step left to undo it.
+     * Review fix (7/7): a step pushed while an undo waits (one that changes no pixels through a
+     * `PixelEditRecorder`, which would settle the undo first) drops the redo steps, but the
+     * waiting undo still applies, and its step is let go after it: before, the push disposed the
+     * waiting step, its undo was lost and the step's change stayed in the pixels with no step
+     * left to undo it.
      */
     @Test
     fun anEditPushedWhileItWaitsStillLetsTheUndoApplyThenDropsItsStep() {
@@ -199,18 +201,58 @@ class UndoActiveSwappedTest {
 
         c.undo()
         assertSame(l, c.activating)
-        A8Kit.paint(c, other, Rect(10, 10, 60, 60), 0xFF00FF00.toInt())
+        pushOpacity(c, other)
         assertFalse("the push dropped the redo side", c.undoManager.canRedo)
+        assertSame("the push settled nothing", l, c.activating)
         assertTrue("the waiting step is not let go before it applied", tiles.any { it.pins > 0 || it.refs > 0 })
 
         A8Kit.drain()
         assertNull("the hold ended", c.activating)
         assertArrayEquals("the undo asked before the edit applied", before, A8Kit.pixelsOf(l).first)
-        val px = A8Kit.pixelsOf(other).first
-        assertEquals("the edit is there", 0xFF00FF00.toInt(), px[20 * 512 + 20])
+        assertEquals("the edit is there", 0.5f, other.opacity, 0f)
         assertEquals("the edit is the newest step", steps, c.undoManager.undoCount)
         assertFalse(c.undoManager.canRedo)
         assertTrue("the undone step was let go after its apply", tiles.all { it.refs <= 0 && it.pins == 0 && it.slot == null })
+    }
+
+    /** Sets [layer]'s opacity to 0.5 and pushes the step as is: no pixel edit, no editor entry point. */
+    private fun pushOpacity(c: EditorController, layer: com.brushwork.paint.model.Layer) {
+        val step = LayerPropsAction(layer, layer.props(), layer.props().copy(opacity = 0.5f), "Opacity")
+        step.redo(c)
+        c.undoManager.push(step)
+    }
+
+    /**
+     * LR1 inside A8: a pixel edit started while an undo of the same pixels waits for its tiles
+     * (no explicit settle: a menu fill, a filter landing) settles that undo when its recorder is
+     * made, so the undo applies first and the edit lands on the undone pixels; the worker's late
+     * reads apply nothing, and undoing the edit gives the undone pixels back.
+     */
+    @Test
+    fun anEditStartedWhileAnUndoWaitsLandsAfterIt() {
+        val c = editor()
+        val l = c.doc.layers[2]
+        val before = A8Kit.pixelsOf(l).first
+        A8Kit.paint(c, l, Rect(100, 50, 400, 250), 0xFF3366AA.toInt())
+        val tiles = swapOutNewest(c)
+        val steps = c.undoManager.undoCount
+
+        c.undo()
+        assertSame(l, c.activating)
+        A8Kit.paint(c, l, Rect(150, 100, 300, 200), 0xFF00FF00.toInt())
+        assertNull("the recorder settled the undo", c.activating)
+        val edited = A8Kit.pixelsOf(l).first
+        assertEquals("the edit is there", 0xFF00FF00.toInt(), edited[150 * 512 + 200])
+        assertEquals("beside it, the undone pixels", before[60 * 512 + 110], edited[60 * 512 + 110])
+        assertEquals("the edit is the newest step", steps, c.undoManager.undoCount)
+        assertFalse(c.undoManager.canRedo)
+
+        A8Kit.drain()
+        assertArrayEquals("the late reads applied nothing", edited, A8Kit.pixelsOf(l).first)
+        assertTrue("the undone step was let go", tiles.all { it.refs <= 0 && it.pins == 0 && it.slot == null })
+        c.undo()
+        A8Kit.drain()
+        assertArrayEquals("undoing the edit gives the undone pixels", before, A8Kit.pixelsOf(l).first)
     }
 
     /**
@@ -342,7 +384,7 @@ class UndoActiveSwappedTest {
         c.undo()
         assertSame("the first undo waits", l, c.activating)
         assertFalse("the mask undo is queued", masked.hasMask)
-        A8Kit.paint(c, c.doc.layers[0], Rect(10, 10, 60, 60), 0xFF00FF00.toInt())
+        pushOpacity(c, c.doc.layers[0])
 
         A8Kit.drain()
         assertNull(c.activating)

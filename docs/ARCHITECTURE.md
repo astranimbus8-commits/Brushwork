@@ -3723,8 +3723,14 @@ materializes its layer at once; a pixel step reads its SWAPPED tiles on main
 (`TileOps.makeResident`) and applies. Then the undos and redos queued behind run, in order. The
 worker's late reads adopt nothing. `settle()` is for an edit about to start, which must not land
 before a waiting undo of the same pixels (`UndoActiveSwappedTest`,
-`ActivationAsyncHoldsInputTest`). The editor does not call it yet: the calls belong in
-`EditorController.beginEdit()` and `withToolPaused()`, outside the A8 region (a LeadRequest).
+`ActivationAsyncHoldsInputTest`). Every pixel edit settles first: a `PixelEditRecorder`, made by
+`beginEdit` before the edit reads or changes a pixel, calls `UndoManager.settleWaiting()`, which
+settles every manager in which an apply waits (nothing to do, and nothing read, when none waits;
+`UndoActiveSwappedTest.anEditStartedWhileAnUndoWaitsLandsAfterIt`). Two kinds of edit do not
+settle at their start yet: one that swaps a store without a recorder (A11's `clearToBlank`, Clear
+layer without a selection), and one that reads the pixels before it makes its recorder (a tool's
+lift or proxy in `onActivate`). That call belongs in `EditorController.withToolPaused()` and
+`editScope`, outside the A8 region (a LeadRequest).
 
 **Undo on tiles (section 2.6, `engine/Undo.kt`).** `PixelEditAction` holds ONE map of undo tiles
 by tile index (null = transparent), each held once by the step. It swaps them with the layer's
@@ -3810,13 +3816,17 @@ parked layer (`PixelFacadeMaterializationTest`):
 The layers panel is A9's.
 
 **Known gaps.**
-- The editor does not call `UndoManager.settle()` yet (a LeadRequest for
-  `EditorController.beginEdit()` and `withToolPaused()`). Until it does, an edit pushed while an
-  undo waits is applied before that undo. Where the edit and the waiting step touch the same tiles
-  of the same layer, the undo then overwrites the edit's pixels there.
+- Pixel edits through `beginEdit` settle a waiting undo first. Two kinds of edit do not, yet (a
+  LeadRequest for `EditorController.withToolPaused()` and `editScope`):
+  - Clear layer without a selection swaps in a blank store, with no recorder. Made while an undo
+    of the same layer waits, it is applied before that undo, and the undo then writes its tiles
+    over the cleared layer.
+  - A tool's lift or proxy, read in `onActivate` while an undo waits, reads the pixels from before
+    that undo.
 - A settle reads the waiting step's SWAPPED tiles on main, by design: the edit cannot wait for the
-  worker. So does Duplicate selection of a parked layer (`TiledPixels.materialize`), as the
-  compositor does.
+  worker. It ends a waiting activation at once too, also for an edit of another layer. Duplicate
+  selection of a parked layer also reads its SWAPPED tiles on main (`TiledPixels.materialize`), as
+  the compositor does.
 - A tool's `onActivate` (`ColorSelectTool`, `MagneticLassoTool`, the lift of `TransformTool`) may
   read `activeLayer.bitmap` while an activation holds input. The facade then makes the layer FLAT
   synchronously and reads its SWAPPED tiles on main. Running `onActivate` when the activation ends

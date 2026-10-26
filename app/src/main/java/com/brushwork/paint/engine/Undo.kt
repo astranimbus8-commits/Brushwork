@@ -143,6 +143,7 @@ class UndoManager(private val maxBytes: Long, private val maxSteps: Int = 150) {
     internal fun beginWaiting(hurry: (() -> Unit)? = null): () -> Unit {
         waiting++
         if (hurry != null) hurries += hurry
+        if (waitingNow.none { it === this }) waitingNow += this
         var ended = false
         return {
             if (!ended) {
@@ -155,6 +156,7 @@ class UndoManager(private val maxBytes: Long, private val maxSteps: Int = 150) {
                         op()
                     }
                 }
+                if (waiting == 0) waitingNow.removeAll { it === this }
                 if (waiting == 0 && deferred.isEmpty()) disposeDropped()
             }
         }
@@ -167,7 +169,9 @@ class UndoManager(private val maxBytes: Long, private val maxSteps: Int = 150) {
      * them. A waiting `PixelEditAction` reads its SWAPPED tiles here, on main (`TileOps.makeResident`:
      * the one place main reads a slot, bounded to an edit made while an undo waits); a waiting
      * activation makes the layer FLAT from what is resident and reads the rest on main. Does
-     * nothing when nothing waits. Not entered again from inside itself. Main only.
+     * nothing when nothing waits. Not entered again from inside itself. Every [PixelEditRecorder]
+     * runs it first ([settleWaiting]); an edit that changes pixels without one asks the editor.
+     * Main only.
      */
     fun settle() {
         if (settling) return
@@ -267,6 +271,24 @@ class UndoManager(private val maxBytes: Long, private val maxSteps: Int = 150) {
 
     /** v1.7: the undo step at [index] (0 = oldest), or null. */
     internal fun undoAt(index: Int): UndoAction? = undoStack.getOrNull(index)
+
+    companion object {
+        /** v1.10 (A8, LR1): the managers in which an apply waits now ([beginWaiting]), by identity. Main only. */
+        private val waitingNow = ArrayList<UndoManager>()
+
+        /**
+         * v1.10 (A8, LR1): [settle]s every manager in which an apply waits for its tiles now. A
+         * [PixelEditRecorder] calls it before it reads the pixels it will change, so a pixel edit
+         * started while an undo waits (a panel or menu action, a render landing: only canvas input
+         * is held) lands after that undo and the steps queued behind it, and none of them
+         * overwrites it. Nothing to do (and nothing touched) when nothing waits; never off main.
+         */
+        internal fun settleWaiting() {
+            if (waitingNow.isEmpty()) return
+            if (android.os.Looper.getMainLooper()?.isCurrentThread != true) return
+            for (m in waitingNow.toList()) m.settle()
+        }
+    }
 }
 
 /**
@@ -312,6 +334,8 @@ private fun Layer.bitmapFor(target: EditTarget): Bitmap? = if (target == EditTar
  * Copy-on-write snapshotting for pixel edits. Call [touch] with the region you are ABOUT to
  * modify (before modifying it); the first touch of each tile saves its old pixels. [finish]
  * turns the saved tiles into an undo action; [abort] restores them (cancelled stroke).
+ * v1.10 (A8, LR1): creating one first settles every undo still waiting for its tiles
+ * ([UndoManager.settleWaiting]), so the edit lands after it.
  */
 class PixelEditRecorder(val layer: Layer, val target: EditTarget, private val tileSize: Int = 256) {
     /**
@@ -320,6 +344,11 @@ class PixelEditRecorder(val layer: Layer, val target: EditTarget, private val ti
      * data. Any other edit of such a layer clears the data of its target (see commitEdit).
      */
     var preserveData: Boolean = false
+
+    // v1.10 (A8, LR1): an undo waiting for its tiles (or an activation) finishes first, on main,
+    // with the steps queued behind it, before the pixels this edit changes are read.
+    init { UndoManager.settleWaiting() }
+
     private val bitmap: Bitmap = requireNotNull(layer.bitmapFor(target)) { "Layer has no ${target.name.lowercase()} bitmap" }
     private val cols = (bitmap.width + tileSize - 1) / tileSize
     private val rows = (bitmap.height + tileSize - 1) / tileSize
