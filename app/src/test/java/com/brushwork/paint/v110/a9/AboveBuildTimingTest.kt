@@ -72,15 +72,18 @@ class AboveBuildTimingTest {
                 above.dropAll()
                 frame()
             }
-            val builds = above.builds
+            // Counted per try: PerfBudget.measuredWithin measures again when a try is over the budget.
+            var built = 0L
             val ms = PerfBudget.measuredWithin(PerfBudget.ms(BUDGET_MS), what = "above projection, one display tile built, N = 200") {
+                val before = above.builds
                 repeat(3) { build() }
                 val times = DoubleArray(15) { PerfBudget.timeMs(build) }
+                built = above.builds - before
                 times.sort()
                 times[times.size / 2]
             }
             println("AboveBuildTimingTest: median $ms ms (budget ${PerfBudget.ms(BUDGET_MS)} ms, self-chosen)")
-            assertEquals("every measured frame built one tile", builds + 18, above.builds)
+            assertEquals("every frame of the try built one tile", 18L, built)
             // The frames after the build, for comparison (no budget).
             repeat(3) { frame() }
             val hits = above.hits

@@ -3997,7 +3997,8 @@ stays. `FolderThumbnails.key` mixes the children's `pixelGeneration`, `contentVe
   waiting tiles' worker under pins and composites later on main with the copies lent
   (`BandAssembler.lend`, as the waiting tiles do). The picture lands only when the key is still
   the one read. At most `FOLDER_READ_BYTES` (16 MiB: two waiting chunks) per picture; a block
-  that needs more keeps its last picture, or the glyph, until its layers are resident again.
+  that needs more keeps its last picture, or the glyph, until its layers are resident again
+  (`FolderThumbnailReadsTest`).
 
 **Above projection (X5, J7, step 7).** At TILES and FULL with `EngineConfig.aboveProjection` (the
 check's M5 <= 30 ms; `ProjectionRules.aboveOn`), `LiveAdjust.aboveProjection`
@@ -4032,14 +4033,14 @@ check's M5 <= 30 ms; `ProjectionRules.aboveOn`), `LiveAdjust.aboveProjection`
   `exactAfterGesture()` with `projectionsOff` (I33), and every other `update` /
   `updateBudgeted` with `gestureDown` false does the same first, so no caller (the live
   adjustment's frames too) leaves approximate pixels shown. Its cost is the composite of every
-  part the stroke touched: `AboveBuildTimingTest` measures about 17 ms on the PC for a stroke
+  part the stroke touched: `AboveBuildTimingTest` measures about 18 ms on the PC for a stroke
   over 4 x 256 px at N = 200.
 
 Tests: `test:v110/a9/` (`TiledCompositeGoldenTest`, `BlankSkipExactTest`, `Api28BlendParityTest`,
 `WaitingTileOverTileRamTest`, `BelowProjectionExactTest`, `PixelReadsTiledTest`,
 `CRegToolsParkedLayerTest`, `PanelNoMaterializeTest`, `BelowProjectionWaitingTest`, `WaitingReadOwnershipTest`,
-`ThumbnailFromTilesTest`, `AboveProjectionErrorTest`, and the Timing classes `BandAssemblerTimingTest`,
-`FullRerender500TimingTest`, `FirstCompositeEvictedTimingTest`, `StrokeFrame200TimingTest`,
+`ThumbnailFromTilesTest`, `FolderThumbnailReadsTest`, `AboveProjectionErrorTest`, and the Timing classes
+`BandAssemblerTimingTest`, `FullRerender500TimingTest`, `FirstCompositeEvictedTimingTest`, `StrokeFrame200TimingTest`,
 `StrokeFrame100PlainTimingTest`, `BelowRebuildTimingTest`, `ThumbnailAtParkTimingTest`,
 `AboveBuildTimingTest`) and
 `test:qa110/Qa110TiledCanvasUiTest`. That UI test runs 200 layers at TILES (parked, then packed
