@@ -3655,8 +3655,10 @@ encoding), `storage/ProjectRepository.kt` (`SaveThumbnail`), `storage/ImageExpor
 `EditorSession.kt` `v110-A11 open` and `v110-A11 save`, `EditorController.kt` `v110-A11 canvasOps`
 (three blocks: `flipLayerNow`, `clearLayer`, `applyMask`) and `ExportSceneBuilder.kt`
 `v110-A11 layerExport`. `PayloadImport.kt`, `VectorImport.kt` and `pdf/PdfImport.kt` are
-unchanged (see "Not built"). Labels: `EngineLabels110.NEEDS_FULL_STORAGE`,
-`NEEDS_FULL_NO_MEMORY`, `OPEN_WITH_FULL` (the button is a lead request), `PAINT_REFUSED`,
+unchanged (see "Not built"). At the merge the lead changed, outside A11's files,
+`MainActivity.kt` (`OpenFailedScreen`), `exchange/export/ExportJob.kt` (`refusal`),
+`ui/exchange/ExchangeUi.kt` (`saveAs`) and `ExportSceneBuilder.payloadLayer`. Labels:
+`EngineLabels110.NEEDS_FULL_STORAGE`, `NEEDS_FULL_NO_MEMORY`, `OPEN_WITH_FULL`, `PAINT_REFUSED`,
 `CANVAS_OP_TOO_BIG`; `LayersLabels110.PAYLOAD_TOO_MANY`. No field, no codec version and no
 `@Serializable` change: format 4 is F1's `ProjectFormat.writtenVersion`, and the pixel file
 encoding is v1.9's.
@@ -3700,15 +3702,17 @@ on main as in v1.9.
 **Classic's refusal** (J16, UQ16, `ClassicOpen`). A format-4 artwork opens at Classic only up to
 `classicOpenCapacity = max(v19Cap(J), (Rstable - 3.8 L - 184 MB) / L)`, where `Rstable` comes from
 `totalMem`, `isLowRamDevice` and `is64Bit` alone (never `availMem` or the step-down), so the same
-artwork opens in every session on one phone; unknown memory keeps v1.9's cap. The painted content
+artwork opens in every session on one phone; unknown memory keeps v1.9's cap (J is then
+`Runtime.maxMemory`, as A7's `Budgets.compute` takes it, so `v19Cap(J)` is `LayerBudgetV19`'s). The painted content
 and mask files are counted before anything is decoded (`paintedFiles`: a file of the blank
 encoding's length is compared with it; any other file costs one length check); array pixels are
 checked after the stream. An artwork that fits admits its FLAT layers against `Rstable`, not the
 session's R. Formats 1-3 always open. A refusal is `ClassicCapacityException`: the editor's failed
 state shows `NEEDS_FULL_STORAGE` (plus `NEEDS_FULL_NO_MEMORY` when the check chose Classic for low
-memory, `refusedForMemory`) and otherwise sets `offersFullStorage`;
-`EditorSession.openWithFullStorage()` opens this artwork once at FULL (2 GiB free) or TILES,
-without changing the setting.
+memory, `refusedForMemory`) and otherwise sets `offersFullStorage`, for which the open-failure
+screen (`MainActivity.OpenFailedScreen`) shows the `OPEN_WITH_FULL` button above "Back to gallery";
+the button calls `EditorSession.openWithFullStorage()`, which opens this artwork once at FULL
+(2 GiB free) or TILES, without changing the setting.
 
 **Canvas operations layer by layer** (`CanvasOps`). `CanvasSnapshot` holds each layer's stores
 (snapshots of tiled stores, taken on main under a `Lease`) instead of bitmaps; rotate, flip,
@@ -3745,33 +3749,36 @@ FULL): its bitmap is cut into tiles (`parkedStoreOf`) and recycled at insert, it
 The region `layerExport` writes each layer's image from its store at write time (`storeImage`: a
 FLAT bitmap's pixels, otherwise `TileOps.readRegion` on the pixel dispatcher), finds content
 bounds from the store, builds masks from `maskPixels`, and composites from views of the stores.
-`Payload.refusal(n)` is `PAYLOAD_TOO_MANY` above `MAX_LAYERS` (1000), and every payload write
-(`toJson`, so `toBase64`, `deflated`, the SVG and PDF writers) throws it: an SVG or PDF export
-with Brushwork data of a bigger artwork stops with that text and keeps no file. 1000 layers still
-write and read back.
+`payloadLayer` (outside the region) reads a mask from `maskPixels` too: a FLAT bitmap as it is, a
+tiled mask through a temporary `TileOps.materialize` copy recycled after use, so a parked mask is
+never materialized on the layer.
+`Payload.refusal(n)` is `PAYLOAD_TOO_MANY` above `MAX_LAYERS` (1000). `ExportJob.refusal()` asks it
+before any work starts, for an SVG or PDF export with Brushwork data: Save as... toasts the text
+and never opens the file picker, Share never shows the busy overlay or writes a file, and a
+destination already picked is never opened for writing (its empty document is deleted). Every
+payload write (`toJson`, so `toBase64`, `deflated`, the SVG and PDF writers) still throws it as
+the last line. 1000 layers still write and read back.
 
 **Not built, and what waits for other areas.**
 - Steps 6 (two decoder threads at open) and 7 (the "Opening layer n of m" line) are not built
   (both cuttable); the open decodes one layer after another on one IO thread.
 - `PayloadImport`, `VectorImport` and `PdfImport` still render every new layer's bitmap before
   the insert; only the insert parks them.
-- The payload refusal happens when the payload is written, not before the export starts (that
-  check belongs in `ExportJob`, a lead request); `payloadLayer` (outside the region) still reads
-  `layer.mask`.
 - An evicted store (A8/A10) cannot be mapped yet: a canvas operation on one is refused with
   `CANVAS_OP_TOO_BIG`. The thumbnail uses the compositor, not A9's `BandAssembler`; the swap-in
   half of the autosave (reading swapped tiles) is A10's. There is no `LayerTree` index here, so
   per-layer loops stay O(n). `OtherTabs` (not A11's) still reads `opaqueBounds` off main without
-  a lease (a lead request). `RemoveLayerAction.byteSize` (A8's `Undo.kt`) is still a live getter
+  a lease (deferred by the lead to A10's merge or Gate 2: safe while nothing swaps or evicts; the
+  fix is `CanvasSnapshot.take` on main and `release()` on main after the read). `RemoveLayerAction.byteSize` (A8's `Undo.kt`) is still a live getter
   over `bitmap` and `mask`: the history's trim sums every step's `byteSize` on each push once it
   holds two steps, so a merge down or delete of a parked layer materializes the removed layer
-  there (design 2.6 gives the fix to A8). `AdjustmentStage` reading `Layer.mask` is the root of the view hazard above (a lead
-  request); `privateAdjustmentMask` is A11's workaround.
+  there (design 2.6 gives the fix to A8). `AdjustmentStage` reading `Layer.mask` is the root of the view hazard above
+  (deferred by the lead to A9's merge, A9 owns the file); `privateAdjustmentMask` is A11's workaround.
 
 Tests (`v110/a11/`): `StreamedLoadParityTest`, `StreamedLoadNoScratchTest`, `BlankFastPathTest`,
 `TiledSaveByteIdenticalTest`, `FormatFourDeterminismTest`, `ClassicRefusesBigArtworkTest`,
 `AutosaveNoInflateOnMainTest`, `CanvasOpsLayerByLayerTest`, `PayloadRefusalTest`,
-`StoreActionsUndoTest`; Timing:
+`StoreActionsUndoTest`, `ExportRefusedBeforeWorkTest`; UI: `qa110/Qa110OpenWithFullUiTest`; Timing:
 `Open200TimingTest`, `SaveOneLayerTimingTest`, `AutosaveMainThreadTimingTest`,
 `CanvasRotate50TimingTest`.
 
