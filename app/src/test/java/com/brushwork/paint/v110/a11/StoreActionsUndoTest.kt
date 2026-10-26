@@ -234,6 +234,52 @@ class StoreActionsUndoTest {
         }
     }
 
+    /**
+     * A11 merge (lead; I28): the payload of an SVG with Brushwork data reads every mask from its
+     * store (`ExportSceneBuilder.payloadLayer`): nothing is materialized under strict, the parked
+     * masks keep their very stores, and each layer's mask comes back from the payload's picture and
+     * fill exactly.
+     */
+    @Test
+    fun aPayloadExportReadsParkedMasksFromTheirStores() {
+        write(ID)
+        withEditor(ID) { c ->
+            val masked = listOf(c.doc.layers[1], c.doc.layers[2])
+            val stores = masked.map { it.maskPixels }
+            assertTrue("the masks are parked", stores.all { it is TiledPixels })
+            val expected = stores.map { bytes(it) }
+            val materialized = PixelFacade.materializations
+            PixelFacade.strict = true
+            val scene = runBlocking {
+                ExportSceneBuilder(c, ExportOptions(VectorFormat.SVG, includePayload = true), TextSource.Default, Dispatchers.Unconfined, Dispatchers.Unconfined).build()
+            }
+            val images = sceneImages(scene.layers) + scene.payloadImages
+            for ((i, layer) in masked.withIndex()) {
+                val entry = scene.payload!!.layers.single { it.id == layer.id }
+                assertTrue("${layer.name}: a mask in the payload", entry.hasMask)
+                val img = entry.maskRef?.let { ref -> images.first { it.key == ref } }
+                val argb = img?.let { runBlocking { it.source.load() } }
+                val fill = (entry.maskFill shr 16) and 0xFF
+                var wrong = 0
+                var first = ""
+                for (y in 0 until h) for (x in 0 until w) {
+                    val inside = img != null && x in img.left until img.left + img.width && y in img.top until img.top + img.height
+                    val got = if (inside) (argb!!.pixels[(y - img!!.top) * img.width + (x - img.left)] shr 16) and 0xFF else fill
+                    val want = expected[i][(y * w + x) * 4].toInt() and 0xFF
+                    if (got != want && wrong++ == 0) first = "at $x, $y: $got instead of $want"
+                }
+                assertEquals("${layer.name}: the payload's mask, pixels wrong (first $first)", 0, wrong)
+            }
+            PixelFacade.strict = false
+            assertEquals("nothing was materialized", materialized, PixelFacade.materializations)
+            for ((i, layer) in masked.withIndex()) assertSame("${layer.name}: the very mask store", stores[i], layer.maskPixels)
+        }
+    }
+
+    private fun sceneImages(layers: List<SceneLayer>): List<SceneImage> = layers.flatMap { l ->
+        listOfNotNull(l.mask?.image) + l.items.filterIsInstance<SceneItem.Image>().map { it.image } + sceneImages(l.children)
+    }
+
     @Test
     fun theAutosaveThumbnailDrawsABlankAdjustmentMaskOffMainWithoutTheFacade() {
         write(ID, blankMask = true)

@@ -1034,11 +1034,26 @@ class ExportSceneBuilder(
         }
         var maskImage: SceneImage? = null
         var maskFill = -1
-        val m = layer.mask
-        if (m != null) {
-            val bg = maskBackground(m)
-            maskFill = (0xFF shl 24) or (luma(bg) * 0x010101)
-            maskImage = ownMask[layer] ?: ContentBounds.of(m, emptyColor = bg)?.let { r -> pixelImage(key("pmask"), m, r, gray = true).also { extra += it } }
+        // v1.10 (lead, I28): the mask from its store, as `maskOf` reads it, never through
+        // `Layer.mask` (whose read would materialize a parked or blank mask for good): a FLAT mask
+        // as it is, a parked one through a copy let go of at once, a blank one transparent.
+        val hasMask = layer.hasMask
+        if (hasMask) {
+            val p = layer.maskPixels
+            val flat = com.brushwork.paint.engine.flatBitmapOf(p)
+            val m = flat ?: (p as? com.brushwork.paint.engine.tiles.TiledPixels)?.let { com.brushwork.paint.engine.tiles.TileOps.materialize(it) }
+            if (m == null) {
+                maskFill = (0xFF shl 24) or (luma(0) * 0x010101)
+                maskImage = ownMask[layer]
+            } else {
+                try {
+                    val bg = maskBackground(m)
+                    maskFill = (0xFF shl 24) or (luma(bg) * 0x010101)
+                    maskImage = ownMask[layer] ?: ContentBounds.of(m, emptyColor = bg)?.let { r -> storeImage(key("pmask"), layer, r, mask = true).also { extra += it } }
+                } finally {
+                    if (m !== flat) m.recycle()
+                }
+            }
         }
         val array = data.array
         val payloadArray = if (array != null && arraySource != null) {
@@ -1053,7 +1068,7 @@ class ExportSceneBuilder(
             kind = kind,
             imageRef = image?.key,
             imageRect = image?.let { PayloadRect(it.left, it.top, it.width, it.height) },
-            hasMask = m != null,
+            hasMask = hasMask,
             maskRef = maskImage?.key,
             maskRect = maskImage?.let { PayloadRect(it.left, it.top, it.width, it.height) },
             maskFill = maskFill,
