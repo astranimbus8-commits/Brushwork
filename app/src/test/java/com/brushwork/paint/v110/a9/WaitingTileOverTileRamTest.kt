@@ -61,6 +61,7 @@ class WaitingTileOverTileRamTest {
 
     @After
     fun tearDown() {
+        A9Docs.disposeTracked()
         worker?.shutdownNow()
         made.forEach { if (!it.isRecycled) it.recycle() }
     }
@@ -69,7 +70,7 @@ class WaitingTileOverTileRamTest {
 
     /** [n] layers of 512 x 512 translucent noise (every tile ordinary), every third MULTIPLY, every fifth masked. */
     private fun document(n: Int): Document {
-        val d = Document("waiting", "waiting", SIDE, SIDE)
+        val d = A9Docs.track(Document("waiting", "waiting", SIDE, SIDE))
         val r = Random(77L)
         repeat(n) { i ->
             val px = IntArray(SIDE * SIDE) { Color.argb(30 + r.nextInt(200), r.nextInt(256), r.nextInt(256), r.nextInt(256)) }

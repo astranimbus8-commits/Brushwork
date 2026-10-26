@@ -56,8 +56,10 @@ internal class StrokeFrameKit(val doc: Document, activeIndex: Int) {
         return times[times.size / 2]
     }
 
+    /** Frees the projection and the display, and gives back the stack's tiles ([A9Docs.dispose]). */
     fun release() {
         projection.freeAll()
         tiles.release()
+        A9Docs.dispose(doc)
     }
 }

@@ -54,13 +54,14 @@ class ThumbnailAtParkTimingTest {
 
     @After
     fun tearDown() {
+        A9Docs.disposeTracked()
         made.forEach { if (!it.isRecycled) it.recycle() }
     }
 
     @Test
     fun aParkedLayersThumbnailIsQuick() {
         val r = Random(43L)
-        val d = Document("thumb-timing", "thumb-timing", SIDE, SIDE)
+        val d = A9Docs.track(Document("thumb-timing", "thumb-timing", SIDE, SIDE))
         val b = BitmapUtils.createLayerBitmap(SIDE, SIDE).apply { setPixels(IntArray(SIDE * SIDE) { r.nextInt() }, 0, SIDE, 0, 0, SIDE, SIDE) }
         made += b
         val l = Layer(d.newLayerId(), "Painted", b).also { d.layers += it }

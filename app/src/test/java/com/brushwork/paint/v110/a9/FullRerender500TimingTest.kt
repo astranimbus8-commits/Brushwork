@@ -41,6 +41,7 @@ class FullRerender500TimingTest {
 
     @After
     fun tearDown() {
+        A9Docs.disposeTracked()
         worker?.shutdownNow()
         made.forEach { if (!it.isRecycled) it.recycle() }
     }

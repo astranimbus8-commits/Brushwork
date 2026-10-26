@@ -42,6 +42,7 @@ class TiledCompositeGoldenTest(
 
     @After
     fun tearDown() {
+        A9Docs.disposeTracked()
         Compositor.flattenBand = Compositor.FLATTEN_BAND
         BandAssembler.bandRows = BandAssembler.BAND_ROWS
         made.forEach { if (!it.isRecycled) it.recycle() }

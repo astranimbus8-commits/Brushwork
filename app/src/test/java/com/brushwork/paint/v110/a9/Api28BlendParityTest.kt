@@ -47,6 +47,7 @@ class Api28BlendParityTest(private val level: EngineLevel) {
 
     @After
     fun tearDown() {
+        A9Docs.disposeTracked()
         made.forEach { if (!it.isRecycled) it.recycle() }
     }
 
@@ -64,7 +65,7 @@ class Api28BlendParityTest(private val level: EngineLevel) {
 
     /** Backdrop, then the subject ([mode], 80 %) holding [content]. */
     private fun doc(mode: LayerBlendMode, content: Bitmap): Document {
-        val d = Document("api28", "api28", A9Docs.W, A9Docs.H)
+        val d = A9Docs.track(Document("api28", "api28", A9Docs.W, A9Docs.H))
         d.layers += Layer(d.newLayerId(), "Backdrop", keep(A9Docs.backdrop(9L)))
         d.layers += Layer(d.newLayerId(), A9Docs.SUBJECT, content).apply {
             blendMode = mode

@@ -59,6 +59,7 @@ class ThumbnailFromTilesTest {
 
     @After
     fun tearDown() {
+        A9Docs.disposeTracked()
         threads?.shutdownNow()
         made.forEach { if (!it.isRecycled) it.recycle() }
     }
@@ -121,7 +122,7 @@ class ThumbnailFromTilesTest {
 
     @Test
     fun aParkedLayersThumbnailIsMadeFromItsTilesOffMain() {
-        val d = Document("thumbs", "thumbs", A9Docs.W, A9Docs.H)
+        val d = A9Docs.track(Document("thumbs", "thumbs", A9Docs.W, A9Docs.H))
         val l = layer(d, masked = true).also { d.layers += it }
         val flatContent = keep(LayerThumbnails.downscale(keep(A9Docs.content(3L)), SIZE))
         val flatMask = keep(LayerThumbnails.downscale(keep(A9Docs.mask(4L)), SIZE))
@@ -163,7 +164,7 @@ class ThumbnailFromTilesTest {
 
     @Test
     fun aRequestWhoseKeyChangedIsDroppedAndAskedAgain() {
-        val d = Document("thumbs", "thumbs", A9Docs.W, A9Docs.H)
+        val d = A9Docs.track(Document("thumbs", "thumbs", A9Docs.W, A9Docs.H))
         val l = layer(d, masked = false).also { d.layers += it }
         parkAndSwap(l)
         val tasks = ArrayDeque<Runnable>()
@@ -190,7 +191,7 @@ class ThumbnailFromTilesTest {
 
     @Test
     fun aBlankLayerNeverRequests() {
-        val d = Document("thumbs", "thumbs", A9Docs.W, A9Docs.H)
+        val d = A9Docs.track(Document("thumbs", "thumbs", A9Docs.W, A9Docs.H))
         val l = Layer(d.newLayerId(), "Blank", keep(A9Docs.empty())).also { d.layers += it }
         ChaosResidency().park(l)
         val thumbs = LayerThumbnails(SIZE, Executor { error("no read") }, Handler(Looper.getMainLooper()))

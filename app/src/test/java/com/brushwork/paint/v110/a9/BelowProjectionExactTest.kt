@@ -48,6 +48,7 @@ class BelowProjectionExactTest {
 
     @After
     fun tearDown() {
+        A9Docs.disposeTracked()
         made.forEach { if (!it.isRecycled) it.recycle() }
     }
 
@@ -107,7 +108,7 @@ class BelowProjectionExactTest {
     fun theProjectionIsExactOnRandomStacks() {
         var cases = 0
         for (seed in 1L..40L) {
-            val doc = RandomStacks.document(seed, RandomStacks.Spec(layers = 14 + (seed % 9).toInt()))
+            val doc = A9Docs.track(RandomStacks.document(seed, RandomStacks.Spec(layers = 14 + (seed % 9).toInt())))
             val candidates = eligible(doc)
             if (candidates.isEmpty()) continue
             val r = Random(seed)
@@ -152,6 +153,7 @@ class BelowProjectionExactTest {
             }
             s.projection.freeAll()
             s.tiles.release()
+            A9Docs.dispose(doc)
             cases++
         }
         assertTrue("enough eligible stacks ($cases)", cases >= 10)

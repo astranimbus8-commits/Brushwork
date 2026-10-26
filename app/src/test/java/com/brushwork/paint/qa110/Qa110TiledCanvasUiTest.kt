@@ -23,6 +23,7 @@ import com.brushwork.paint.ui.editor.chrome.ChromeScreen
 import com.brushwork.paint.v110.a9.A9Docs
 import com.brushwork.paint.v110.a9.WaitingTimingKit
 import org.junit.Assert.assertEquals
+import org.junit.After
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -50,6 +51,11 @@ import java.util.Random
 class Qa110TiledCanvasUiTest {
     @get:Rule
     val engine = EngineRule(EngineLevel.TILES, memory = FakeMemoryProbe(MemoryPreset.T606), residency = ChaosResidency())
+
+    @After
+    fun tearDown() {
+        A9Docs.disposeTracked()
+    }
 
     /** The canvas view of [s]. */
     private fun canvasOf(s: ChromeScreen): CanvasView =
@@ -157,7 +163,7 @@ class Qa110TiledCanvasUiTest {
      * folder of 6 at 60 % at 120, a masked Invert adjustment at 150; a plain top layer, active.
      */
     private fun stack(): Document {
-        val d = Document("tiled200", "Tiled 200", W, H)
+        val d = A9Docs.track(Document("tiled200", "Tiled 200", W, H))
         val r = Random(SEED)
         val p = Paint().apply { isAntiAlias = true }
         val modes = LayerBlendMode.entries

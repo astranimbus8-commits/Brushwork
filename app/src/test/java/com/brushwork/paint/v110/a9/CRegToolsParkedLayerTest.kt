@@ -54,6 +54,7 @@ class CRegToolsParkedLayerTest {
 
     @After
     fun tearDown() {
+        A9Docs.disposeTracked()
         PixelFacade.strict = false
         scope.cancel()
         made.forEach { if (!it.isRecycled) it.recycle() }

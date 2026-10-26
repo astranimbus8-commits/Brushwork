@@ -30,6 +30,7 @@ class BlankSkipExactTest {
 
     @After
     fun tearDown() {
+        A9Docs.disposeTracked()
         PixelFacade.strict = false
         made.forEach { if (!it.isRecycled) it.recycle() }
     }
@@ -38,7 +39,7 @@ class BlankSkipExactTest {
 
     /** Backdrop, then [subject] (the case's mode, 80 %), optionally masked, then optionally a painted layer clipped to it. */
     private fun doc(mode: LayerBlendMode, subject: Bitmap, masked: Boolean, clipped: Boolean): Document {
-        val d = Document("skip", "skip", A9Docs.W, A9Docs.H)
+        val d = A9Docs.track(Document("skip", "skip", A9Docs.W, A9Docs.H))
         d.layers += Layer(d.newLayerId(), "Backdrop", keep(A9Docs.backdrop(5L)))
         d.layers += Layer(d.newLayerId(), A9Docs.SUBJECT, subject).apply {
             blendMode = mode

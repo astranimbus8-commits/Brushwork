@@ -36,7 +36,7 @@ object WaitingTimingKit {
      */
     fun stack(n: Int, seed: Long): Document {
         val chaos = ChaosResidency()
-        val d = Document("stack$n", "stack$n", SIDE, SIDE)
+        val d = A9Docs.track(Document("stack$n", "stack$n", SIDE, SIDE))
         val r = Random(seed)
         d.layers += parked(chaos, Layer(d.newLayerId(), "Backdrop", A9Docs.backdrop(seed, SIDE, SIDE)))
         val p = Paint().apply { isAntiAlias = true }

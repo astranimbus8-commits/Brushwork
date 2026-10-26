@@ -63,6 +63,7 @@ class PanelNoMaterializeTest {
 
     @After
     fun tearDown() {
+        A9Docs.disposeTracked()
         PixelFacade.strict = false
         made.forEach { if (!it.isRecycled) it.recycle() }
     }
@@ -71,7 +72,7 @@ class PanelNoMaterializeTest {
 
     /** A backdrop, a masked layer, a folder of two layers (one masked), a blank layer and a top layer. */
     private fun document(): Document {
-        val d = Document("panel", "panel", A9Docs.W, A9Docs.H)
+        val d = A9Docs.track(Document("panel", "panel", A9Docs.W, A9Docs.H))
         fun layer(name: String, b: Bitmap, parent: Long = Layer.ROOT_ID) = Layer(d.newLayerId(), name, keep(b)).apply { parentId = parent }
         d.layers += layer("Backdrop", A9Docs.backdrop(1L))
         d.layers += layer("Masked", A9Docs.content(2L)).apply {

@@ -64,6 +64,7 @@ class WaitingReadOwnershipTest {
 
     @After
     fun tearDown() {
+        A9Docs.disposeTracked()
         made.forEach { if (!it.isRecycled) it.recycle() }
     }
 
@@ -71,7 +72,7 @@ class WaitingReadOwnershipTest {
 
     /** Three 512 x 512 layers of translucent noise, the middle one MULTIPLY. */
     private fun document(): Document {
-        val d = Document("ownership", "ownership", SIDE, SIDE)
+        val d = A9Docs.track(Document("ownership", "ownership", SIDE, SIDE))
         val r = Random(5L)
         repeat(3) { i ->
             val px = IntArray(SIDE * SIDE) { Color.argb(40 + r.nextInt(200), r.nextInt(256), r.nextInt(256), r.nextInt(256)) }

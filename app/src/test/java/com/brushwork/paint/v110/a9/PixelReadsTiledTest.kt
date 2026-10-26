@@ -52,6 +52,7 @@ class PixelReadsTiledTest {
 
     @After
     fun tearDown() {
+        A9Docs.disposeTracked()
         PixelFacade.strict = false
         made.forEach { if (!it.isRecycled) it.recycle() }
     }
@@ -60,7 +61,7 @@ class PixelReadsTiledTest {
 
     /** Three layers of [W] x [H]: a backdrop, sparse content (blank and solid tiles among them), masked translucent noise. */
     private fun document(): Document {
-        val d = Document("reads", "reads", W, H)
+        val d = A9Docs.track(Document("reads", "reads", W, H))
         d.layers += Layer(d.newLayerId(), "back", keep(A9Docs.backdrop(3L, W, H)))
         d.layers += Layer(d.newLayerId(), "sparse", keep(A9Docs.content(5L, W, H))).apply { blendMode = LayerBlendMode.MULTIPLY }
         val r = Random(9L)

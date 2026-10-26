@@ -117,6 +117,29 @@ object A9Docs {
     /** A transparent bitmap of the document's size. */
     fun empty(w: Int = W, h: Int = H): Bitmap = BitmapUtils.createLayerBitmap(w, h)
 
+    private val tracked = ArrayList<Document>()
+
+    /** Registers [d] for [disposeTracked]; returns it. */
+    fun track(d: Document): Document {
+        tracked += d
+        return d
+    }
+
+    /**
+     * Gives back the tiles and flat bitmaps of [d]'s layers (`Layer.recycleBitmaps`). A7's ledger
+     * (design 2.4) is shared by every test of one JVM and limited to R, so a parked stack a test
+     * never releases takes room from every later test.
+     */
+    fun dispose(d: Document) {
+        for (l in d.layers) l.recycleBitmaps()
+    }
+
+    /** [dispose] of every [track]ed document (each A9 test's `@After`). */
+    fun disposeTracked() {
+        tracked.forEach(::dispose)
+        tracked.clear()
+    }
+
     /** Sets `EngineConfig.level` inside a test (its setter is private; `EngineRule` restores the level after the test). */
     fun setLevel(level: EngineLevel) {
         EngineConfig::class.java.getDeclaredField("level").apply { isAccessible = true }.set(null, level)
@@ -128,7 +151,7 @@ object A9Docs {
      * [mode] (blank in the Blank copy); the adjustment contexts hold a masked adjustment layer.
      */
     fun document(context: Context, mode: LayerBlendMode, seed: Long = 1L): Document {
-        val d = Document("a9-$context-$mode", "A9 $context $mode", W, H)
+        val d = track(Document("a9-$context-$mode", "A9 $context $mode", W, H))
         fun layer(name: String, b: Bitmap, parent: Long = Layer.ROOT_ID, blend: LayerBlendMode = LayerBlendMode.NORMAL, opacity: Float = 1f): Layer =
             Layer(d.newLayerId(), name, b).apply {
                 parentId = parent

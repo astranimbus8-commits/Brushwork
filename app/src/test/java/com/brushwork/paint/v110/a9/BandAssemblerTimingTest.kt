@@ -29,6 +29,7 @@ class BandAssemblerTimingTest {
 
     @After
     fun tearDown() {
+        A9Docs.disposeTracked()
         made.forEach { if (!it.isRecycled) it.recycle() }
     }
 
