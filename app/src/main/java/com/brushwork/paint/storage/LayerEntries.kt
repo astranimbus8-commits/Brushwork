@@ -890,7 +890,9 @@ internal object ClassicOpen {
         } catch (e: Exception) {
             null
         }
-        val j = s?.javaMax?.takeIf { it > 0L } ?: EngineConfig.budget.javaMax
+        // J as the session's budgets take it (A7's `Budgets.compute`): the probe's `javaMax`, and
+        // `Runtime.maxMemory` when memory is unknown (J3: v1.9's numbers, `LayerBudgetV19`'s heap).
+        val j = s?.javaMax?.takeIf { it > 0L } ?: com.brushwork.paint.engine.budget.Budgets.compute(EngineConfig.memoryProbe, 0).javaMax
         val room = rStable(s, j)
         return Capacity(layersFor(w, h, room, j), room)
     }

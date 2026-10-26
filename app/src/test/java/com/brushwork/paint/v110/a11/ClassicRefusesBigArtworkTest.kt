@@ -132,11 +132,13 @@ class ClassicRefusesBigArtworkTest {
         assertEquals(93, ClassicOpen.capacity(1080, 2408).layers)
         goPhone()
         assertEquals("the Go phone at 256 x 256: v1.9's floor", 100, ClassicOpen.capacity(side, side).layers)
-        // Unknown memory (J3): v1.9's cap exactly, at this heap.
+        // Unknown memory (J3): v1.9's cap exactly, at this heap (v1.9's `maxMemory`, as A7's
+        // `Budgets.compute` takes J when memory is unknown; the session's budgets were computed
+        // from the known T606 probe, whose J differs from this JVM's heap).
         probe.totalMem = 0L
         val phone = Document("u", "u", 1080, 2408)
         assertEquals(LayerBudgetV19.maxLayers(phone), ClassicOpen.capacity(1080, 2408).layers)
-        assertEquals((EngineConfig.budget.javaMax * 0.55).toLong(), ClassicOpen.capacity(1080, 2408).room)
+        assertEquals((Runtime.getRuntime().maxMemory() * 0.55).toLong(), ClassicOpen.capacity(1080, 2408).room)
     }
 
     @Test
