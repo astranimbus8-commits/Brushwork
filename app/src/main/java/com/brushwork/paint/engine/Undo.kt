@@ -113,24 +113,74 @@ class UndoManager(private val maxBytes: Long, private val maxSteps: Int = 150) {
     }
 
     /**
-     * v1.10 (A8, design 2.6): an undo step's apply now waits for the worker to read its tiles
-     * (`PixelEditAction` on a FLAT layer with SWAPPED tiles). Until the returned function runs
-     * (once, on main, after that apply), every later undo or redo, and every part of a step that
-     * defers itself ([deferIfWaiting]), waits behind it, in order: nothing is applied out of turn.
+     * v1.10 (A8, LR2): runs an apply that waited for its tiles, and the undos and redos queued
+     * behind it, as `EditorController.undo` and `redo` run theirs (inside its `inHistoryDo`: edits
+     * a tool makes in reaction are not reported to edit listeners). The editor sets it (region
+     * `v110-A8 activate`); null runs them as they are. Main only.
      */
-    internal fun beginWaiting(): () -> Unit {
+    internal var aroundDeferred: ((() -> Unit) -> Unit)? = null
+
+    /** v1.10 (A8): [op] through [aroundDeferred]: an apply that waited, or the queue behind it. Main only. */
+    internal fun asHistory(op: () -> Unit) {
+        val around = aroundDeferred
+        if (around == null) op() else around(op)
+    }
+
+    /** v1.10 (A8, LR1): how each apply waiting now ([beginWaiting]) finishes at once ([settle]), oldest first. */
+    private val hurries = ArrayList<() -> Unit>()
+
+    /** True while [settle] runs (it is not entered again). */
+    private var settling = false
+
+    /**
+     * v1.10 (A8, design 2.6): an undo step's apply now waits for the worker to read its tiles
+     * (`PixelEditAction` on a FLAT layer with SWAPPED tiles), or for an activation to end. Until
+     * the returned function runs (once, on main, after that apply), every later undo or redo, and
+     * every part of a step that defers itself ([deferIfWaiting]), waits behind it, in order:
+     * nothing is applied out of turn; the queue then runs through [asHistory]. [hurry] (LR1)
+     * finishes that apply at once, on main, and calls the returned function ([settle]).
+     */
+    internal fun beginWaiting(hurry: (() -> Unit)? = null): () -> Unit {
         waiting++
+        if (hurry != null) hurries += hurry
         var ended = false
         return {
             if (!ended) {
                 ended = true
-                waiting--
-                while (waiting == 0) {
-                    val op = deferred.removeFirstOrNull() ?: break
-                    op()
+                if (hurry != null) hurries.removeAll { it === hurry }
+                asHistory {
+                    waiting--
+                    while (waiting == 0) {
+                        val op = deferred.removeFirstOrNull() ?: break
+                        op()
+                    }
                 }
                 if (waiting == 0 && deferred.isEmpty()) disposeDropped()
             }
+        }
+    }
+
+    /**
+     * v1.10 (A8, LR1): finishes every apply that waits for its tiles NOW, on main, then the undos
+     * and redos queued behind them, in order, so an edit that follows (a panel or menu action:
+     * only canvas input is held while an undo waits) lands after them and is never overwritten by
+     * them. A waiting `PixelEditAction` reads its SWAPPED tiles here, on main (`TileOps.makeResident`:
+     * the one place main reads a slot, bounded to an edit made while an undo waits); a waiting
+     * activation makes the layer FLAT from what is resident and reads the rest on main. Does
+     * nothing when nothing waits. Not entered again from inside itself. Main only.
+     */
+    fun settle() {
+        if (settling) return
+        settling = true
+        try {
+            while (waiting > 0) {
+                val hurry = hurries.firstOrNull() ?: break
+                hurry()
+                // A hurry that could not end its wait (it never does) must not loop forever.
+                if (hurries.firstOrNull() === hurry) break
+            }
+        } finally {
+            settling = false
         }
     }
 
@@ -342,7 +392,8 @@ class PixelEditRecorder(val layer: Layer, val target: EditTarget, private val ti
  *    When a tile of the map is SWAPPED (the residency policy swapped it out as undo-only), the
  *    step waits for the worker to read it back (READ_URGENT) and applies on main then: canvas
  *    input is held meanwhile ([EditorController.activating]) and every later undo or redo waits
- *    behind it ([UndoManager.beginWaiting]); main never reads a slot.
+ *    behind it ([UndoManager.beginWaiting]); main never reads a slot, except when an edit asks
+ *    the step to finish at once ([UndoManager.settle], LR1).
  *  - PARKED: `TiledPixels.replaceTiles` swaps the map's tiles into the store in place and the
  *    tiles it replaced go back into the map (no copy, no materialization, the same store so
  *    [Layer.pixelGeneration] unchanged; the references move with the tiles).
@@ -384,18 +435,30 @@ class PixelEditAction internal constructor(
             if (store() !is FlatPixels) layer.bitmapFor(target)
             val held = tiles.values.filterNotNull()
             if (held.any { it.state == TileState.SWAPPED }) {
-                val end = c.undoManager.beginWaiting()
                 val pin = layer.pin()
                 c.activating = layer
-                TileWorker.readThen(held) {
-                    pin.close()
-                    if (c.activating === layer) c.activating = null
-                    try {
-                        if (!disposed) apply(c)
-                    } finally {
-                        end()
+                // Once: when the worker's reads end, or at once from UndoManager.settle (LR1).
+                var done = false
+                var end: () -> Unit = {}
+                val finish = {
+                    if (!done) {
+                        done = true
+                        pin.close()
+                        if (c.activating === layer) c.activating = null
+                        try {
+                            if (!disposed) c.undoManager.asHistory { apply(c) }
+                        } finally {
+                            end()
+                        }
                     }
                 }
+                end = c.undoManager.beginWaiting(hurry = {
+                    // Main reads the slots still SWAPPED (a read the worker has in flight finds
+                    // the tile resident and adopts nothing); a failed read leaves its tile as it is.
+                    if (!disposed) for (t in held) if (t.state == TileState.SWAPPED) runCatching { TileOps.makeResident(t) }
+                    finish()
+                })
+                TileWorker.readThen(held) { finish() }
                 return
             }
         }

@@ -319,27 +319,32 @@ class ResidencyPolicy internal constructor(
      * rehouses the layer once every read ended, if it is still the one being activated. The
      * layer is pinned meanwhile, so P3 sends none of its tiles out again.
      * An undo or redo asked meanwhile waits for the activation to end (`UndoManager.beginWaiting`):
-     * it never changes the store being read and copied.
+     * it never changes the store being read and copied. `UndoManager.settle` (LR1) ends the
+     * activation at once: [materialize] takes the copies where complete and reads what is still
+     * missing on main; the reads still in flight then end nothing (the finish runs once).
      */
     private fun startAsync(layer: Layer, missing: List<Tile>) {
         val token = ++activationToken
         activatingLayer = layer
         host.activating = layer
         val pin = layer.pin()
-        val endWait = host.history?.beginWaiting()
+        var endWait: (() -> Unit)? = null
         var builds: List<FlatBuild> = emptyList()
         var left = missing.size
         var finished = false
         val finish = {
-            finished = true
-            pin.close()
-            if (token == activationToken && activatingLayer === layer) {
-                if (inDocument(layer)) materialize(layer, builds)
-                endActivation(layer)
+            if (!finished) {
+                finished = true
+                pin.close()
+                if (token == activationToken && activatingLayer === layer) {
+                    if (inDocument(layer)) materialize(layer, builds)
+                    endActivation(layer)
+                }
+                for (b in builds) b.drop()
+                endWait?.invoke()
             }
-            for (b in builds) b.drop()
-            endWait?.invoke()
         }
+        endWait = host.history?.beginWaiting(hurry = finish)
         if (missing.isEmpty()) {
             finish()
             return

@@ -214,6 +214,111 @@ class UndoActiveSwappedTest {
     }
 
     /**
+     * LR1: `UndoManager.settle` (what an edit made while an undo waits asks first) applies the
+     * waiting undo at once, reading its SWAPPED tiles on main, so an edit of the same pixels that
+     * follows lands on the undone layer and is never overwritten by the undo; the worker's reads
+     * still in flight then apply nothing a second time.
+     */
+    @Test
+    fun aSettleAppliesTheWaitingUndoBeforeAnEditOfTheSamePixels() {
+        val c = editor()
+        val l = c.doc.layers[2]
+        val before = A8Kit.pixelsOf(l).first
+        A8Kit.paint(c, l, Rect(100, 50, 400, 250), 0xFF3366AA.toInt())
+        val tiles = swapOutNewest(c)
+        val reads = swap.reads
+        val steps = c.undoManager.undoCount
+
+        c.undo()
+        assertSame(l, c.activating)
+        c.undoManager.settle()
+        assertNull("the hold ended at once", c.activating)
+        assertArrayEquals("the undo applied at once", before, A8Kit.pixelsOf(l).first)
+        assertTrue("its tiles were read on main", swap.readThreads.drop(reads).contains(mainName))
+
+        A8Kit.paint(c, l, Rect(150, 100, 300, 200), 0xFF00FF00.toInt())
+        val edited = A8Kit.pixelsOf(l).first
+        assertEquals("the edit is there", 0xFF00FF00.toInt(), edited[150 * 512 + 200])
+        assertEquals("under it, the undone pixels", before[60 * 512 + 110], edited[60 * 512 + 110])
+        assertEquals("the edit is the newest step", steps, c.undoManager.undoCount)
+        assertFalse(c.undoManager.canRedo)
+
+        A8Kit.drain()
+        assertNull(c.activating)
+        assertArrayEquals("the late reads applied nothing", edited, A8Kit.pixelsOf(l).first)
+        assertTrue("the undone step was let go", tiles.all { it.refs <= 0 && it.pins == 0 && it.slot == null })
+        c.undo()
+        A8Kit.drain()
+        assertArrayEquals("undoing the edit gives the undone pixels", before, A8Kit.pixelsOf(l).first)
+    }
+
+    /**
+     * LR2: an apply that waited and the steps queued behind it run as undo and redo run theirs
+     * (the editor's `inHistoryDo`): what a step queues for the edit listeners while it is undone
+     * (a tool reacting) reaches none of them.
+     */
+    @Test
+    fun theStepsQueuedBehindAWaitingUndoApplyAsHistory() {
+        val c = editor()
+        val l = c.doc.layers[2]
+        val heard = ArrayList<com.brushwork.paint.EditEvent>()
+        c.addEditListener { heard += it }
+        var undone = 0
+        val reacting = object : com.brushwork.paint.engine.UndoAction {
+            override val label = "Reacting"
+            override val byteSize = 0L
+            override fun undo(c: EditorController) {
+                undone++
+                c.queueEdit(com.brushwork.paint.EditEvent(l, com.brushwork.paint.engine.EditTarget.CONTENT, null, "Reaction"))
+            }
+            override fun redo(c: EditorController) = Unit
+        }
+        c.pushUndo(reacting)
+        A8Kit.paint(c, l, Rect(100, 50, 400, 250), 0xFF3366AA.toInt())
+        swapOutNewest(c)
+        heard.clear()
+
+        c.undo()
+        c.undo()
+        assertEquals("queued behind the waiting undo", 0, undone)
+        A8Kit.drain()
+        assertNull(c.activating)
+        assertEquals("then undone", 1, undone)
+        assertTrue("no listener heard of it: $heard", heard.isEmpty())
+    }
+
+    /**
+     * LR3: a canvas change (a rotation: `CanvasOps`' step around its stores step) undone while a
+     * pixel undo waits is queued behind it at the manager, so it never moves the layers before the
+     * waiting tiles go back where they were taken: both undone, the pixels are the original ones.
+     */
+    @Test
+    fun aCanvasChangeUndoneWhileAnUndoWaitsAppliesAfterIt() {
+        val c = editor()
+        val l = c.doc.layers[2]
+        val original = A8Kit.pixelsOf(l).first
+        assertTrue("started", com.brushwork.paint.engine.CanvasOps.applyRotate(c, com.brushwork.paint.engine.CanvasRotation.CW_90))
+        repeat(4000) {
+            if (c.busyMessage == null) return@repeat
+            A8Kit.idle()
+            Thread.sleep(2)
+        }
+        A8Kit.drain()
+        assertNull("rotated", c.busyMessage)
+        val rotated = A8Kit.pixelsOf(l).first
+        assertFalse("the rotation moved the pixels", rotated.contentEquals(original))
+        A8Kit.paint(c, l, Rect(100, 50, 400, 250), 0xFF3366AA.toInt())
+        swapOutNewest(c)
+
+        c.undo()
+        c.undo()
+        assertSame("the pixel undo waits", l, c.activating)
+        A8Kit.drain()
+        assertNull(c.activating)
+        assertArrayEquals("both undone, in order", original, A8Kit.pixelsOf(l).first)
+    }
+
+    /**
      * Review fix (7/7): an undo of a mask change queued behind a waiting undo, then an edit
      * pushed: the queued undo applies (the mask comes back) and only then is its step disposed.
      * Before, the push disposed the step first, and the queued undo then put the null it was

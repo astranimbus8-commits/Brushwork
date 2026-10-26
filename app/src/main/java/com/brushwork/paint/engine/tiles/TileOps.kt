@@ -115,6 +115,9 @@ internal object TileOps {
      * [b] recycled) when [t] is resident already or was freed meanwhile.
      */
     fun adoptRead(t: Tile, b: Bitmap): Boolean {
+        // A read that ran after main made the tile resident (makeResident, UndoManager.settle)
+        // returned the tile's own bitmap: nothing to adopt, and never recycled.
+        if (b === t.bitmap) return false
         val adopted = synchronized(t.lock) {
             if (t.bitmap != null || (t.packed == null && t.slot == null)) {
                 false

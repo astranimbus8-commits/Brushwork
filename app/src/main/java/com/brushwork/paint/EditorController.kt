@@ -1501,6 +1501,12 @@ class EditorController(
     private val residencyPolicy: com.brushwork.paint.engine.tiles.ResidencyPolicy? =
         com.brushwork.paint.engine.tiles.ResidencyPolicy.attach(this)
 
+    init {
+        // v1.10 (A8, LR2): an undo or redo whose apply waited for its tiles (or for an activation),
+        // and those queued behind it, apply later, on main: as history, as undo() and redo() run theirs.
+        undoManager.aroundDeferred = { op -> inHistoryDo { op(); true } }
+    }
+
     /** The session's policy, this editor's or one a test installed; null at CLASSIC. */
     private val policy: com.brushwork.paint.engine.tiles.ResidencyPolicy?
         get() = residencyPolicy?.takeIf { EngineConfig.residency === it } ?: EngineConfig.residency as? com.brushwork.paint.engine.tiles.ResidencyPolicy

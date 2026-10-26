@@ -133,6 +133,41 @@ class ActivationAsyncHoldsInputTest {
         A8Kit.drain()
     }
 
+    /**
+     * LR1: `UndoManager.settle` (what an edit made while the hold is on asks first) ends the
+     * activation at once: the layer is FLAT with its own pixels (what was not read yet is read on
+     * main), the hold ends, an undo asked meanwhile applies then, and the reads still in flight
+     * end nothing a second time.
+     */
+    @Test
+    fun aSettleEndsTheActivationAtOnceAndRunsTheUndoQueuedBehindIt() {
+        val (c, p) = editor()
+        val l0 = c.doc.layers[0]
+        val l2 = c.doc.layers[2]
+        val pixels = A8Kit.pixelsOf(l0)
+        val opacity = l2.opacity
+        c.setLayerProps(l2, l2.props().copy(opacity = 0.5f))
+        parkAndSwap(p, l0)
+
+        c.selectLayer(l0)
+        assertSame("the hold is on", l0, c.activating)
+        c.undo()
+        assertEquals("the undo waits behind the activation", 0.5f, l2.opacity, 0f)
+
+        c.undoManager.settle()
+        assertNull("the hold ended at once", c.activating)
+        assertEquals(ResidencyState.FLAT, l0.residency)
+        assertArrayEquals("its own pixels", pixels.first, A8Kit.pixelsOf(l0).first)
+        assertEquals("the queued undo applied", opacity, l2.opacity, 0f)
+
+        A8Kit.drain()
+        assertNull(c.activating)
+        assertEquals(ResidencyState.FLAT, l0.residency)
+        assertArrayEquals("the late reads changed nothing", pixels.first, A8Kit.pixelsOf(l0).first)
+        assertEquals("applied once", opacity, l2.opacity, 0f)
+        assertEquals("no pin left", 0, l0.pins)
+    }
+
     @Test
     fun thePressStartsTheHoldBeforeTheSwitch() {
         val (c, p) = editor()
