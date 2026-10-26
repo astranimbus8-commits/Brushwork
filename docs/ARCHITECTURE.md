@@ -3730,11 +3730,20 @@ before a waiting undo of the same pixels (`UndoActiveSwappedTest`,
 `ActivationAsyncHoldsInputTest`). Every pixel edit settles first: a `PixelEditRecorder`, made by
 `beginEdit` before the edit reads or changes a pixel, calls `UndoManager.settleWaiting()`, which
 settles every manager in which an apply waits (nothing to do, and nothing read, when none waits;
-`UndoActiveSwappedTest.anEditStartedWhileAnUndoWaitsLandsAfterIt`). Two kinds of edit do not
-settle at their start yet: one that swaps a store without a recorder (A11's `clearToBlank`, Clear
-layer without a selection), and one that reads the pixels before it makes its recorder (a tool's
-lift or proxy in `onActivate`). That call belongs in `EditorController.withToolPaused()` and
-`editScope`, outside the A8 region (a LeadRequest).
+`UndoActiveSwappedTest.anEditStartedWhileAnUndoWaitsLandsAfterIt`). The editor's entry points
+settle first too (the lead, at A8's merge), for the edits that change a store without a recorder
+(A11's `clearToBlank`, Clear layer without a selection) or read the pixels before they make one
+(a tool's lift or proxy in `onActivate`):
+- `editScope` at its outermost level, so every editor action;
+- `withToolPaused()`, before the tool's `onDeactivate`, so the operation and the `onActivate`
+  after it;
+- `selectTool`, before the new tool's `onActivate`;
+- a rollback (`rollbackTo`, `restoreUiMark`), before it takes the steps back, and again after
+  their undos and before it disposes them: an undo among them that waits for its tiles, and the
+  undos queued behind it, apply first (a disposed step would apply nothing).
+
+`UndoActiveSwappedTest` covers Clear, an `editScope` action, a tool switch and two rollbacks made
+while an undo waits.
 
 **Undo on tiles (section 2.6, `engine/Undo.kt`).** `PixelEditAction` holds ONE map of undo tiles
 by tile index (null = transparent), each held once by the step. It swaps them with the layer's
@@ -3754,7 +3763,9 @@ about 0.6 ms per transparent tile, and the PRINT lift of `LiftPerfTest` (Q5) wen
   finish at once.
 - The parts of a `CompositeAction` after a waiting part wait behind it too, in order. A step that
   is not a composite, such as a `CanvasChangeAction` (`CanvasOps.kt`), waits whole: its undo or
-  redo is deferred as one.
+  redo is deferred as one. `CanvasChangeAction` also defers itself (`deferIfWaiting`, as
+  `DocumentBitmapsAction` does), so a rollback that applies it directly, not through the manager,
+  never moves the layers before a waiting pixel step puts its tiles back.
 - What applies after a wait (the waiting step and every step queued behind it) applies as
   history. `UndoManager.aroundDeferred`, set in region `v110-A8 activate`, runs it inside
   `inHistoryDo`, as `undo()` and `redo()` run theirs, so it raises no edit or layer-list event.
@@ -3762,7 +3773,7 @@ about 0.6 ms per transparent tile, and the PRINT lift of `LiftPerfTest` (Q5) wen
   the redo steps, but they are disposed only once nothing waits. So the waiting undo, and the
   undos queued behind it, still apply, and their steps go after them. A step dropped from the
   history (`dispose`) applies nothing afterwards (`PixelEditAction`, `MaskChangeAction`,
-  `DocumentBitmapsAction`).
+  `DocumentBitmapsAction`, `CanvasChangeAction`).
 
 `MaskChangeAction` and `DocumentBitmapsAction` exchange stores, not bitmaps, so a layer's history
 never materializes its parked mask or content. `RemoveLayerAction` and `LayerTreeAction` count
@@ -3833,27 +3844,21 @@ parked layer (`PixelFacadeMaterializationTest`):
 The layers panel is A9's.
 
 **Known gaps.**
-- Pixel edits through `beginEdit` settle a waiting undo first. Two kinds of edit do not, yet (a
-  LeadRequest for `EditorController.withToolPaused()` and `editScope`):
-  - Clear layer without a selection swaps in a blank store, with no recorder. Made while an undo
-    of the same layer waits, it is applied before that undo. The undo then applies nothing (the
-    layer's store is no longer the flat one it waited on), and the Clear's push drops it from the
-    history. So an undo of the Clear brings the content back with the edit, and that edit can no
-    longer be undone.
-  - A tool's lift or proxy, read in `onActivate` while an undo waits, reads the pixels from before
-    that undo.
 - A settle reads the waiting step's SWAPPED tiles on main, by design: the edit cannot wait for the
-  worker. It ends a waiting activation at once too, also for an edit of another layer. Duplicate
+  worker. It ends a waiting activation at once too, also for an edit of another layer or a tool
+  switch. Duplicate
   selection of a parked layer also reads its SWAPPED tiles on main (`TiledPixels.materialize`), as
   the compositor does.
 - A tool's `onActivate` (`ColorSelectTool`, `MagneticLassoTool`, the lift of `TransformTool`) may
   read `activeLayer.bitmap` while an activation holds input. The facade then makes the layer FLAT
   synchronously and reads its SWAPPED tiles on main. Running `onActivate` when the activation ends
-  needs `EditorController` outside the A8 region (a LeadRequest).
+  needs `EditorController` outside the A8 region and the tools' lifecycle (a LeadRequest, left to
+  Gate 2: the pixels are right, only main reads).
 - A park does not reuse the last edit's tiles (design 2.6): a parked layer's tiles are cut anew.
 - Nothing calls `prepareLayer` at the press on a layer row yet, so the unpark starts at the
   release (`selectLayer`), not at the press (design 2.7; a LeadRequest for A7's
-  `ui/layers/LayersPanel.kt`).
+  `ui/layers/LayersPanel.kt`, left to Gate 2: a press that starts a scroll of the panel must not
+  make big layers FLAT).
 
 <!-- /v110-A8 -->
 
