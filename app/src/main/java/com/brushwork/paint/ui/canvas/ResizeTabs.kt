@@ -31,6 +31,7 @@ import com.brushwork.paint.core.LengthUnit
 import com.brushwork.paint.core.Units
 import com.brushwork.paint.engine.CanvasGeometry
 import com.brushwork.paint.engine.CanvasOps
+import com.brushwork.paint.engine.LayerBudget
 import com.brushwork.paint.engine.Resample
 import com.brushwork.paint.ui.color.ColorPickerDialog
 import com.brushwork.paint.ui.common.ChoiceChips
@@ -97,7 +98,8 @@ internal fun ColumnScope.ResizeImageTab(
     val layerCount = doc.pixelLayerCount
     val maskCount = doc.layers.count { it.hasMask }
     val bitmaps = layerCount + maskCount
-    val error = CanvasOps.validateSize(newW, newH, bitmaps, budget)
+    // v1.10 (A11, design 2.5): the budget decides (R at Tiles and Full, the heap at Classic).
+    val error = LayerBudget.current.canTransformCanvas(doc, newW, newH)
     val sizeChanged = newW != curW || newH != curH
     val dpiChanged = dpi.toFloat() != doc.dpi
     val printUnit = printUnitFor(unit)
@@ -233,7 +235,8 @@ internal fun ColumnScope.CanvasSizeTab(
     val grows = edges.any { it > 0 }
     val shrinks = edges.any { it < 0 }
     val bitmaps = doc.pixelLayerCount + doc.layers.count { it.hasMask }
-    val error = CanvasOps.validateSize(newW, newH, bitmaps, budget)
+    // v1.10 (A11, design 2.5): the budget decides (R at Tiles and Full, the heap at Classic).
+    val error = LayerBudget.current.canTransformCanvas(doc, newW, newH)
     val shownFill = ColorModeOps.displayColor(fillColor, doc.colorMode)
 
     TabScaffold(

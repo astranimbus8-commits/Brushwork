@@ -11,6 +11,14 @@ import android.graphics.RectF
 import com.brushwork.paint.ColorModeOps
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.core.Parallel
+import com.brushwork.paint.engine.budget.NativePurpose
+import com.brushwork.paint.engine.tiles.BlankPixels
+import com.brushwork.paint.engine.tiles.FlatPixels
+import com.brushwork.paint.engine.tiles.PixelPin
+import com.brushwork.paint.engine.tiles.PixelStore
+import com.brushwork.paint.engine.tiles.TILE_SIZE
+import com.brushwork.paint.engine.tiles.TileOps
+import com.brushwork.paint.engine.tiles.TiledPixels
 import com.brushwork.paint.masks.MaskSpecs
 import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.Document
@@ -22,6 +30,7 @@ import com.brushwork.paint.model.SavedSelection
 import com.brushwork.paint.model.recycleUnlessShared
 import com.brushwork.paint.model.Selection
 import com.brushwork.paint.tools.select.SavedSelectionOps
+import com.brushwork.paint.ui.common.EngineLabels110
 import com.brushwork.paint.vector.LayerDataTransforms
 import com.brushwork.paint.vector.VectorContent
 import com.brushwork.paint.vector.geom.ObjectIndex
@@ -45,11 +54,17 @@ enum class Resample(val label: String, val description: String) {
 
 /**
  * Immutable view of the document taken on the main thread. Background work reads only this
- * (source bitmaps are never mutated), so the live document stays consistent.
+ * (source pixels are never mutated), so the live document stays consistent.
  *
  * v1.7 (X6): [layers] are the PIXEL layers only (folders have no bitmaps and are never mapped);
  * [savedSelections] are the document's saved selections, mapped along by
  * `SavedSelectionOps.mappedForCanvas` (item 14).
+ *
+ * v1.10 (A11, design 2.5 and 4.4 A11): a layer snapshot holds the layer's [PixelStore]s, never a
+ * bitmap the facade made: [of] reads no pixels and materializes nothing (the stores as they are;
+ * for a validation or a read on main), [take] also leases them for a canvas operation off main (a
+ * `snapshot()` of every tiled store and a pin on every pixel layer, let go of by [Lease.release]
+ * on main). Visibility is found in one pass from the top ([shownByIndex]).
  */
 class CanvasSnapshot(
     val width: Int,
@@ -61,8 +76,10 @@ class CanvasSnapshot(
 ) {
     class LayerSnapshot(
         val layer: Layer,
-        val bitmap: Bitmap,
-        val mask: Bitmap?,
+        /** v1.10 (A11): the content's store when the snapshot was taken (under a [Lease], a tiled one's `snapshot()`). Never changed. */
+        val pixels: PixelStore,
+        /** v1.10 (A11): the mask's store, null = no mask (as [pixels]). */
+        val maskPixels: PixelStore?,
         val visible: Boolean,
         /** [Layer.contentVersion] when the snapshot was taken (detects pixel edits in between). */
         val contentVersion: Long = layer.contentVersion,
@@ -78,12 +95,24 @@ class CanvasSnapshot(
          */
         val pixelGeneration: Long = layer.pixelGeneration
 
-        /** v1.10 (F0, C16): [b] is this snapshot's own bitmap or mask (as [Layer.owns]). */
-        fun owns(b: Bitmap?): Boolean = b != null && (b === bitmap || b === mask)
+        /** v1.10 (A11): the layer had a mask (never reads it). */
+        val hasMask: Boolean get() = maskPixels != null
+
+        /** v1.10 (F0, C16): [b] is this snapshot's own bitmap or mask (as [Layer.owns]; A11: a FLAT store's bitmap). */
+        fun owns(b: Bitmap?): Boolean = b != null && (flatBitmapOf(pixels) === b || flatBitmapOf(maskPixels) === b)
     }
 
     /** Number of full-size bitmaps (layers + masks). */
-    val bitmapCount: Int get() = layers.size + layers.count { it.mask != null }
+    val bitmapCount: Int get() = layers.size + layers.count { it.hasMask }
+
+    /** v1.10 (A11): results of layers other than [active] are cut into tiles as they are made (a [take] above Classic). */
+    internal var parks: Boolean = false
+
+    /** v1.10 (A11): the active layer when the snapshot was taken; its results stay FLAT. */
+    internal var active: Layer? = null
+
+    /** v1.10 (A11): tiled results let go of off main; [Lease.release] releases them on main. */
+    internal val orphans = java.util.concurrent.ConcurrentLinkedQueue<TiledPixels>()
 
     /**
      * True while [doc] still has exactly the layers, bitmaps, pixels, size, dpi and color mode
@@ -101,13 +130,123 @@ class CanvasSnapshot(
         return true
     }
 
-    companion object {
-        fun of(doc: Document) = CanvasSnapshot(
-            doc.width, doc.height, doc.dpi, doc.colorMode,
-            doc.pixelLayers.map { LayerSnapshot(it, it.bitmap, it.mask, doc.effectiveVisible(it)) }.toList(),
-            doc.savedSelections,
-        )
+    /**
+     * v1.10 (A11): a snapshot whose tiled stores are `snapshot()`s and whose pixel layers are pinned
+     * (nothing parks, swaps out or frees what the operation reads off main). [release] once, on main,
+     * after the operation committed or gave up.
+     */
+    class Lease internal constructor(val snapshot: CanvasSnapshot, private val pins: List<PixelPin>, private val copies: List<TiledPixels>) {
+        private var released = false
+
+        fun release() {
+            if (released) return
+            released = true
+            for (p in pins) p.close()
+            for (s in copies) TileOps.releaseStore(s)
+            while (true) TileOps.releaseStore(snapshot.orphans.poll() ?: break)
+        }
     }
+
+    companion object {
+        /** The stores as they are: reads no pixels, takes no lease. */
+        fun of(doc: Document): CanvasSnapshot = build(doc) { it }
+
+        /** v1.10 (A11): [of] with a lease for a canvas operation off main. Main only. */
+        fun take(doc: Document): Lease {
+            val copies = ArrayList<TiledPixels>()
+            val pins = ArrayList<PixelPin>()
+            try {
+                val snap = build(doc) { p -> if (p is TiledPixels) TileOps.snapshot(p).also { copies += it } else p }
+                for (l in doc.layers) if (!l.isFolder) pins += l.pin()
+                snap.parks = EngineConfig.level != EngineLevel.CLASSIC
+                snap.active = doc.layers.getOrNull(doc.activeLayerIndex)
+                return Lease(snap, pins, copies)
+            } catch (e: Throwable) {
+                for (p in pins) p.close()
+                for (s in copies) TileOps.releaseStore(s)
+                throw e
+            }
+        }
+
+        private fun build(doc: Document, storeOf: (PixelStore) -> PixelStore): CanvasSnapshot {
+            val shown = shownByIndex(doc)
+            val out = ArrayList<LayerSnapshot>(doc.layers.size)
+            for ((i, l) in doc.layers.withIndex()) {
+                if (l.isFolder) continue
+                out += LayerSnapshot(l, storeOf(l.pixels), l.maskPixels?.let(storeOf), shown[i])
+            }
+            return CanvasSnapshot(doc.width, doc.height, doc.dpi, doc.colorMode, out, doc.savedSelections)
+        }
+
+        /**
+         * v1.10 (A11): `doc.effectiveVisible` of every layer by flat index, in one pass from the top
+         * (a folder lies above its children; a parent that is not a folder, or missing, counts as
+         * the top level, as `LayerTree.parentOf`).
+         */
+        internal fun shownByIndex(doc: Document): BooleanArray {
+            val layers = doc.layers
+            val shown = BooleanArray(layers.size)
+            val chain = HashMap<Long, Boolean>(layers.size * 2)
+            for (i in layers.indices.reversed()) {
+                val l = layers[i]
+                shown[i] = l.visible && (l.parentId == Layer.ROOT_ID || chain[l.parentId] ?: true)
+                chain[l.id] = if (l.isFolder) shown[i] else true
+            }
+            return shown
+        }
+    }
+}
+
+/** v1.10 (A11): the bitmap of a FLAT store, else null (never materializes). */
+internal fun flatBitmapOf(p: PixelStore?): Bitmap? = (p as? FlatPixels)?.bitmap // I28: one layer
+
+/**
+ * v1.10 (A11, design 2.5): [b], a bitmap no layer holds yet, parked: cut into tiles (a
+ * [BlankPixels] when it has no pixels) and recycled. Null, with [b] untouched, when the budget
+ * refuses the tiles (the caller keeps it FLAT, as v1.9 did).
+ */
+internal fun parkedStoreOf(b: Bitmap): PixelStore? {
+    val w = b.width
+    val h = b.height
+    val bytes = w.toLong() * h * 4
+    val budget = EngineConfig.budget
+    if (!budget.admitNative(bytes, NativePurpose.TILE)) return null
+    val store = try {
+        val tiles = TileOps.cut(b, detectBlank = true)
+        if (tiles.tiles.all { it == null }) BlankPixels(w, h) else tiles
+    } finally {
+        // Tile.of counted the tiles under TILES; the reservation made room for them until then.
+        budget.release(bytes, NativePurpose.TILE)
+    }
+    b.recycle()
+    return store
+}
+
+/**
+ * v1.10 (A11): gives [v], a view of an adjustment layer sharing the real layer's stores, a FLAT
+ * mask of its own when its enabled mask is tiled or blank. `AdjustmentStage` reads `Layer.mask`,
+ * whose materialization disposes the store it replaces; on a view that store is the real layer's,
+ * whose tiles would be released under it (its mask lost). Returns the bitmap made, which the
+ * caller recycles once the view is drawn, or null when [v] needs none (not an adjustment layer,
+ * no enabled mask, or a FLAT one). A tiled mask is read under the caller's lease (main, or a
+ * snapshot or pin off main); the bitmap is admitted and released (F1).
+ */
+internal fun privateAdjustmentMask(v: Layer): Bitmap? {
+    if (!v.isAdjustmentLayer || !v.maskEnabled) return null
+    val m = v.maskPixels ?: return null
+    if (m is FlatPixels) return null
+    val b = when (m) {
+        is TiledPixels -> TileOps.materialize(m)
+        else -> {
+            val bytes = m.width.toLong() * m.height * 4
+            val budget = EngineConfig.budget
+            if (!budget.admitNative(bytes, NativePurpose.LAYER)) throw OutOfMemoryError("No room for a ${m.width}x${m.height} mask")
+            budget.release(bytes, NativePurpose.LAYER)
+            BitmapUtils.createLayerBitmap(m.width, m.height)
+        }
+    }
+    v.maskPixels = FlatPixels(b)
+    return b
 }
 
 /**
@@ -124,22 +263,40 @@ class CanvasResult(
     val geometry: CanvasGeometry,
 ) {
     /**
-     * One layer's new [bitmap] and [mask]; [data]: its editable data mapped along (computed in
-     * the background with the pixels; null = map it at commit with `LayerDataTransforms`).
+     * One layer's new [pixels] and [maskPixels]; [data]: its editable data mapped along (computed
+     * in the background with the pixels; null = map it at commit with `LayerDataTransforms`).
+     * v1.10 (A11): stores; a layer whose pixels stay keeps the snapshot's own store, which [commit]
+     * reads as the layer's store at that time. Results of a snapshot made by [CanvasSnapshot.of]
+     * are FLAT (or the snapshot's own store), so [bitmap] and [mask] give them as v1.9 did.
      */
-    class LayerResult(val layer: Layer, val bitmap: Bitmap, val mask: Bitmap?, val data: LayerData? = null)
+    class LayerResult(val layer: Layer, val pixels: PixelStore, val maskPixels: PixelStore?, val data: LayerData? = null) {
+        /** The new content of a FLAT result. */
+        val bitmap: Bitmap get() = flatBitmapOf(pixels) ?: error("a ${pixels.javaClass.simpleName} result has no bitmap")
 
-    /** Frees the bitmaps this result created (never the snapshot's own bitmaps). */
+        /** The new mask of a FLAT result; null without a mask. */
+        val mask: Bitmap? get() = maskPixels?.let { flatBitmapOf(it) ?: error("a ${it.javaClass.simpleName} mask has no bitmap") }
+    }
+
+    /** Frees the pixels this result created (never the snapshot's own stores). */
     fun recycle(snapshot: CanvasSnapshot) = recycleCreated(layers, snapshot)
 
     internal companion object {
         fun recycleCreated(layers: List<LayerResult>, snapshot: CanvasSnapshot) {
-            val source = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<Bitmap, Boolean>())
-            snapshot.layers.forEach { source += it.bitmap; it.mask?.let { m -> source += m } }
+            val source = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<PixelStore, Boolean>())
+            snapshot.layers.forEach { source += it.pixels; it.maskPixels?.let { m -> source += m } }
             // (Rule B: never the folders' shared bitmap.)
             for (l in layers) {
-                if (l.bitmap !in source) l.bitmap.recycleUnlessShared()
-                l.mask?.let { if (it !in source) it.recycleUnlessShared() }
+                if (l.pixels !in source) disposeCreated(snapshot, l.pixels)
+                l.maskPixels?.let { if (it !in source) disposeCreated(snapshot, it) }
+            }
+        }
+
+        /** v1.10 (A11): lets go of [p], made for a result: a FLAT bitmap is recycled, a tiled store waits for [CanvasSnapshot.Lease.release] (main). */
+        fun disposeCreated(snapshot: CanvasSnapshot, p: PixelStore) {
+            when (p) {
+                is FlatPixels -> flatBitmapOf(p)?.recycleUnlessShared()
+                is TiledPixels -> snapshot.orphans += p
+                else -> Unit
             }
         }
     }
@@ -229,11 +386,12 @@ object CanvasOps {
         // exactness check here uses ArrayDraw.effectiveVector (a live array's copies included,
         // placed by the mapped spec).
         val layers = mapLayers(
-            snap, progress,
+            snap, progress, newWidth, newHeight,
             data = { l -> mappedData(l, geometry, newWidth, newHeight) },
             content = { _, d, sub -> d?.let { ArrayDraw.effectiveVector(it) }?.let { v -> renderVector(v, newWidth, newHeight, snap.colorMode, sub) } },
             maskOf = { _, d, sub -> specMask(d, newWidth, newHeight, sub) },
-        ) { src, isMask, sub ->
+            keepsBlank = { !constrain },
+        ) { _, src, isMask, sub ->
             if (constrain && !isMask) {
                 val out = resampleBitmap(src, newWidth, newHeight, resample) { f -> sub(f * 0.8f) }
                 try {
@@ -263,14 +421,14 @@ object CanvasOps {
     ): CanvasResult {
         checkSize(snap, newWidth, newHeight)
         val fill = fillBottom?.let { ColorModeOps.displayColor(it, snap.colorMode) }
-        val bottomBitmap = snap.layers.first().bitmap
+        val bottom = snap.layers.first()
         val geometry = CanvasGeometry.translate(offsetX.toDouble(), offsetY.toDouble())
         val layers = mapLayers(
-            snap, progress,
+            snap, progress, newWidth, newHeight,
             data = { l ->
                 val d = mappedData(l, geometry, newWidth, newHeight)
                 // A filled bottom layer gets pixels its objects don't make: it becomes a raster layer.
-                if (fill != null && l.bitmap === bottomBitmap && d.vector != null) d.copy(vector = null, array = null) else d
+                if (fill != null && l === bottom && d.vector != null) d.copy(vector = null, array = null) else d
             },
             content = { l, d, sub ->
                 // Objects reaching past the old edges into the new canvas, or paper grain moved
@@ -285,10 +443,11 @@ object CanvasOps {
             // An editable mask is drawn from its moved spec (the new margin is what the spec
             // renders there, not white).
             maskOf = { _, d, sub -> specMask(d, newWidth, newHeight, sub) },
-        ) { src, isMask, _ ->
+            keepsBlank = { l -> fill == null || l !== bottom },
+        ) { l, src, isMask, _ ->
             val background = when {
                 isMask -> MASK_WHITE
-                fill != null && src === bottomBitmap -> fill
+                fill != null && l === bottom -> fill
                 else -> 0
             }
             shifted(src, newWidth, newHeight, offsetX, offsetY, background)
@@ -311,9 +470,46 @@ object CanvasOps {
         val out = Rect()
         val visible = snap.layers.filter { it.visible }
         visible.forEachIndexed { i, l ->
-            opaqueBounds(l.bitmap) { f -> progress((i + f) / visible.size) }?.let { out.union(it) }
+            opaqueBoundsOf(l.pixels) { f -> progress((i + f) / visible.size) }?.let { out.union(it) }
         }
         return out
+    }
+
+    /**
+     * v1.10 (A11): [opaqueBounds] of one store, never materialized: a FLAT bitmap as v1.9, a tiled
+     * store row of tiles by row of tiles (rows without a tile are skipped), nothing for a blank one.
+     */
+    private fun opaqueBoundsOf(p: PixelStore, progress: (Float) -> Unit): Rect? {
+        flatBitmapOf(p)?.let { return opaqueBounds(it, progress) }
+        if (p !is TiledPixels) return null.also { progress(1f) }
+        if (p.evictedTo != null) throw CanvasOpException(EngineLabels110.CANVAS_OP_TOO_BIG)
+        val w = p.width
+        val h = p.height
+        val bytes = w.toLong() * min(h, TILE_SIZE) * 4
+        val budget = EngineConfig.budget
+        if (!budget.admitNative(bytes, NativePurpose.TRANSIENT)) throw CanvasOpException(EngineLabels110.CANVAS_OP_TOO_BIG)
+        val out = Rect()
+        val r = Rect()
+        var band: Bitmap? = null
+        try {
+            var y = 0
+            while (y < h) {
+                val n = min(TILE_SIZE, h - y)
+                r.set(0, y, w, y + n)
+                if (!TileOps.isEmptyIn(p, r)) {
+                    val b = band?.takeIf { it.height == n }
+                        ?: BitmapUtils.createLayerBitmap(w, n).also { band?.recycle(); band = it; it.density = Bitmap.DENSITY_NONE }
+                    TileOps.readRegion(p, r, b)
+                    opaqueBounds(b)?.let { it.offset(0, y); out.union(it) }
+                }
+                y += n
+                progress(y / h.toFloat())
+            }
+        } finally {
+            band?.recycle()
+            budget.release(bytes, NativePurpose.TRANSIENT)
+        }
+        return if (out.isEmpty) null else out
     }
 
     /** Crops to [opaqueBounds]. Throws [CanvasOpException] when there's nothing to trim. */
@@ -334,7 +530,7 @@ object CanvasOps {
         // Pixels are remapped exactly; vector objects and mask specs turn with them (a vector
         // layer whose brushes don't turn into themselves is drawn again from its objects).
         val layers = mapLayers(
-            snap, progress,
+            snap, progress, w, h,
             data = { l -> mappedData(l, geometry, w, h) },
             content = { l, d, sub ->
                 val v = d?.let { ArrayDraw.effectiveVector(it) }
@@ -344,7 +540,8 @@ object CanvasOps {
                 } else null
             },
             maskOf = { _, d, sub -> specMask(d, w, h, sub) },
-        ) { src, _, _ -> transformed(src, w, h, geometry) }
+            keepsBlank = { true },
+        ) { _, src, _, _ -> transformed(src, w, h, geometry) }
         return CanvasResult(w, h, snap.dpi, snap.colorMode, layers, geometry)
     }
 
@@ -353,7 +550,7 @@ object CanvasOps {
         if (snap.layers.isEmpty()) throw CanvasOpException("The drawing has no layers.")
         val geometry = CanvasGeometry.flip(horizontal, snap.width, snap.height)
         val layers = mapLayers(
-            snap, progress,
+            snap, progress, snap.width, snap.height,
             data = { l -> mappedData(l, geometry, snap.width, snap.height) },
             content = { l, d, sub ->
                 val v = d?.let { ArrayDraw.effectiveVector(it) }
@@ -363,7 +560,8 @@ object CanvasOps {
                 } else null
             },
             maskOf = { _, d, sub -> specMask(d, snap.width, snap.height, sub) },
-        ) { src, _, _ -> transformed(src, snap.width, snap.height, geometry) }
+            keepsBlank = { true },
+        ) { _, src, _, _ -> transformed(src, snap.width, snap.height, geometry) }
         return CanvasResult(snap.width, snap.height, snap.dpi, snap.colorMode, layers, geometry)
     }
 
@@ -388,13 +586,7 @@ object CanvasOps {
         val hasVectors = snap.layers.any { it.vector != null }
         if (!hasVectors) {
             if (!convertsPixels(snap.colorMode, mode)) return CanvasResult(snap.width, snap.height, snap.dpi, mode, emptyList(), CanvasGeometry.IDENTITY)
-            val plain = mapLayers(snap, progress, transformMasks = false) { src, _, sub ->
-                val out = BitmapUtils.createLayerBitmap(src.width, src.height)
-                try {
-                    convertInto(src, out, mode, threshold, dither, sub)
-                } catch (t: Throwable) { out.recycle(); throw t }
-                out
-            }
+            val plain = mapLayers(snap, progress, snap.width, snap.height, transformMasks = false) { _, src, _, sub -> converted(src, mode, threshold, dither, sub) }
             return CanvasResult(snap.width, snap.height, snap.dpi, mode, plain, CanvasGeometry.IDENTITY)
         }
         // Vector layers (v1.5): their cache stays exactly what their objects render to in the
@@ -405,43 +597,44 @@ object CanvasOps {
             if (!hasVectors) return CanvasResult(snap.width, snap.height, snap.dpi, mode, emptyList(), CanvasGeometry.IDENTITY)
             // The pixels already qualify, but vector layers were held to the old mode (grey or
             // 1-bit): they are drawn again in the new one. Every other layer keeps its pixels
-            // (and its data).
+            // (and its data; v1.10 A11: its store, never read).
             val layers = mapLayers(
-                snap, progress, transformMasks = false,
+                snap, progress, snap.width, snap.height, transformMasks = false,
                 data = { l -> l.data },
-                content = { l, d, sub -> d?.let { ArrayDraw.effectiveVector(it) }?.let { v -> renderVector(v, snap.width, snap.height, mode, sub) } ?: l.bitmap },
-            ) { src, _, _ -> src }
+                content = { _, d, sub -> d?.let { ArrayDraw.effectiveVector(it) }?.let { v -> renderVector(v, snap.width, snap.height, mode, sub) } },
+                op = null,
+            )
             return CanvasResult(snap.width, snap.height, snap.dpi, mode, layers, CanvasGeometry.IDENTITY)
         }
         val layers = mapLayers(
-            snap, progress, transformMasks = false,
+            snap, progress, snap.width, snap.height, transformMasks = false,
             data = convertedData,
-            content = { l, _, sub ->
-                // A vector layer is converted the standard way (threshold 128, no dithering):
-                // what its later re-renders get, so it stays one consistent rendering.
-                if (l.vector != null && mode == ColorMode.MONOCHROME && (dither || threshold.coerceIn(1, 255) != 128)) {
-                    val out = BitmapUtils.createLayerBitmap(l.bitmap.width, l.bitmap.height)
-                    try {
-                        convertInto(l.bitmap, out, mode, 128, false, sub)
-                    } catch (t: Throwable) { out.recycle(); throw t }
-                    out
-                } else null
-            },
-        ) { src, _, sub ->
-            val out = BitmapUtils.createLayerBitmap(src.width, src.height)
-            try {
-                convertInto(src, out, mode, threshold, dither, sub)
-            } catch (t: Throwable) { out.recycle(); throw t }
-            out
+        ) { l, src, _, sub ->
+            // A vector layer is converted the standard way (threshold 128, no dithering):
+            // what its later re-renders get, so it stays one consistent rendering.
+            if (l.vector != null && mode == ColorMode.MONOCHROME && (dither || threshold.coerceIn(1, 255) != 128)) {
+                converted(src, mode, 128, false, sub)
+            } else {
+                converted(src, mode, threshold, dither, sub)
+            }
         }
         return CanvasResult(snap.width, snap.height, snap.dpi, mode, layers, CanvasGeometry.IDENTITY)
+    }
+
+    /** [src] converted to [mode] into a new bitmap. */
+    private fun converted(src: Bitmap, mode: ColorMode, threshold: Int, dither: Boolean, sub: (Float) -> Unit): Bitmap {
+        val out = BitmapUtils.createLayerBitmap(src.width, src.height)
+        try {
+            convertInto(src, out, mode, threshold, dither, sub)
+        } catch (t: Throwable) { out.recycle(); throw t }
+        return out
     }
 
     // ------------------------------------------------------------------ commit (main thread)
 
     /**
      * Applies [result] (computed from [snap]) to the controller's document as ONE undo step:
-     * a [DocumentBitmapsAction] (wrapped so the ruler/grid follow the artwork, the selection comes
+     * a [StoresAction] (v1.10 A11; wrapped so the ruler/grid follow the artwork, the selection comes
      * back on undo and the active tool is reset around the swap), or a small metadata action when
      * no bitmaps changed. [savedAfter]: the saved selections after the operation (v1.7, item 14;
      * mapped in the background by [run]); an entry whose `packed` changed is given a fresh
@@ -468,17 +661,26 @@ object CanvasOps {
             val entries = result.layers.mapIndexed { i, r ->
                 val s = snap.layers[i]
                 require(s.layer === r.layer)
-                if (s.bitmap !== r.bitmap) { bytesBefore += s.bitmap.byteCount; bytesAfter += r.bitmap.byteCount }
-                if (s.mask !== r.mask) { bytesBefore += s.mask?.byteCount ?: 0; bytesAfter += r.mask?.byteCount ?: 0 }
+                // v1.10 (A11): stores move by reference. "Before" is what the layer holds now (a
+                // snapshot's own store is the layer's store, perhaps rehoused since); "after" is
+                // the result, or that same store when the pixels stay.
+                val content = r.pixels !== s.pixels
+                val masked = r.maskPixels !== s.maskPixels
+                val before = r.layer.pixels
+                val beforeMask = r.layer.maskPixels
+                val after = if (content) r.pixels else before
+                val afterMask = if (masked) r.maskPixels else beforeMask
+                if (content) { bytesBefore += bytesOf(before); bytesAfter += bytesOf(after) }
+                if (masked) { bytesBefore += bytesOf(beforeMask); bytesAfter += bytesOf(afterMask) }
                 val dataBefore = r.layer.dataSnapshot()
                 val dataAfter = when {
                     r.data != null && dataBefore == s.data -> r.data
-                    s.bitmap !== r.bitmap || s.mask !== r.mask -> LayerDataTransforms.transformed(dataBefore, matrix, result.width, result.height)
+                    content || masked -> LayerDataTransforms.transformed(dataBefore, matrix, result.width, result.height)
                     else -> dataBefore
                 }
-                DocumentBitmapsAction.Entry(r.layer, s.bitmap, s.mask, r.bitmap, r.mask, dataBefore, dataAfter)
+                StoresAction.Entry(r.layer, before, beforeMask, after, afterMask, dataBefore, dataAfter)
             }
-            val inner = DocumentBitmapsAction(
+            val inner = StoresAction(
                 label, entries,
                 snap.width to snap.height, result.width to result.height,
                 snap.dpi, result.dpi, snap.colorMode, result.colorMode,
@@ -504,6 +706,8 @@ object CanvasOps {
      */
     fun run(c: EditorController, label: String, compute: (CanvasSnapshot, (Float) -> Unit) -> CanvasResult): Boolean {
         if (c.busyMessage != null) return false
+        // v1.10 (A11): a closing editor never starts the work that would let go of the lease.
+        if (!c.scope.isActive) return false
         c.filterSession?.cancel()
         // Object bar actions waiting for a vector render land first too (v1.5 QA), while the tool is
         // still active: made later, under the busy overlay, they changed the drawing and the
@@ -515,7 +719,9 @@ object CanvasOps {
         // So does a saved selection still compressing (v1.7): it is mapped with the others (made
         // after the operation, its mask would not follow the artwork).
         c.landSavedSelections()
-        val snap = CanvasSnapshot.of(c.doc)
+        // v1.10 (A11): the stores, leased (snapshot()s and pins) until the work committed or gave up.
+        val lease = CanvasSnapshot.take(c.doc)
+        val snap = lease.snapshot
         val stop = AtomicBoolean(false)
         c.runBusy(label, onCancel = { stop.set(true) }) {
             var committed = false
@@ -562,8 +768,10 @@ object CanvasOps {
             } catch (e: CanvasOpException) {
                 c.toast(e.message ?: label)
             } catch (e: OutOfMemoryError) {
-                c.toast("Not enough memory for \"$label\". Try a smaller size or fewer layers.")
+                // v1.10 (A11): above Classic the layers are made one at a time; what did not fit is the canvas with this many layers.
+                c.toast(if (EngineConfig.level != EngineLevel.CLASSIC) EngineLabels110.CANVAS_OP_TOO_BIG else "Not enough memory for \"$label\". Try a smaller size or fewer layers.")
             } finally {
+                lease.release()
                 // Skipped when the editor is closing (scope cancelled): the controller is being disposed.
                 if (!committed && coroutineContext.isActive) c.currentTool.onActivate()
             }
@@ -595,7 +803,8 @@ object CanvasOps {
             return if (dpi != doc.dpi) applyDpi(c, dpi) else false
         }
         if (!(dpi >= MIN_DPI && dpi <= MAX_DPI)) { c.toast("Resolution must be between 1 and 10000 dpi."); return false }
-        validateSize(width, height, CanvasSnapshot.of(doc).bitmapCount)?.let { c.toast(it); return false }
+        // v1.10 (F0 C15, A11): the budget decides (A7: on R).
+        LayerBudget.current.canTransformCanvas(doc, width, height)?.let { c.toast(it); return false }
         return run(c, "Resize image") { s, p -> resizeImage(s, width, height, resample, dpi, p) }
     }
 
@@ -603,7 +812,7 @@ object CanvasOps {
     fun applyResizeCanvas(c: EditorController, width: Int, height: Int, anchorX: Int, anchorY: Int, fillBottom: Int?): Boolean {
         val doc = c.doc
         if (width == doc.width && height == doc.height) return false
-        validateSize(width, height, CanvasSnapshot.of(doc).bitmapCount)?.let { c.toast(it); return false }
+        LayerBudget.current.canTransformCanvas(doc, width, height)?.let { c.toast(it); return false }
         val ox = CanvasGeometry.anchorOffset(doc.width, width, anchorX)
         val oy = CanvasGeometry.anchorOffset(doc.height, height, anchorY)
         return run(c, "Canvas size") { s, p -> resizeCanvas(s, width, height, ox, oy, fillBottom, p) }
@@ -660,53 +869,147 @@ object CanvasOps {
 
     /**
      * Builds new bitmaps for every layer (and its mask when [transformMasks]) with
-     * `op(source, isMask, subProgress)`; on failure frees what was already created and rethrows.
-     * [data] maps a layer's editable data along (v1.5; null = at commit); [content] may draw a
-     * layer's new pixels itself (a vector layer re-rendered from its mapped objects, given the
-     * mapped data) instead of `op` (null = use `op`).
+     * `op(layer, source, isMask, subProgress)`; on failure frees what was already created and
+     * rethrows. [data] maps a layer's editable data along (v1.5; null = at commit); [content] may
+     * draw a layer's new pixels itself (a vector layer re-rendered from its mapped objects, given
+     * the mapped data) instead of `op` (null = use `op`; a null `op` keeps the layer's pixels).
+     *
+     * v1.10 (A11, design 2.5 "Canvas ops"): one layer at a time, [outW] x [outH] each. A layer's
+     * source is its FLAT bitmap, or a temporary bitmap of its tiled (or blank) store made on this
+     * thread under the snapshot's lease and recycled after `op`; a blank store stays blank where
+     * [keepsBlank] says the operation turns transparent into transparent. Each result is admitted
+     * (TRANSIENT) before it is made and, when the snapshot [CanvasSnapshot.parks], cut into tiles
+     * at once ([settle]), so only one layer is ever FLAT here; a refusal is [CanvasOpException]
+     * with `EngineLabels110.CANVAS_OP_TOO_BIG`.
      */
     private fun mapLayers(
         snap: CanvasSnapshot,
         progress: (Float) -> Unit,
+        outW: Int,
+        outH: Int,
         transformMasks: Boolean = true,
         data: ((CanvasSnapshot.LayerSnapshot) -> LayerData)? = null,
         content: ((CanvasSnapshot.LayerSnapshot, LayerData?, (Float) -> Unit) -> Bitmap?)? = null,
         /** A layer's new mask drawn from its mapped data instead of `op` (null = use `op`). */
         maskOf: ((CanvasSnapshot.LayerSnapshot, LayerData?, (Float) -> Unit) -> Bitmap?)? = null,
-        op: (Bitmap, Boolean, (Float) -> Unit) -> Bitmap,
+        /** v1.10 (A11): a blank content store of this layer gives a blank result (null = never). */
+        keepsBlank: ((CanvasSnapshot.LayerSnapshot) -> Boolean)? = null,
+        op: ((CanvasSnapshot.LayerSnapshot, Bitmap, Boolean, (Float) -> Unit) -> Bitmap)?,
     ): List<CanvasResult.LayerResult> {
         val out = ArrayList<CanvasResult.LayerResult>(snap.layers.size)
-        val total = (snap.layers.size + (if (transformMasks) snap.layers.count { it.mask != null } else 0)).toFloat()
+        val total = (snap.layers.size + (if (transformMasks) snap.layers.count { it.hasMask } else 0)).toFloat()
         var done = 0
         fun subProgress(): (Float) -> Unit {
             val base = done
             return { f -> progress((base + f.coerceIn(0f, 1f)) / total) }
         }
-        var pendingBitmap: Bitmap? = null
+        var pending: PixelStore? = null
         try {
             progress(0f)
             for (l in snap.layers) {
                 val d = data?.invoke(l)
                 val sub = subProgress()
-                val bmp = content?.invoke(l, d, sub) ?: op(l.bitmap, false, sub)
-                // (A layer whose pixels stay keeps the snapshot's own bitmap: never freed here.)
-                pendingBitmap = bmp.takeIf { !l.owns(it) }
+                val keep = keepsBlank?.invoke(l) == true
+                val px = mapStore(snap, l, l.pixels, outW, outH, keep, { content?.invoke(l, d, sub) }, op?.let { o -> { src -> o(l, src, false, sub) } })
+                // (A layer whose pixels stay keeps the snapshot's own store: never freed here.)
+                pending = px.takeIf { it !== l.pixels }
                 progress(++done / total)
-                val mask = if (transformMasks && l.mask != null) {
+                val m = l.maskPixels
+                val mask = if (transformMasks && m != null) {
                     val msub = subProgress()
-                    (maskOf?.invoke(l, d, msub) ?: op(l.mask, true, msub)).also { progress(++done / total) }
+                    mapStore(snap, l, m, outW, outH, false, { maskOf?.invoke(l, d, msub) }, op?.let { o -> { src -> o(l, src, true, msub) } })
+                        .also { progress(++done / total) }
                 } else {
-                    l.mask
+                    m
                 }
-                out += CanvasResult.LayerResult(l.layer, bmp, mask, d)
-                pendingBitmap = null
+                out += CanvasResult.LayerResult(l.layer, px, mask, d)
+                pending = null
             }
         } catch (t: Throwable) {
-            pendingBitmap?.recycle()
+            pending?.let { CanvasResult.disposeCreated(snap, it) }
             CanvasResult.recycleCreated(out, snap)
             throw t
         }
         return out
+    }
+
+    /**
+     * v1.10 (A11): one store of [l] ([store], its content or its mask) mapped to [w] x [h]: what
+     * [drawn] draws, else `op` on its source, else (no `op`) the store itself.
+     */
+    private fun mapStore(
+        snap: CanvasSnapshot,
+        l: CanvasSnapshot.LayerSnapshot,
+        store: PixelStore,
+        w: Int,
+        h: Int,
+        keepsBlank: Boolean,
+        drawn: () -> Bitmap?,
+        op: ((Bitmap) -> Bitmap)?,
+    ): PixelStore {
+        val bytes = w.toLong() * h * 4
+        val admit = EngineConfig.level != EngineLevel.CLASSIC
+        val budget = EngineConfig.budget
+        if (admit && !budget.admitNative(bytes, NativePurpose.TRANSIENT)) throw CanvasOpException(EngineLabels110.CANVAS_OP_TOO_BIG)
+        try {
+            drawn()?.let { return settle(snap, l, it) }
+            if (op == null) return store
+            if (keepsBlank && store is BlankPixels) return BlankPixels(w, h)
+            flatBitmapOf(store)?.let { src ->
+                val b = op(src)
+                return if (b === src) store else settle(snap, l, b)
+            }
+            val src = temporaryOf(store)
+            try {
+                val b = op(src)
+                return if (b === src) store else settle(snap, l, b)
+            } finally {
+                src.recycle()
+            }
+        } finally {
+            if (admit) budget.release(bytes, NativePurpose.TRANSIENT)
+        }
+    }
+
+    /** v1.10 (A11): a bitmap of a tiled or blank [store], made on this thread (under the snapshot's lease); the caller recycles it. */
+    private fun temporaryOf(store: PixelStore): Bitmap = when (store) {
+        is TiledPixels -> {
+            if (store.evictedTo != null) throw CanvasOpException(EngineLabels110.CANVAS_OP_TOO_BIG)
+            TileOps.materialize(store)
+        }
+        else -> {
+            val bytes = store.width.toLong() * store.height * 4
+            val budget = EngineConfig.budget
+            if (!budget.admitNative(bytes, NativePurpose.LAYER)) throw OutOfMemoryError("No room for a ${store.width}x${store.height} layer")
+            budget.release(bytes, NativePurpose.LAYER)
+            BitmapUtils.createLayerBitmap(store.width, store.height)
+        }
+    }
+
+    /**
+     * v1.10 (A11): where a new bitmap [b] of [l] goes. FLAT when the snapshot does not park
+     * (Classic, or a snapshot of [CanvasSnapshot.of]) or [l] is the active layer; else cut into
+     * tiles here and recycled ("park the result", as a load builds a parked layer's tiles off main:
+     * fresh tiles no other thread sees, each counted under TILES), blank when no tile is left.
+     */
+    private fun settle(snap: CanvasSnapshot, l: CanvasSnapshot.LayerSnapshot, b: Bitmap): PixelStore {
+        if (!snap.parks || l.layer === snap.active) return FlatPixels(b)
+        try {
+            val w = b.width
+            val h = b.height
+            val bytes = w.toLong() * h * 4
+            val budget = EngineConfig.budget
+            if (!budget.admitNative(bytes, NativePurpose.TILE)) throw CanvasOpException(EngineLabels110.CANVAS_OP_TOO_BIG)
+            try {
+                val tiles = TileOps.cut(b, detectBlank = true)
+                return if (tiles.tiles.all { it == null }) BlankPixels(w, h) else tiles
+            } finally {
+                // Tile.of counted the tiles under TILES; the reservation made room for them until then.
+                budget.release(bytes, NativePurpose.TILE)
+            }
+        } finally {
+            b.recycle()
+        }
     }
 
     private fun newBitmap(w: Int, h: Int, fill: Int): Bitmap =
@@ -916,7 +1219,80 @@ object CanvasOps {
     // ------------------------------------------------------------------ undo actions
 
     /**
-     * Wraps the [DocumentBitmapsAction]:
+     * v1.10 (A11): [DocumentBitmapsAction]'s effects with stores held by reference (no pixel is read,
+     * copied or materialized). Each apply first takes what the layer holds now as the side it leaves
+     * (a store park or unpark rehoused meanwhile is the same pixels), then puts the other side in.
+     * [dispose] releases the tiled stores only this step holds (FLAT bitmaps are left to the
+     * collector, as v1.9's step did).
+     */
+    private class StoresAction(
+        override val label: String,
+        private val entries: List<Entry>,
+        private val sizeBefore: Pair<Int, Int>,
+        private val sizeAfter: Pair<Int, Int>,
+        private val dpiBefore: Float,
+        private val dpiAfter: Float,
+        private val modeBefore: ColorMode,
+        private val modeAfter: ColorMode,
+    ) : UndoAction {
+        class Entry(
+            val layer: Layer,
+            var before: PixelStore,
+            var beforeMask: PixelStore?,
+            var after: PixelStore,
+            var afterMask: PixelStore?,
+            val dataBefore: LayerData,
+            val dataAfter: LayerData,
+        )
+
+        /** True while the document shows the "after" side. */
+        private var applied = false
+
+        /** [CanvasChangeAction] counts the bytes. */
+        override val byteSize: Long get() = 0L
+
+        private fun apply(c: EditorController, before: Boolean) {
+            val size = if (before) sizeBefore else sizeAfter
+            c.doc.setSize(size.first, size.second)
+            c.doc.dpi = if (before) dpiBefore else dpiAfter
+            c.doc.colorMode = if (before) modeBefore else modeAfter
+            for (e in entries) {
+                if (before) {
+                    e.after = e.layer.pixels
+                    e.afterMask = e.layer.maskPixels
+                    e.layer.pixels = e.before
+                    e.layer.maskPixels = e.beforeMask
+                } else {
+                    e.before = e.layer.pixels
+                    e.beforeMask = e.layer.maskPixels
+                    e.layer.pixels = e.after
+                    e.layer.maskPixels = e.afterMask
+                }
+                e.layer.restoreData(if (before) e.dataBefore else e.dataAfter)
+                e.layer.markChanged()
+            }
+            applied = !before
+            c.onDocumentGeometryChanged()
+        }
+
+        override fun undo(c: EditorController) = apply(c, true)
+        override fun redo(c: EditorController) = apply(c, false)
+
+        override fun dispose() {
+            for (e in entries) {
+                val content = if (applied) e.before else e.after
+                val mask = if (applied) e.beforeMask else e.afterMask
+                if (content is TiledPixels && content !== e.layer.pixels) TileOps.releaseStore(content)
+                if (mask is TiledPixels && mask !== e.layer.maskPixels) TileOps.releaseStore(mask)
+            }
+        }
+    }
+
+    /** v1.10 (A11, design 2.6): the logical bytes of [p] (a FLAT bitmap as v1.9's `byteCount`; a tiled store's occupied tiles, resident or not). */
+    private fun bytesOf(p: PixelStore?): Long = p?.logicalBytes() ?: 0L
+
+    /**
+     * Wraps the [StoresAction] (v1.9: the [DocumentBitmapsAction]):
      *  - the active tool is deactivated before and reactivated after the swap, so it never keeps
      *    buffers or bitmap references of the old geometry (undo/redo guarantee no pending work);
      *  - the ruler and grid move with the artwork ([geometry] / its inverse); the exact settings
@@ -928,7 +1304,7 @@ object CanvasOps {
      * undone (shared masks are not counted).
      */
     private class CanvasChangeAction(
-        private val inner: DocumentBitmapsAction,
+        private val inner: StoresAction,
         private val geometry: CanvasGeometry,
         private val oldWidth: Int,
         private val oldHeight: Int,

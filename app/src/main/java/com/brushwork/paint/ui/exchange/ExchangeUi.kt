@@ -141,6 +141,8 @@ class ExchangeUiState(
     internal fun saveAs() {
         val options = exportOptions
         closeExportSheet()
+        // v1.10 (D47): a refused export (the share format's 1000 layers) never opens the picker.
+        ExportJob(controller, options).refusal()?.let { controller.toast(it); return }
         val create = createPicker ?: run { controller.toast("No app available to save files"); return }
         try {
             create(options.format, ExportJob(controller, options).fileName)

@@ -25,6 +25,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.brushwork.paint.fonts.FontOpenIntent
+import com.brushwork.paint.ui.common.EngineLabels110
 import com.brushwork.paint.ui.editor.EditorScreen
 import com.brushwork.paint.ui.gallery.GalleryScreen
 import com.brushwork.paint.ui.theme.BrushworkTheme
@@ -65,14 +66,12 @@ private fun AppRoot(app: BrushworkApp) {
             BackHandler { exit() }
             when (val st = session.state) {
                 is EditorSession.State.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
-                is EditorSession.State.Failed -> Column(
-                    Modifier.fillMaxSize().padding(24.dp),
-                    verticalArrangement = Arrangement.Center,
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    Text(st.message, color = MaterialTheme.colorScheme.onBackground)
-                    Button(onClick = { app.closeEditor { openId = null } }, modifier = Modifier.padding(top = 16.dp)) { Text("Back to gallery") }
-                }
+                is EditorSession.State.Failed -> OpenFailedScreen(
+                    message = st.message,
+                    offersFullStorage = session.offersFullStorage,
+                    onOpenWithFullStorage = { session.openWithFullStorage() },
+                    onBack = { app.closeEditor { openId = null } },
+                )
                 is EditorSession.State.Ready -> EditorScreen(
                     controller = st.controller,
                     onExit = exit,
@@ -80,5 +79,31 @@ private fun AppRoot(app: BrushworkApp) {
                 )
             }
         }
+    }
+}
+
+/**
+ * The artwork could not open: why ([message]) and the button back to the gallery. v1.10 (J16,
+ * UQ16, design 2.9): while the session [offersFullStorage] (Classic refused a big artwork for a
+ * reason other than memory), the [EngineLabels110.OPEN_WITH_FULL] button above it opens this
+ * artwork at Full (`EditorSession.openWithFullStorage`).
+ */
+@Composable
+internal fun OpenFailedScreen(
+    message: String,
+    offersFullStorage: Boolean,
+    onOpenWithFullStorage: () -> Unit,
+    onBack: () -> Unit,
+) {
+    Column(
+        Modifier.fillMaxSize().padding(24.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(message, color = MaterialTheme.colorScheme.onBackground)
+        if (offersFullStorage) {
+            Button(onClick = onOpenWithFullStorage, modifier = Modifier.padding(top = 16.dp)) { Text(EngineLabels110.OPEN_WITH_FULL) }
+        }
+        Button(onClick = onBack, modifier = Modifier.padding(top = 16.dp)) { Text("Back to gallery") }
     }
 }

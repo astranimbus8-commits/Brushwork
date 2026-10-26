@@ -1,5 +1,6 @@
 package com.brushwork.paint.engine
 
+import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
@@ -19,6 +20,10 @@ import com.brushwork.paint.model.LayerBlendMode
 import com.brushwork.paint.model.LayerData
 import com.brushwork.paint.model.LayerProps
 import com.brushwork.paint.model.LayerTree
+import com.brushwork.paint.engine.tiles.FlatPixels
+import com.brushwork.paint.engine.tiles.PixelStore
+import com.brushwork.paint.engine.tiles.TileOps
+import com.brushwork.paint.engine.tiles.TiledPixels
 import com.brushwork.paint.tools.text.TextCodec
 import com.brushwork.paint.tools.text.TextItem
 import com.brushwork.paint.tools.text.TextRenderer
@@ -102,30 +107,41 @@ internal class LayerMerge(private val c: EditorController) {
         // the same base further down, the upper one is simply drawn over the lower one here (the
         // merged layer keeps the lower layer's clipping). The views carry the adjustment and mask
         // specs: merging an adjustment layer down applies its effect to the layer below.
+        // v1.10 (A11, design 2.5): the views share the two layers' stores (a parked store draws
+        // from its tiles, so nothing is materialized), pinned while the merge renders.
         val tmpDoc = Document("merge", "merge", doc.width, doc.height)
-        val lowerView = Layer(-1, lower.name, lower.bitmap).also {
+        val lowerView = Layer(-1, lower.name, lower.pixels).also {
             it.copyPropsFrom(lower.props().copy(blendMode = LayerBlendMode.NORMAL, visible = true, clipping = false))
-            it.mask = lower.mask
+            it.maskPixels = lower.maskPixels
             it.maskSpec = lower.maskSpec
             it.adjustment = lower.adjustment
         }
-        val upperView = Layer(-2, layer.name, layer.bitmap).also {
+        val upperView = Layer(-2, layer.name, layer.pixels).also {
             it.copyPropsFrom(layer.props().copy(visible = true, clipping = layer.clipping && !lower.clipping))
-            it.mask = layer.mask
+            it.maskPixels = layer.maskPixels
             it.maskSpec = layer.maskSpec
             it.adjustment = layer.adjustment
         }
         tmpDoc.layers += lowerView
         tmpDoc.layers += upperView
-        val merged = Compositor(tmpDoc) { null }.renderFlattened()
-        val beforeBmp = lower.bitmap; val beforeMask = lower.mask; val beforeProps = lower.props()
-        val dataBefore = lower.dataSnapshot()
-        // The merged pixels are plain pixels: no editable data, no mask.
-        val dataAfter = LayerData.NONE
-        val afterProps = beforeProps.copy(opacity = 1f, maskEnabled = true)
-        val replace = LambdaAction("Merge down", byteSize = beforeBmp.byteCount.toLong() + (beforeMask?.byteCount ?: 0),
-            onUndo = { c -> c.structural { lower.bitmap = beforeBmp; lower.mask = beforeMask; lower.restoreData(dataBefore); lower.copyPropsFrom(beforeProps); lower.markChanged() } },
-            onRedo = { c -> c.structural { lower.bitmap = merged; lower.mask = null; lower.restoreData(dataAfter); lower.editingMask = false; lower.copyPropsFrom(afterProps); lower.markChanged() } },
+        val pins = listOf(layer.pin(), lower.pin())
+        // An adjustment view draws through a mask of its own: the compositor's `Layer.mask` read
+        // would otherwise materialize the shared tiled mask and release the real layer's tiles.
+        val privateMasks = ArrayList<Bitmap>(2)
+        val merged = try {
+            privateAdjustmentMask(lowerView)?.let { privateMasks += it }
+            privateAdjustmentMask(upperView)?.let { privateMasks += it }
+            Compositor(tmpDoc) { null }.renderFlattened()
+        } finally {
+            privateMasks.forEach { it.recycle() }
+            pins.forEach { it.close() }
+        }
+        val beforeProps = lower.props()
+        // The merged pixels are plain pixels: no editable data, no mask. The lower layer's own
+        // stores move into the undo step by reference (no copy).
+        val replace = MergedStoresAction(
+            lower, lower.pixels, lower.maskPixels, FlatPixels(merged),
+            lower.dataSnapshot(), LayerData.NONE, beforeProps, beforeProps.copy(opacity = 1f, maskEnabled = true),
         )
         val remove = RemoveLayerAction(layer, idx, "Merge down")
         replace.redo(c)
@@ -534,5 +550,57 @@ internal class LayerMerge(private val c: EditorController) {
 
         /** [textWhyOf] of a text layer whose data does not decode: pixels, with no reason to show. */
         const val UNREADABLE = ""
+    }
+}
+
+/**
+ * v1.10 (A11, design 2.5 and 2.11): the lower layer's half of a raster "Merge down": its own
+ * content and mask stores (held by reference, never copied or materialized) against the merged
+ * FLAT store. Each side is taken from the layer when the other is put in, so a store the
+ * residency policy parked or unparked meanwhile is the one kept. [dispose] lets go of the tiles
+ * of the side the layer does not hold (a FLAT side is left to the collector, as in v1.9).
+ */
+private class MergedStoresAction(
+    private val lower: Layer,
+    private var before: PixelStore,
+    private var beforeMask: PixelStore?,
+    private var after: PixelStore,
+    private val dataBefore: LayerData,
+    private val dataAfter: LayerData,
+    private val propsBefore: LayerProps,
+    private val propsAfter: LayerProps,
+) : UndoAction {
+    override val label: String get() = "Merge down"
+
+    override val byteSize: Long = before.logicalBytes() + (beforeMask?.logicalBytes() ?: 0L) // design 2.6
+
+    /** True while the layer shows the merged side. */
+    private var applied = false
+
+    override fun undo(c: EditorController) = c.structural {
+        after = lower.pixels
+        lower.pixels = before
+        lower.maskPixels = beforeMask
+        lower.restoreData(dataBefore)
+        lower.copyPropsFrom(propsBefore)
+        lower.markChanged()
+        applied = false
+    }
+
+    override fun redo(c: EditorController) = c.structural {
+        before = lower.pixels
+        beforeMask = lower.maskPixels
+        lower.pixels = after
+        lower.maskPixels = null
+        lower.restoreData(dataAfter)
+        lower.editingMask = false
+        lower.copyPropsFrom(propsAfter)
+        lower.markChanged()
+        applied = true
+    }
+
+    override fun dispose() {
+        val held = if (applied) listOf(before, beforeMask) else listOf(after)
+        for (p in held) if (p is TiledPixels && p !== lower.pixels && p !== lower.maskPixels) TileOps.releaseStore(p)
     }
 }

@@ -37,6 +37,13 @@ class ExportJob(private val c: EditorController, private val options: ExportOpti
     /** The file name for the artwork ("My drawing.svg"). */
     val fileName: String get() = ImageExport.safeFileName(c.doc.name) + "." + options.format.extension
 
+    /**
+     * v1.10 (D47, design 2.13): why this export may not start, null when it may. With Brushwork
+     * data, an artwork above the share format's 1000 layers is refused before any work
+     * ([Payload.refusal]; the payload's own write refuses too, as a last line).
+     */
+    fun refusal(): String? = if (options.includePayload) Payload.refusal(c.doc.layers.size) else null
+
     /** Builds the scene (call on the main thread) and writes it to [out] on IO. */
     suspend fun write(out: OutputStream, progress: (Float) -> Unit = {}): ExportScene {
         val scene = ExportSceneBuilder(c, options).build()
@@ -52,8 +59,15 @@ class ExportJob(private val c: EditorController, private val options: ExportOpti
         out.flush()
     }
 
-    /** Exports into the document [uri] (from `CreateDocument`); deleted again when stopped or failed. */
+    /** Exports into the document [uri] (from `CreateDocument`); deleted again when stopped, failed or refused. */
     fun saveTo(context: Context, uri: Uri) {
+        refusal()?.let { text ->
+            // The picker has already made the file: it goes again, and no work starts.
+            c.toast(text)
+            val resolver = context.contentResolver
+            c.scope.launch(Dispatchers.IO) { runCatching { DocumentsContract.deleteDocument(resolver, uri) } }
+            return
+        }
         if (!ready()) return
         val holder = arrayOfNulls<Job>(1)
         c.runBusy("Exporting ${options.format.name}", onCancel = { holder[0]?.cancel() }) {
@@ -143,11 +157,15 @@ class ExportJob(private val c: EditorController, private val options: ExportOpti
     private fun withNotes(text: String, scene: ExportScene): String =
         if (scene.notes.isEmpty()) text else text + " · " + scene.notes.joinToString(" · ")
 
-    /** False (with a message) while another operation runs or a filter is previewed; ends a canvas gesture. */
+    /** False (with a message) while another operation runs, a filter is previewed or the export is refused ([refusal]); ends a canvas gesture. */
     private fun ready(): Boolean {
         if (c.busyMessage != null) return false
         if (c.filterSession != null) {
             c.toast("Apply or cancel the filter first")
+            return false
+        }
+        refusal()?.let {
+            c.toast(it)
             return false
         }
         c.endCanvasGesture()

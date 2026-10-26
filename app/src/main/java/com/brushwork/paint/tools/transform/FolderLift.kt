@@ -10,12 +10,17 @@ import android.graphics.Rect
 import android.graphics.RectF
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.core.Vec2
+import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.EditTarget
 import com.brushwork.paint.engine.LayerRenderOverride
 import com.brushwork.paint.engine.MultiLayerRenderOverride
+import com.brushwork.paint.engine.flatBitmapOf
+import com.brushwork.paint.engine.tiles.TileOps
+import com.brushwork.paint.engine.tiles.TiledPixels
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.LayerData
 import com.brushwork.paint.model.LayerTree
+import com.brushwork.paint.ui.common.EngineLabels110
 import com.brushwork.paint.vector.LayerDataTransforms
 import com.brushwork.paint.vector.lift.LiftGeometry
 import kotlin.math.ceil
@@ -83,8 +88,10 @@ internal class FolderLift(
 
         override fun drawContentFor(target: Layer, canvas: Canvas): Boolean {
             val child = children.firstOrNull { it.layer === target } ?: return false
-            if (target.bitmap.isRecycled || child.crop.isRecycled) return false
-            canvas.drawBitmap(target.bitmap, 0f, 0f, null)
+            // v1.10 (A11, design 2.5): a parked child draws from its tiles (never materialized).
+            val flat = flatBitmapOf(target.pixels)
+            if (flat?.isRecycled == true || child.crop.isRecycled) return false
+            if (flat != null) canvas.drawBitmap(flat, 0f, 0f, null) else c.compositor.drawLayerPixels(canvas, target, null)
             canvas.drawRect(child.rect, clear)
             m.set(matrix)
             m.preTranslate((child.rect.left - sourceRect.left).toFloat(), (child.rect.top - sourceRect.top).toFloat())
@@ -108,6 +115,8 @@ internal class FolderLift(
             val l = child.layer
             if (!c.checkUsable(l, allowHidden = true)) return false
             if (l.alphaLocked) { c.toast(alphaLockedMessage(l)); return false }
+            // v1.10 (A11, design 2.3): each child is written, so each admits the write first.
+            if (!l.admitWrite()) { c.toast(EngineLabels110.PAINT_REFUSED); return false }
         }
         // Planned before anything changes: an arrayed child that can't take [m] refuses it all.
         val arrays = HashMap<Layer, LayerData>()
@@ -258,9 +267,10 @@ internal class FolderLiftProvider(
                     l.isVectorLayer -> ChildRule.VECTOR
                     else -> ChildRule.PIXELS
                 }
-                val rect = (if (rule == ChildRule.PIXELS) ContentBounds.of(l.bitmap) else DataRender.contentRect(l)) ?: continue
+                // v1.10 (A11, design 2.5): bounds and crop read from the store, one child at a time.
+                val rect = ChildPixels.bounds(l, rule) ?: continue
                 if (!rect.intersect(doc)) continue
-                children += FolderChild(l, rule, kind, rect, DataRender.crop(l.bitmap, rect))
+                children += FolderChild(l, rule, kind, rect, ChildPixels.crop(l, rect))
             }
         } catch (e: OutOfMemoryError) {
             for (ch in children) ch.crop.recycle()
@@ -285,7 +295,7 @@ internal class FolderLiftProvider(
         var out: RectF? = null
         for (l in members(layer)) {
             val b = DataRender.paintBounds(l.dataSnapshot())?.takeIf { !it.isEmpty }
-                ?: (c.snapping.bounds(l) ?: if (l.bitmap.width.toLong() * l.bitmap.height <= SMALL) ContentBounds.of(l.bitmap) else null)?.let { RectF(it) }
+                ?: (c.snapping.bounds(l) ?: if (l.pixels.width.toLong() * l.pixels.height <= SMALL) ChildPixels.bounds(l, ChildRule.PIXELS) else null)?.let { RectF(it) }
                 ?: continue
             out = out?.apply { union(b) } ?: RectF(b)
         }
@@ -295,5 +305,37 @@ internal class FolderLiftProvider(
     private companion object {
         /** Layers up to this many pixels are scanned on the main thread for [liftBox]. */
         const val SMALL = 2_000_000L
+    }
+}
+
+/**
+ * v1.10 (A11, design 2.5): a lifted child's pixels read from its store, one child at a time. A
+ * parked store is read from its tiles (only its occupied area, into a band let go of at once),
+ * never materialized; a blank store has none. A FLAT store reads as in v1.9.
+ */
+private object ChildPixels {
+    /** Where [layer]'s content is (a data or vector child: within its data's paint bounds), as [DataRender.contentRect]. */
+    fun bounds(layer: Layer, rule: ChildRule): Rect? {
+        val region = if (rule == ChildRule.PIXELS) null
+        else DataRender.paintBounds(layer.dataSnapshot())?.takeIf { !it.isEmpty }?.let { DataRender.roundOut(it).apply { inset(-2, -2) } }
+        val p = layer.pixels
+        if (p !is TiledPixels) return flatBitmapOf(p)?.let { ContentBounds.of(it, null, region) }
+        val area = Rect()
+        if (!TileOps.occupiedBounds(p, area)) return null
+        if (region != null && !area.intersect(region)) return null
+        val band = BitmapUtils.createLayerBitmap(area.width(), area.height())
+        try {
+            TileOps.readRegion(p, area, band)
+            return ContentBounds.of(band)?.apply { offset(area.left, area.top) }
+        } finally {
+            band.recycle()
+        }
+    }
+
+    /** A copy of [rect] of [layer]'s content (a new bitmap of its size), as [DataRender.crop]. */
+    fun crop(layer: Layer, rect: Rect): Bitmap {
+        val p = layer.pixels
+        flatBitmapOf(p)?.let { return DataRender.crop(it, rect) }
+        return BitmapUtils.createLayerBitmap(rect.width(), rect.height()).also { TileOps.readRegion(p, rect, it) }
     }
 }

@@ -643,13 +643,61 @@ class ExportSceneBuilder(
     // ------------------------------------------------------------------ pictures
 
     // region v110-A11 layerExport
-    /** [layer]'s pixels cropped to their content (null when empty). */
+    /** [layer]'s pixels cropped to their content (null when empty). v1.10 (A11): read from its store. */
     private fun layerImage(layer: Layer, prefix: String = "img"): SceneImage? {
         val r = contentBounds(layer) ?: return null
-        return pixelImage(key(prefix), layer.bitmap, r, gray = false)
+        return storeImage(key(prefix), layer, r)
     }
 
-    private fun contentBounds(layer: Layer): Rect? = ContentBounds.of(layer.bitmap)
+    /**
+     * v1.10 (A11, design 2.5): where [layer]'s pixels are, from its store and never materialized:
+     * a FLAT store scanned as in v1.9, a parked one only within its occupied tiles (read into a
+     * band let go of at once), a blank one has none.
+     */
+    private fun contentBounds(layer: Layer): Rect? {
+        val p = layer.pixels
+        com.brushwork.paint.engine.flatBitmapOf(p)?.let { return ContentBounds.of(it) }
+        if (p !is com.brushwork.paint.engine.tiles.TiledPixels) return null
+        val area = Rect()
+        if (!com.brushwork.paint.engine.tiles.TileOps.occupiedBounds(p, area)) return null
+        val band = BitmapUtils.createLayerBitmap(area.width(), area.height())
+        try {
+            com.brushwork.paint.engine.tiles.TileOps.readRegion(p, area, band)
+            return ContentBounds.of(band)?.apply { offset(area.left, area.top) }
+        } finally {
+            band.recycle()
+        }
+    }
+
+    /**
+     * v1.10 (A11, design 2.5): a picture of [layer]'s content (its mask with [mask]) within [r],
+     * read from the store the layer holds when a writer reaches it: one layer at a time, a
+     * parked store through a copy of [r] only.
+     */
+    private fun storeImage(key: String, layer: Layer, r: Rect, mask: Boolean = false): SceneImage {
+        val rect = Rect(r)
+        return SceneImage(key, rect.left, rect.top, rect.width(), rect.height(), mask) {
+            withContext(pixelDispatcher) {
+                val rw = rect.width()
+                val rh = rect.height()
+                val px = IntArray(rw * rh)
+                val p = if (mask) layer.maskPixels else layer.pixels
+                val flat = com.brushwork.paint.engine.flatBitmapOf(p)
+                if (flat != null) {
+                    flat.getPixels(px, 0, rw, rect.left, rect.top, rw, rh)
+                } else if (p != null) {
+                    val copy = BitmapUtils.createLayerBitmap(rw, rh)
+                    try {
+                        com.brushwork.paint.engine.tiles.TileOps.readRegion(p, rect, copy)
+                        copy.getPixels(px, 0, rw, 0, 0, rw, rh)
+                    } finally {
+                        copy.recycle()
+                    }
+                }
+                ArgbImage(rw, rh, px)
+            }
+        }
+    }
 
     /** A picture of [bitmap] within [r], copied when a writer reaches it. */
     private fun pixelImage(key: String, bitmap: Bitmap, r: Rect, gray: Boolean): SceneImage {
@@ -665,16 +713,28 @@ class ExportSceneBuilder(
 
     /** [layer]'s enabled mask (null without one): the gray around its content, and its content. */
     private fun layerMask(layer: Layer): SceneMask? {
-        val m = layer.mask ?: return null
-        if (!layer.maskEnabled) return null
-        return maskOf(m)
+        if (!layer.hasMask || !layer.maskEnabled) return null
+        return maskOf(layer)
     }
 
-    private fun maskOf(m: Bitmap): SceneMask {
-        val bg = maskBackground(m)
-        val r = ContentBounds.of(m, emptyColor = bg)
-        val gray = luma(bg)
-        return SceneMask(key("mask"), gray, r?.let { pixelImage(key("mask"), m, it, gray = true) })
+    /**
+     * v1.10 (A11, design 2.5): [layer]'s mask as v1.9 exported its bitmap, read from its store: a
+     * parked mask through a copy let go of at once (one mask at a time), a blank one transparent
+     * everywhere; its picture is read from the store when a writer reaches it.
+     */
+    private fun maskOf(layer: Layer): SceneMask {
+        val p = layer.maskPixels
+        val flat = com.brushwork.paint.engine.flatBitmapOf(p)
+        val m = flat ?: (p as? com.brushwork.paint.engine.tiles.TiledPixels)?.let { com.brushwork.paint.engine.tiles.TileOps.materialize(it) }
+            ?: return SceneMask(key("mask"), luma(0), null)
+        try {
+            val bg = maskBackground(m)
+            val r = ContentBounds.of(m, emptyColor = bg)
+            val gray = luma(bg)
+            return SceneMask(key("mask"), gray, r?.let { storeImage(key("mask"), layer, it, mask = true) })
+        } finally {
+            if (m !== flat) m.recycle()
+        }
     }
 
     /** The most common of a mask's four corner colors (its background). */
@@ -698,10 +758,12 @@ class ExportSceneBuilder(
         val h = doc.height
         val dpi = doc.dpi
         val ids = layers.mapTo(HashSet()) { it.id }
-        val views = layers.map { l ->
-            Layer(l.id, l.name, l.bitmap).also { v ->
+        // v1.10 (A11, design 2.5): the views share the stores the layers hold when a writer
+        // reaches the picture (a parked store draws from its tiles; nothing is materialized).
+        fun views() = layers.map { l ->
+            Layer(l.id, l.name, l.pixels).also { v ->
                 v.copyPropsFrom(l.props())
-                v.mask = l.mask
+                v.maskPixels = l.maskPixels
                 v.adjustment = l.adjustment
                 v.maskSpec = l.maskSpec
                 // v1.7 (I11, site 23): the tree as far as it is in the list (a folder outside
@@ -717,7 +779,11 @@ class ExportSceneBuilder(
         return SceneImage(key("img"), rect.left, rect.top, rect.width(), rect.height(), false) {
             withContext(pixelDispatcher) {
                 val tmp = Document("export", "export", w, h, dpi)
-                tmp.layers += views
+                tmp.layers += views()
+                // An adjustment view draws through a mask of its own: the compositor's
+                // `Layer.mask` read would otherwise materialize the shared tiled mask and release
+                // the real layer's tiles.
+                val privateMasks = ArrayList<Bitmap>()
                 val rw = rect.width()
                 val rh = rect.height()
                 // The pixels go straight into the picture's array, band by band: memory is the
@@ -726,6 +792,7 @@ class ExportSceneBuilder(
                 val bandH = minOf(COMPOSITE_BAND, rh)
                 val band = BitmapUtils.createLayerBitmap(rw, bandH)
                 try {
+                    for (v in tmp.layers) com.brushwork.paint.engine.privateAdjustmentMask(v)?.let { privateMasks += it }
                     val canvas = Canvas(band)
                     val compositor = Compositor(tmp) { null }
                     // In bands, letting the main thread breathe between them (big canvases).
@@ -745,6 +812,7 @@ class ExportSceneBuilder(
                     }
                     ArgbImage(rw, rh, px)
                 } finally {
+                    privateMasks.forEach { it.recycle() }
                     band.recycle()
                 }
             }
@@ -966,11 +1034,26 @@ class ExportSceneBuilder(
         }
         var maskImage: SceneImage? = null
         var maskFill = -1
-        val m = layer.mask
-        if (m != null) {
-            val bg = maskBackground(m)
-            maskFill = (0xFF shl 24) or (luma(bg) * 0x010101)
-            maskImage = ownMask[layer] ?: ContentBounds.of(m, emptyColor = bg)?.let { r -> pixelImage(key("pmask"), m, r, gray = true).also { extra += it } }
+        // v1.10 (lead, I28): the mask from its store, as `maskOf` reads it, never through
+        // `Layer.mask` (whose read would materialize a parked or blank mask for good): a FLAT mask
+        // as it is, a parked one through a copy let go of at once, a blank one transparent.
+        val hasMask = layer.hasMask
+        if (hasMask) {
+            val p = layer.maskPixels
+            val flat = com.brushwork.paint.engine.flatBitmapOf(p)
+            val m = flat ?: (p as? com.brushwork.paint.engine.tiles.TiledPixels)?.let { com.brushwork.paint.engine.tiles.TileOps.materialize(it) }
+            if (m == null) {
+                maskFill = (0xFF shl 24) or (luma(0) * 0x010101)
+                maskImage = ownMask[layer]
+            } else {
+                try {
+                    val bg = maskBackground(m)
+                    maskFill = (0xFF shl 24) or (luma(bg) * 0x010101)
+                    maskImage = ownMask[layer] ?: ContentBounds.of(m, emptyColor = bg)?.let { r -> storeImage(key("pmask"), layer, r, mask = true).also { extra += it } }
+                } finally {
+                    if (m !== flat) m.recycle()
+                }
+            }
         }
         val array = data.array
         val payloadArray = if (array != null && arraySource != null) {
@@ -985,7 +1068,7 @@ class ExportSceneBuilder(
             kind = kind,
             imageRef = image?.key,
             imageRect = image?.let { PayloadRect(it.left, it.top, it.width, it.height) },
-            hasMask = m != null,
+            hasMask = hasMask,
             maskRef = maskImage?.key,
             maskRect = maskImage?.let { PayloadRect(it.left, it.top, it.width, it.height) },
             maskFill = maskFill,
