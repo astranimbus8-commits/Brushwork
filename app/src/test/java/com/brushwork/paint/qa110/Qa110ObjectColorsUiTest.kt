@@ -54,7 +54,7 @@ import org.robolectric.annotation.Config
  * - a new text: the Text and Outline tabs, no paint mode; a text color previews; "No outline" on
  *   screen; Cancel gives the text color back;
  * and no text overflows its box with the sheet open, but two cuts at font scale 2.0 that are not
- * the sheet's own ([assertNoCut]).
+ * the sheet's own ([assertNoCut]); the sheet's title is whole (v1.10 Gate 2 fonts F2).
  *
  * One test: Compose's frame clock only serves the first test of a Robolectric sandbox. The 360 dp
  * phone comes from `RuntimeEnvironment.setQualifiers` (as `Qa110SharpCellUiTest`). The hex is
@@ -138,9 +138,9 @@ class Qa110ObjectColorsUiTest {
      * No text overflows its box ([Qa19Ui.assertNoTextOverflow]), except at font scale 2.0 two
      * cuts that are not the sheet's own: the color body's "Previous" and "Current" (one line
      * each in `CompareSwatch`, ui/color/ColorControls.kt; v1.9's own color picker cuts them the
-     * same at 392 dp and font scale 2.0) and the sheet's title, which `BwSheet`'s header
-     * (ui/common/Components.kt) ellipsizes on one line beside the picker's Cancel and OK. Both are
-     * lead requests (ARCHITECTURE A2).
+     * same at 392 dp and font scale 2.0), a lead request (ARCHITECTURE A2). The sheet's title is
+     * checked too: `BwSheet`'s header (`SheetTitle`, ui/common/Components.kt) shrinks it beside
+     * the picker's Cancel and OK (v1.10 Gate 2 fonts F2).
      */
     private fun assertNoCut(what: String, scale: Float) =
         Qa19Ui.assertNoTextOverflow(what) { scale >= 2f && it in NOT_THE_SHEETS_CUTS }
@@ -307,7 +307,7 @@ class Qa110ObjectColorsUiTest {
         const val CANCEL = "Cancel"
         const val UNDO = "Undo"
 
-        /** See [assertNoCut]: CompareSwatch's two literals and the sheet's title. */
-        val NOT_THE_SHEETS_CUTS = setOf("Previous", "Current", ObjectColorLabels110.CELL)
+        /** See [assertNoCut]: CompareSwatch's two literals. */
+        val NOT_THE_SHEETS_CUTS = setOf("Previous", "Current")
     }
 }
