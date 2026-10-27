@@ -183,7 +183,9 @@ internal object LayerEntries {
      * 2 big and 6 little cores; 4 decoders take the 2 big ones and 2 little ones and leave the
      * rest to the main and render threads). Measured with G2OpenPhoneOpenTimingTest (20 painted
      * 1080 x 2408 layers, PC median x 6): 1 decoder 12.1 ms a layer (200 layers 14.5 s), 2
-     * decoders 7.0 ms (8.4 s), 3 decoders 4.8 ms (5.8 s), 4 decoders 4.1 ms (4.9 s, Q4 6 s).
+     * decoders 7.0 ms (8.4 s), 3 decoders 4.8 ms (5.8 s), 4 decoders 4.1 ms (4.9 s, Q4 6 s), on
+     * a busy PC; on a quiet one, 1 and 4 decoders in the same run: 8.3 ms and 2.5 ms a layer
+     * (200 layers 9.9 s and 3.0 s).
      */
     const val DECODERS = 4
 

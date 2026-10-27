@@ -1,6 +1,7 @@
 package com.brushwork.paint.qa110
 
 import com.brushwork.paint.engine.EngineLevel
+import com.brushwork.paint.storage.LayerEntries
 import com.brushwork.paint.testing.EngineRule
 import com.brushwork.paint.testing.FakeMemoryProbe
 import com.brushwork.paint.testing.MemoryPreset
@@ -26,6 +27,9 @@ import org.robolectric.RobolectricTestRunner
  * (Q4), the 500-layer check artwork in 15 s (Q2) and the 50-layer 4000 x 5000 check artwork in
  * 15 s (Q6, the pixels scaled from the phone layer). Open200TimingTest's 512 x 512 proxy is about
  * a tenth of one phone layer. Runs locally only (CI's shared runners are not a phone's proxy).
+ * The same opens with one decoder (`LayerEntries.maxDecoders = 1`, the open before O1) are
+ * measured first in the same run and printed beside them, so before and after share the machine's
+ * load.
  */
 @RunWith(RobolectricTestRunner::class)
 @Category(Timing::class)
@@ -65,13 +69,22 @@ class G2OpenPhoneOpenTimingTest {
     @Test
     fun openPaintedPhoneLayers() {
         project("phone-open")
+        // The one-decoder open of before (the seam keeps v1.10 A11's single band), in the same run.
+        LayerEntries.maxDecoders = 1
+        val one = try {
+            opens("phone-open")
+        } finally {
+            LayerEntries.maxDecoders = LayerEntries.DECODERS
+        }
         val ms = PerfBudget.measuredWithin(PerfBudget.ms(BUDGET_MS), what = "open, $LAYERS painted $W x $H layers") { opens("phone-open") }
-        val perLayer = ms / LAYERS
-        val big = perLayer * (4000.0 * 5000.0) / (W.toDouble() * H)
-        println(
-            "v110 G2 open G2OpenPhoneOpenTimingTest: open, $LAYERS painted $W x $H layers: median %.3f ms of 15 after 3 warm-ups, %.3f ms per layer; x 6: 200 layers %.1f s (Q4 6 s), 500 layers %.1f s (Q2 15 s), 50 of 4000 x 5000 %.1f s (Q6 15 s)"
-                .format(ms, perLayer, perLayer * 200 * 6 / 1000, perLayer * 500 * 6 / 1000, big * 50 * 6 / 1000),
-        )
+        for ((what, v) in listOf("1 decoder (before)" to one, "${LayerEntries.DECODERS} decoders" to ms)) {
+            val perLayer = v / LAYERS
+            val big = perLayer * (4000.0 * 5000.0) / (W.toDouble() * H)
+            println(
+                "v110 G2 open G2OpenPhoneOpenTimingTest: open, $LAYERS painted $W x $H layers, $what: median %.3f ms of 15 after 3 warm-ups, %.3f ms per layer; x 6: 200 layers %.1f s (Q4 6 s), 500 layers %.1f s (Q2 15 s), 50 of 4000 x 5000 %.1f s (Q6 15 s)"
+                    .format(v, perLayer, perLayer * 200 * 6 / 1000, perLayer * 500 * 6 / 1000, big * 50 * 6 / 1000),
+            )
+        }
     }
 
     private companion object {
