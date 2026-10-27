@@ -53,8 +53,9 @@ import org.robolectric.annotation.Config
  *   color as it was;
  * - a new text: the Text and Outline tabs, no paint mode; a text color previews; "No outline" on
  *   screen; Cancel gives the text color back;
- * and no text overflows its box with the sheet open, but two cuts at font scale 2.0 that are not
- * the sheet's own ([assertNoCut]); the sheet's title is whole (v1.10 Gate 2 fonts F2).
+ * and no text overflows its box with the sheet open ([assertNoCut]), at font scale 2.0 too: the
+ * sheet's title and the color body's "Previous" and "Current" are whole (v1.10 Gate 2 fonts F2,
+ * F3).
  *
  * One test: Compose's frame clock only serves the first test of a Robolectric sandbox. The 360 dp
  * phone comes from `RuntimeEnvironment.setQualifiers` (as `Qa110SharpCellUiTest`). The hex is
@@ -124,26 +125,23 @@ class Qa110ObjectColorsUiTest {
     }
 
     /** The sheet's controls whole on screen ([modes]: its paint-mode glyphs), no text cut. */
-    private fun assertSheet(s: ChromeScreen, what: String, scale: Float, tabs: List<ObjectColorTarget>, modes: Boolean) {
+    private fun assertSheet(s: ChromeScreen, what: String, tabs: List<ObjectColorTarget>, modes: Boolean) {
         for (t in tabs) onScreen(s, "$what: the ${t.name} tab", s.tagged(tab(t)))
         for (m in PaintMode.entries) {
             if (modes) onScreen(s, "$what: the ${m.name} glyph", s.tagged(mode(m))) else assertNull("$what: no paint mode", s.tagged(mode(m)))
         }
         onScreen(s, "$what: Cancel", Finger.control(s, CANCEL))
         onScreen(s, "$what: OK", Finger.control(s, OK))
-        assertNoCut("$what, the sheet open", scale)
+        assertNoCut("$what, the sheet open")
     }
 
     /**
-     * No text overflows its box ([Qa19Ui.assertNoTextOverflow]), except at font scale 2.0 two
-     * cuts that are not the sheet's own: the color body's "Previous" and "Current" (one line
-     * each in `CompareSwatch`, ui/color/ColorControls.kt; v1.9's own color picker cuts them the
-     * same at 392 dp and font scale 2.0), a lead request (ARCHITECTURE A2). The sheet's title is
-     * checked too: `BwSheet`'s header (`SheetTitle`, ui/common/Components.kt) shrinks it beside
-     * the picker's Cancel and OK (v1.10 Gate 2 fonts F2).
+     * No text overflows its box ([Qa19Ui.assertNoTextOverflow]), at every font scale: the sheet's
+     * title, which `BwSheet`'s header (`SheetTitle`, ui/common/Components.kt) shrinks beside the
+     * picker's Cancel and OK (v1.10 Gate 2 fonts F2), and the color body's "Previous" and
+     * "Current", which `CompareSwatch` (ui/color/ColorControls.kt) shrinks into their halves (F3).
      */
-    private fun assertNoCut(what: String, scale: Float) =
-        Qa19Ui.assertNoTextOverflow(what) { scale >= 2f && it in NOT_THE_SHEETS_CUTS }
+    private fun assertNoCut(what: String) = Qa19Ui.assertNoTextOverflow(what)
 
     private fun assertClosed(what: String) = assertTrue(
         "$what: the sheet closed: ${SmokeUi.sheetTitles()} ${SmokeUi.pillTitles()}",
@@ -187,7 +185,7 @@ class Qa110ObjectColorsUiTest {
         openSheet(s, "$at, Shape")
         tapTag(s, tab(ObjectColorTarget.FILL))
         onScreen(s, "$at: \"No fill\"", Finger.control(s, ObjectColorLabels110.NO_FILL))
-        assertSheet(s, "$at, Shape", scale, listOf(ObjectColorTarget.FILL, ObjectColorTarget.STROKE), modes = true)
+        assertSheet(s, "$at, Shape", listOf(ObjectColorTarget.FILL, ObjectColorTarget.STROKE), modes = true)
         type("00FF00")
         assertEquals("$at: the fill, live", ObjectColorFace.Solid(GREEN), ed.face(ObjectColorTarget.FILL))
         tapTag(s, tab(ObjectColorTarget.STROKE))
@@ -239,7 +237,7 @@ class Qa110ObjectColorsUiTest {
         // "No fill" is paint mode Stroke; Cancel gives the fill back.
         openSheet(s, "$at, Polyline")
         tapTag(s, tab(ObjectColorTarget.FILL))
-        assertSheet(s, "$at, Polyline", scale, listOf(ObjectColorTarget.FILL, ObjectColorTarget.STROKE), modes = true)
+        assertSheet(s, "$at, Polyline", listOf(ObjectColorTarget.FILL, ObjectColorTarget.STROKE), modes = true)
         tapLabel(s, ObjectColorLabels110.NO_FILL)
         assertEquals("$at: No fill is paint mode Stroke", PaintMode.STROKE, ed.paintMode)
         assertEquals("$at: the sheet's Stroke glyph is selected", true, A2SheetKit.selectedTag(mode(PaintMode.STROKE)))
@@ -279,12 +277,12 @@ class Qa110ObjectColorsUiTest {
 
         openSheet(s, "$at, Text")
         tapTag(s, tab(ObjectColorTarget.TEXT))
-        assertSheet(s, "$at, Text", scale, listOf(ObjectColorTarget.TEXT, ObjectColorTarget.OUTLINE), modes = false)
+        assertSheet(s, "$at, Text", listOf(ObjectColorTarget.TEXT, ObjectColorTarget.OUTLINE), modes = false)
         type("0000FF")
         assertEquals("$at: the text color, live", BLUE, tool.item!!.spec.color)
         tapTag(s, tab(ObjectColorTarget.OUTLINE))
         onScreen(s, "$at: \"No outline\"", Finger.control(s, ObjectColorLabels110.NO_OUTLINE))
-        assertNoCut("$at, the Outline tab", scale)
+        assertNoCut("$at, the Outline tab")
         tapLabel(s, CANCEL)
         assertClosed("$at: Cancel")
         assertEquals("$at: Cancel gives the text color back", BLACK, tool.item!!.spec.color)
@@ -306,8 +304,5 @@ class Qa110ObjectColorsUiTest {
         const val OK = "OK"
         const val CANCEL = "Cancel"
         const val UNDO = "Undo"
-
-        /** See [assertNoCut]: CompareSwatch's two literals. */
-        val NOT_THE_SHEETS_CUTS = setOf("Previous", "Current")
     }
 }
