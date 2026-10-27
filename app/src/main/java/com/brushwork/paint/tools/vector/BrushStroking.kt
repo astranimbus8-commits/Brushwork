@@ -235,7 +235,8 @@ internal class FlatScratch {
  * stroke changed. With the brush / eraser a replay only re-renders the stroke from the first
  * point that changed ([BrushTool.updatePath]), and while a finger drags the path
  * ([interacting]) a long re-render is a lighter draft that is redrawn exactly, part by part,
- * once the finger lifts and the path rests. The work of one replay is capped by a budget
+ * once the finger lifts and the path rests; v1.10 G2 (V3): a change of the color alone takes no
+ * replay ([BrushTool.recolorPath]). The work of one replay is capped by a budget
  * measured on this device ([budget]), so dragging stays smooth on a slow phone too. Other
  * painting tools (smudge / blur / watercolor, or any [Tool]) are replayed from scratch: the
  * previous preview is cancelled (`onCancel` leaves no trace), then the new points are fed
@@ -370,6 +371,9 @@ internal class BrushStrokePreview(
             toolId == o.toolId && tool === o.tool && preset == o.preset && color == o.color && layer === o.layer &&
                 props == o.props && target == o.target && selection == o.selection && colorMode == o.colorMode &&
                 maps == o.maps
+
+        /** v1.10 G2 (V3): the same stroke and path in another color ([BrushTool.recolorPath] follows it). */
+        fun recolored(o: Key): Boolean = color != o.color && copy(color = o.color) == o
     }
 
     private val handler = Handler(Looper.getMainLooper())
@@ -540,6 +544,18 @@ internal class BrushStrokePreview(
                 return
             }
         }
+        if (cur != null && tool is BrushTool && cur.tool === tool && tool.isStroking && cur.key.recolored(key)) {
+            // v1.10 G2 (V3, Q10): only the color changed (an Object colors preview, a color picked
+            // while the path is open): the stroke on screen takes it, copies and all, instead of
+            // being replayed from scratch; a draft goes on being refined.
+            val t0 = SystemClock.uptimeMillis()
+            if (tool.recolorPath()) {
+                live = Live(tool, key, req, exact = cur.exact, last = cur.last)
+                ran(t0)
+                if (!cur.exact && !interacting) schedule(req, refineDelay())
+                return
+            }
+        }
         if (cur == null && key == refusedKey) return
         refusedKey = null
         val layer = key.layer
@@ -626,7 +642,9 @@ internal class BrushStrokePreview(
         val (id, tool) = paintTool() ?: run { cancelLive(); return false }
         val key = keyFor(geometry, id, tool, maps)
         val cur = live
-        if (cur != null && cur.key == key) {
+        // v1.10 G2 (V3): a color the replay has not taken yet is taken without one (the same pixels).
+        val recolored = cur != null && tool is BrushTool && cur.tool === tool && tool.isStroking && cur.key.recolored(key) && tool.recolorPath()
+        if (cur != null && (cur.key == key || recolored)) {
             if (!cur.exact && tool is BrushTool) {
                 input.clear()
                 points(input)

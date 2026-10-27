@@ -249,6 +249,20 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
         return s.refine(budget)
     }
 
+    /**
+     * v1.10 G2 (V3, Q10): the path stroke in progress (started by [beginPath]) takes the main
+     * color as it is now, without drawing a dab: its coverage holds no color (the color is laid
+     * over it when the stroke is drawn and committed), so the stroke is then exactly the one
+     * [beginPath] draws in that color with the same seed, copies included, and [onUp] commits it.
+     * Returns false when it can't (no path stroke in progress, a smudge / blur / watercolor
+     * stroke, a stroke painted from a coverage source): the caller starts it again.
+     */
+    fun recolorPath(): Boolean {
+        val s = stroke as? BufferStroke ?: return false
+        if (!s.isPath) return false
+        return s.recolor()
+    }
+
     override fun onMove(p: ToolPoint) {
         stroke?.move(p)
     }
@@ -603,6 +617,20 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
             val sh = src.shader
             if (style.shader !== sh) style = style.copy(shader = sh)
             return style
+        }
+
+        /**
+         * v1.10 G2 (V3): the main color as it is now, as the style was made with it, and the
+         * stroke redrawn where it reaches ([bounds] holds its copies too). False for a stroke
+         * painted from a coverage source (its color is the source's pixels).
+         */
+        fun recolor(): Boolean {
+            if (source != null) return false
+            val color = if (kind == StrokeKind.ERASE) 0xFF000000.toInt() else strokeColor(maskTarget)
+            if (style.color == color) return true
+            style = style.copy(color = color)
+            if (!bounds.isEmpty) controller.invalidateDoc(bounds)
+            return true
         }
 
         /** The part of the stroke [canvas] redraws (document px). */
