@@ -4,6 +4,7 @@ import com.brushwork.paint.EditorController
 import com.brushwork.paint.array.ArrayBehind
 import com.brushwork.paint.array.ArrayLookKit
 import com.brushwork.paint.engine.ArrayDraw
+import com.brushwork.paint.engine.EngineConfig
 import com.brushwork.paint.engine.EngineLevel
 import com.brushwork.paint.engine.LayerBudget
 import com.brushwork.paint.engine.budget.Budgets
@@ -36,12 +37,22 @@ import org.robolectric.RuntimeEnvironment
  * every pixel, the active layer, the selection and the tool as they were); at FULL with a swap
  * store (no fixed limit) the same "Behind" is one step, and undo puts the document back exactly,
  * redo brings the layer back.
+ *
+ * R is the phone's J x 0.55 over what the engine's ledger already holds when the test starts
+ * (`heldBefore`): the ledger (`EngineConfig.budget.ledger`) is shared by every session of a
+ * test JVM and not reset between tests, and under `-PunitFull` what earlier tests of the fork left
+ * there filled this small R, so the undo's activation at FULL found no room to unpark the source
+ * layer ("No room for a 400x300 layer" from `ChaosResidency`). Classic's limit does not move: v1.9's
+ * cap sets it on this memory, whatever R.
  */
 abstract class CrossBehindBudgetBase(private val level: EngineLevel) {
+    /** What the ledger holds before this test's session opens (the rule is made just before it runs). */
+    private val heldBefore = EngineConfig.budget.ledger.native
+
     @get:Rule
     val engine = EngineRule(
         level,
-        budgets = Budgets(J_SMALL, (J_SMALL * 0.55).toLong(), known = true, stepDown = 0),
+        budgets = Budgets(J_SMALL, (J_SMALL * 0.55).toLong() + heldBefore, known = true, stepDown = 0),
         swap = if (level == EngineLevel.FULL) FakeSwapStore(capacityBytes = 1L shl 30) else null,
     )
 
