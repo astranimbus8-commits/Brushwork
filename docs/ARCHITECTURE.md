@@ -2694,24 +2694,40 @@ Locally, `CI=true` with `testDebugUnitTest -PengineMode=full -PunitFull --contin
 
 ## Layer storage (v1.10)
 
-The contract part, written by the lead at F1 (design section 2 and 3.3); Gate 2 completes it from
-the areas' sections under "v1.10 areas". The frozen declarations are listed in "The engine
-contracts (F1)" above. Each paragraph names what F1 provides and which area fills the rest.
+The contract part, written by the lead at F1 (design section 2 and 3.3), completed at Gate 2 from
+the areas' blocks under "v1.10 areas" as merged (A7 budgets and limits, A8 tiles and residency,
+A9 the compositor and projections, A10 swap, the check and the safety nets, A11 load and save);
+the blocks hold the detail. The frozen declarations are listed in "The engine contracts (F1)"
+above. Each paragraph names what F1 provides and which area filled the rest.
+
+**What 2.0 ships.** All three levels and the automatic check, with no cut taken (design section
+8): A9 steps 6 and 7 and A10 steps 1-8 (the read-ahead included) are built. Eviction to the saved
+file (P3 order 1, the EVICTED state's callers and reload) is **not wired** in 2.0: the code exists
+(`NativeWatch.evict`, `reload`) but nothing calls it, so no layer becomes EVICTED in the app, and
+at FULL the swap store is what moves cold tiles out of memory (A10 LR2, deferred past 2.0). On
+the T606 (4 GB, J = 512 MiB, R about 1.19 GB) a 1080 x 2408 artwork holds 84 painted layers at
+CLASSIC, more at TILES, and up to the 10,000 guard at FULL as free storage allows; the largest
+canvas is about 6400 x 6400 (`CanvasCeilingTest`).
 
 **Levels and modes (J1, I31).** The user picks `LayerStorageMode` (AUTOMATIC, the default; FULL;
 CLASSIC) in `AppSettings.layerStorageMode`; the engine runs an `EngineLevel`. CLASSIC is stage S1:
 v1.9's engine plus the J/R budgets, `BlankPixels` for never-painted and adjustment layers,
 streamed load and the check's `StrokeBelowCache` switch; every painted layer is `FlatPixels` and
-nothing parks. TILES (S1 + S2) adds parking into `TiledPixels`, the projections, tile-native
-readers, undo on tile references and eviction of clean layers to their saved file, without swap.
-FULL (S1 + S2 + S3) adds the compressed swap and the native watch. `EngineConfig.resolve(mode,
+nothing parks. TILES (S1 + S2) adds parking into `TiledPixels` (packed into the Java-heap
+`PackedPool` when cold), the projections, tile-native readers and undo on tile references,
+without swap (the design's eviction of clean layers to their saved file is not wired in 2.0, see
+above). FULL (S1 + S2 + S3) adds the compressed swap, the read-ahead and the native watch. `EngineConfig.resolve(mode,
 check, deviceKey, freeBytes, memoryKnown)` decides at open: unknown memory gives CLASSIC (I32);
 CLASSIC or FULL count only with a check of this phone (`deviceKey` = `Build.MODEL` plus `totalMem`
 rounded to 256 MiB, J13, J15), FULL becoming TILES below 2 GiB free; otherwise the check's level,
 or CLASSIC without one. `openSession` fixes the level, budgets, flags, `LayerBudget.current`,
 residency and swap store for the whole session, and `closeSession` puts the gallery's back
-(`applyIdle`). F1 provides all of this; A10 provides the check and the probes that make it pick
-anything but CLASSIC.
+(`applyIdle`). A FULL result also runs at TILES while `engine-state.json` records slow swap
+reads (`CheckStore.read`). The choice is Settings > "Layer storage" (`LayerStorageSection`,
+A10), applied at the next open; a Classic refusal of a big artwork offers "Open with Full
+storage", which opens that artwork once at FULL (2 GiB free) or TILES without changing the
+setting (A11). F1 provides the resolution and the session; A10 provides the check and the probes
+that make it pick anything but CLASSIC.
 
 **J, R and the ledger (J2, J3, section 2.4).** J is `Runtime.maxMemory()`, for Java arrays, with
 `GovernorPolicyV19.admit` unchanged. R is the native pixel budget, computed once per session at
@@ -2725,7 +2741,13 @@ more; on main it may park cold layers and drop projections first, off main it on
 F1: the ledger and admission (`LedgerRaceTest`), `Budgets.v19`, `LayerBudgetV110` delegating to
 `LayerBudgetV19`, and `GovernorPolicy.trimUndo` delegating to v1.9. A7: the R formula, the
 canvas ceiling (`6.0 L + 184 MB <= R`), Classic's count `max(v19Cap, (R - 3.8 L - 184 MB) / L)`,
-the limits and `GovernorPolicyV110.trimUndo`.
+TILES' `max(Classic, 1 + (R - 6 L - 184 MB) / (0.35 L))`, FULL with a swap store bounded only by
+the 10,000 guard and the store's room (`noFixedLimit`: the panel shows "n" alone, the New canvas
+dialog "No fixed limit"), the refusal texts, and `GovernorPolicyV110.trimUndo`. A10: while
+`NativeWatch.refusingNewLayers` holds, `MemoryBudget.admitNative` refuses `NativePurpose.LAYER`
+before the ledger is asked, so no layer becomes a new full-size painted layer
+(`EngineLabels110.PAINT_REFUSED`). `AndroidMemoryProbe.attach` has no caller on main: the probe
+reads through the process' current application (a lead request).
 
 **States and residency (P1-P6, J6, I29).** A layer is FOLDER (`FolderPixels`), BLANK
 (`BlankPixels`, 0 bytes until its first write), FLAT (`FlatPixels`, one bitmap), PARKED
@@ -2733,15 +2755,26 @@ the limits and `GovernorPolicyV110.trimUndo`.
 `evictedTo`, no tiles). P1: the active layer, its mask and every layer with a resident pin stay
 resident, and at TILES and FULL the layer about to be activated too. P2: an inactive layer parks
 2 s after deactivation (an idle tick every 500 ms), never during a gesture, an open tool session
-or a pin, and at once under pressure. P3: over the tile RAM, clean cold layers are evicted
-first, then undo-only tiles swapped, then cold parked tiles. P4: a frame never blocks on I/O. P5:
-projections go first under pressure. P6: at CLASSIC P1-P5 are off. The `Document.activeLayerIndex`
+or a pin, and at once under pressure. P3: over the tile RAM, undo-only tiles leave first (never
+the active layer's newest 3 steps nor the newest 32 MiB of undo), then cold tiles of parked
+layers, coldest first; at FULL a tile is written to the swap when it has room, otherwise packed.
+The design's first order, evicting clean cold layers to their saved file, is not wired in 2.0
+(above). P4: a frame never blocks on I/O (A9's waiting tiles). P5: projections go first under
+pressure. P6: at CLASSIC P1-P5 are off. The `Document.activeLayerIndex`
 setter reports every change; at the end of the main-thread task `EngineConfig` tells the
 residency `deactivated(old)` and `activate(new)` once (an off-main set is no activation). F1:
 `ResidencyHooks`, `ClassicResidency` (nothing) and the test residency `ChaosResidency`, which
 parks every unpinned inactive layer as soon as the active layer settles and unparks the
-activated one. A8: `ResidencyPolicy` with P1-P5, the `TileWorker` and the `activating` input
-hold.
+activated one. A8: `ResidencyPolicy` with P1-P5, the `TileWorker` (one `tile-swapper` thread;
+READ_URGENT, READ_AHEAD, WRITE, PARK_CUT) and its commit rule (a tile leaves RESIDENT only
+unpinned, with the references of the lease, unused in this frame epoch and not solid), and the
+`activating` input hold: a layer with every tile resident and at most 32 MiB unparks
+synchronously, any other is read by the worker while `EditorController.activating` holds canvas
+input, undo and redo wait in order, and A10's chrome shows `EngineLabels110.PREPARING_LAYER` once
+an activation holds for 250 ms. `selectLayer` prepares the layer at the release; preparing it at
+the press on a row (A8 LR5) is deferred past 2.0. A10's read-ahead (`SwapReadAhead`, FULL)
+keeps the packed bytes of the SWAPPED tiles of the two layers next to the active one, so a switch
+to them reads no swap file.
 
 **Tiles, the facade, pins and generations (J4, J5, I28).** A tile is a 256 px ARGB bitmap,
 sparse (null is transparent), copy-on-write and refcounted; a uniform tile shares one immutable
@@ -2755,7 +2788,13 @@ the content is replaced, never on park, unpark, evict or swap. `pin()` forbids p
 eviction and recycle and never swaps in; `pinResident()` also makes every tile resident, for a
 synchronous reader on main outside a frame. An off-main reader takes a `snapshot()` or a pin on
 main and reads swapped tiles with `Tile.bitmapForRead()`. F1: the stores, the facade, the pins
-and the reference `TileOps`; A8: their tuning and the edit-session and duplicate paths.
+and the reference `TileOps`; A8: their tuning (`SolidTiles`, `PackedPool` capped at
+`min(64 MiB, J/8)`, the commit rule), the edit-session paths, Duplicate as copy-on-write (a
+parked store's `snapshot()` shares its tiles) and `LayerBoundsCache` keyed on `contentVersion`
+and `pixelGeneration`, never on bitmap identity; A9: the panel's thumbnails and every C-REG
+reader read stores or snapshots, never the facade; A11: load, save, the canvas operations, merge
+and the layered export read and write stores. `PixelFacadeMaterializationTest` holds the facade
+silent over a frame of 200 parked masked layers, undo, delete, a switch and a save.
 
 **Projections and exactness (J7, I33, X1-X6).** F1's `Compositor.drawLayerPixels` and
 `drawMaskPixels` dispatch on the store: flat as v1.9, blank skipped (X3; a blank mask clears),
@@ -2766,8 +2805,18 @@ draw equals the whole bitmap's bit for bit; X2: scaled targets draw from 256-row
 API 29 and above; X4: the below projection is exact; X5: the above projection is used only while
 a finger is down, within 2 LSB, and the frame after the lift is exact; X6: saved bytes are equal
 at every level. Projections are views (`Projection`: `validFor`, `drop`, `heldBytes`), keyed on
-`pixelGeneration` and `contentVersion`, built only with at least 8 visible units on their side.
-A9: `BandAssembler`, `BelowProjection`, `AboveProjection`, `PixelReads` and the thumbnails.
+`pixelGeneration` and `contentVersion`, built only with at least 8 visible units on their side
+(`ProjectionRules.MIN_LAYERS`), at most `min(displayHeld, R / 8)` bytes each, freed above NORMAL
+pressure. A9: `BandAssembler`, the waiting tiles, `BelowProjection`, `AboveProjection`,
+`PixelReads` and the thumbnails. The above projection runs only when the check's M5 took at most
+30 ms (`EngineConfig.aboveProjection`) and only while a finger paints the active layer. Accepted
+deviations of the A9 merge: X5's error is bounded at 4 LSB per channel with at most 1 % of the
+drawn bytes over 2 LSB (`AboveProjectionErrorTest`; the design says 2 LSB), and the first update
+after every lift is exact; a pass-through folder above the active layer is eligible only at
+100 %; `StrokeFrame100PlainTimingTest` holds a 6.0 ms PC budget where the design says 2.5 ms
+(3.97 ms at the merge, about 24 ms x6), so device check Q8 (15 ms) may miss; the budgets of
+`AboveBuildTimingTest`, `BandAssemblerTimingTest` and `ThumbnailAtParkTimingTest` are
+self-chosen; a folder picture reads at most 16 MiB (`FOLDER_READ_BYTES`).
 
 **Undo on tiles (section 2.6).** `PixelStore.logicalBytes()` (Flat L, Blank 0, Tiled the
 occupied tiles) is what every `byteSize` takes, at construction. `TiledPixels.replaceTiles`
@@ -2775,44 +2824,82 @@ swaps tiles in place and returns the replaced references, so an undo step on a p
 costs its touched tiles once and materializes nothing. Undo caps: CLASSIC `max(48 MiB, J/4)`;
 TILES `max(128 MiB, R/8)`; FULL `max(128 MiB, min(1 GiB, swapCap/8))`. One action is one undo step
 (I2); parking, swapping and evicting never create, merge or drop steps. F1: `logicalBytes`,
-`replaceTiles` and `MemoryBudget.undoCap` (v1.9's number); A8: `PixelEditRecorder` and the
-actions on tile references, `DocumentBitmapsAction` with stores, and asynchronous undo of
-swapped tiles.
+`replaceTiles` and `MemoryBudget.undoCap` (v1.9's number); A7: the three caps; A8:
+`PixelEditRecorder` and the actions on tile references (`PixelEditAction` holds one map of undo
+tiles by index, swapped in place on a parked layer), `MaskChangeAction` and
+`DocumentBitmapsAction` with stores, and asynchronous undo of swapped tiles: a step that finds
+SWAPPED tiles waits for the worker, later undos and redos queue behind it, and every pixel edit
+and editor entry point settles a waiting step first (`UndoManager.settle`); A11: the store
+actions of the canvas operations, merge, clear and apply mask (`StoresAction`,
+`MergedStoresAction`, `StoreSwapAction`, `MaskStoreAction`), each sized by `logicalBytes()` at
+construction.
 
 **Swap and eviction (J8-J10, I34).** At FULL only: `SlabSwapStore` writes Deflate-1 tiles to
 `noBackupFilesDir/swap/<session UUID>/slab-NNN.bin` (64 MiB slabs, 4 KiB pages) through a Java
 pool of `min(64 MiB, J/8)`; `swapCap = min(16 GiB, 0.5 (free - 1 GiB))`, recomputed every 60 s;
 writes stop below 1 GiB free. Swap is deleted at editor close and at app start (`SwapJanitor`,
 which spares a live session's directory), never named in a project and never resumed after a
-death. A clean layer whose file is in the last save is evicted at no write cost and streamed back
-on its first read. F1: `SwapStore`, `SwapSlot` and `NoSwap` (the only store until A10) and
-`FakeSwapStore`; A10: the store, the janitor and eviction (with A11's reload of an evicted
-layer).
+death. Reads are timed: a p95 over 40 ms of the last 50 records `slowSwapReads`, and the next open
+runs at TILES until the next check. Once per FULL session, under 1.5 GiB free, the editor shows
+`EngineLabels110.LOW_STORAGE`; a new layer the store cannot take is refused with `STORAGE_FULL`.
+A save or an export reads packed and swapped tiles off main through `Tile.bitmapForRead`
+(`TileOps.readRegion`, A11). The design's eviction of a clean layer whose file is in the last
+save is **not wired in 2.0** (A10 LR2, deferred past 2.0): `NativeWatch.evict` and `reload`
+exist and are tested (`EvictToSavedFileTest`, `EvictReloadTimingTest`), but no residency order
+calls them, no layer keeps a saved-file reference after a save, and `TileOps` refuses an EVICTED
+store. F1: `SwapStore`, `SwapSlot` and `NoSwap` and `FakeSwapStore`; A10: `SlabSwapStore`
+(installed by `EditorSession` at FULL), the janitor, the read-ahead and the slow-read rule.
 
 **The automatic check (M1-M5, section 2.10).** In the gallery only (`EngineCheckHost`), 1 s after
 its first frame, at most 3 s, never while an editor is open: M1 `MemoryInfo`, M2 a bounded native
 probe (always 768 MiB above the low-memory threshold), M3 Deflate and Inflate speed, M4 storage
 speed in `noBackupFilesDir/engine-probe/`, M5 a 64-layer composite and the `StrokeBelowCache`
-A/B. `AutoCheck.decide` uses stable inputs only: low memory gives CLASSIC, a composite over 60 ms
-CLASSIC, slow or small storage TILES, else FULL; a margin-limited or interrupted run is
-provisional and re-runs at the next 3 cold starts. The result is `EngineCheckResult` in
-`noBackupFilesDir/engine-check.json`, never backed up; `EngineState` (`engineCheckPending`,
-`lastExitSeen`, `slowSwapReads`) sits beside it. F1: both files' classes, `CheckStore.read`
-(null) and `EngineCheckHost` (empty); A10: the check, its marker and the Settings row.
+A/B. `AutoCheck.decide` uses stable inputs only (the thresholds as merged):
+- CLASSIC at M1 (low memory, `AutoCheck.earlyVerdict`): a step-down of 2, a low-RAM phone, under
+  3 GiB of `totalMem`, or a stable R under 512 MiB; M2-M5 then do not run.
+- M2 probes in 16 MiB steps up to 256 MiB; a margin-limited probe under 128 MiB is inconclusive:
+  the result is provisional, capped at the previous level, and the third in a row settles
+  CLASSIC.
+- TILES (slow storage): M3's Deflate or M4's write under 20 MB/s, or under 2 GiB free.
+- CLASSIC (slow compositing): M5 over 60 ms; at most 30 ms also turns the above projection on.
+- Else FULL. M3 and M5 have deadlines of 400 and 800 ms.
 
-**Safety nets (section 2.12).** `ExitWatch` reads `ApplicationExitInfo` at start: a low-memory
-closing while the editor was in the foreground steps R down (`stepDown` 1: x 0.8; a second within
-30 days: x 0.64 and CLASSIC, with `EngineLabels110.LMK_NOTICE` in the gallery). `NativeWatch`
-acts as CRITICAL every 2 s while `availMem < threshold + 256 MiB`. The crash log adds the level,
-R, the ledger and the layer count. F1: `ExitInfoSource`, `EngineNotice` and the gallery's notice
-slot; A10: the watches and the notices' cards.
+A run is due for Check again, no result, another device key, a new `versionCode`, an interrupted
+run (`engine-check.running` found), a step-down newer than the result, a provisional result (each
+cold start, up to 3) or a new `Build.FINGERPRINT`. Opening an artwork, `ON_STOP` and
+`onTrimMemory` stop it before its next step; the next start resumes with the rest. The gallery
+announces a final CLASSIC or TILES result once (`CheckNotices`, `EngineNoticeCard`). The result
+is `EngineCheckResult` in `noBackupFilesDir/engine-check.json`, never backed up; `EngineState`
+(`engineCheckPending`, `lastExitSeen`, `slowSwapReads`) sits beside it. "Copy details" and the
+"Details" row (`CheckDetails.text`) give the choice, the running level and budgets, the check's
+numbers and the `EngineStats` p50 and p95 for the device checks. F1: both files' classes,
+`CheckStore.read` (null) and `EngineCheckHost` (empty); A10: the check, its marker, the notices
+and the Settings row.
+
+**Safety nets (section 2.12).** `ExitWatch` reads `ApplicationExitInfo` at start against the
+`editor-open` marker: `REASON_LOW_MEMORY` is a sure closing and counts at once; a foreground
+SIGKILL without low-memory reports, or (API 26-29) a foreground marker of the same boot with no
+crash report since, is a probable one, and probable closings count from the second within 30
+days. The step-down is the count of the last 30 days' closings, at most 2: at 1 R x 0.8 and the
+check re-runs; at 2 R x 0.64, the stored result becomes CLASSIC (low memory), a chosen Full
+becomes Automatic, and the gallery shows `EngineLabels110.LMK_NOTICE` once. `NativeWatch` ticks
+every 2 s while an editor is started: under `threshold + 256 MiB` available it reports critical
+(the residency and the governor trim) and refuses new painted layers until `threshold + 512 MiB`
+(`PAINT_REFUSED`). The 10,000-layer guard holds at every level (`LayersLabels110.GUARD`). The
+crash log adds an Engine line (the level, R, the ledger, the step-down and the layer count).
+A swap read that fails or meets a CRC mismatch throws `IOException`; the design's restore of
+that layer from its last save (`EngineLabels110.SWAP_READ_FAILED`) has no caller on main (an open
+gap at Gate 2: nothing catches the exception in the readers). F1: `ExitInfoSource`,
+`EngineNotice` and the gallery's notice slot; A10: the watches and the notices' cards.
 
 **Test modes.** `-PengineMode=classic|tiles|full` and `-PparkChaos` reach the test JVM as
 `brushwork.engineMode` and `brushwork.parkChaos`, read only by `EngineConfig.testMode()` and
 `parkChaos()`; `EngineRule` installs a level, probes, budgets and a swap store per test and puts
 them back ("Testing and CI (v1.10)" below). The `unit-full` job runs the suite at FULL with
 `ChaosResidency`, and the nightly chaos job parks again at every idle of the main looper ("CI:
-shards, `unit-full` and the two floors" above).
+shards, `unit-full` and the two floors" above). `Soak500LayersTest` (A10) makes random edits at
+FULL with park chaos and swap, replays them at CLASSIC and compares the two bit for bit at each
+checkpoint; its 500-layer plan runs in the nightly soak job.
 
 ## v1.10 areas
 
@@ -3444,8 +3531,9 @@ row's lines (`ObjectBarLayout.split`).
 - Without Edit (several objects, or a brush stroke) the bar is v1.9's seven at 46 dp.
 - Recolor's icon is `Icons.Outlined.Palette` (`ObjectBarRecolorIcon`). Behind
   (`ArrayLabels110.BEHIND`, `EditorIcons.arrayBehind`) shows only while the editor passes
-  `onArrayBehind`, that is while `EditorController.arrayBehindAvailable` (false until A3 merges,
-  UQ4).
+  `onArrayBehind`, that is while `EditorController.arrayBehindAvailable` (UQ4; since A3's merge
+  `ArrayBehind.available`: objects selected on a layer that can take an array, or a text, shape,
+  vector or selected raster active layer without one).
 
 **Edit on the object bar (R10).** `ObjectBarLabels110.EDIT`, tag `V110Tags.OBJECTS_EDIT`.
 - Shown when exactly one object is selected and it is not a `VStroke` (`ObjectActions.editShown`).
@@ -3545,7 +3633,8 @@ budget for layer pixels.
   there).
 - `AndroidMemoryProbe` reads `ActivityManager.MemoryInfo`, `isLowRamDevice`, `Process.is64Bit`
   and the heaps through the context `attach` gave (a lead request: `BrushworkApp.onCreate`
-  calls it; meanwhile it falls back to the process' current application).
+  would call it; nothing calls it on main, so it reads through the process' current
+  application).
 - `MemoryBudget`: the ledger's limit is R (unlimited while unknown). `admitNative` is
   `PixelLedger.tryReserve`; refused on main, it asks the residency for room (CRITICAL) once and
   tries again. `tileRam()` is R less what the ledger holds outside TILES. `undoCap`: v1.9's
@@ -3588,8 +3677,9 @@ layer, an adjustment layer and a vector layer cost 0 bytes until their first wri
 stays one undo step and the layer counts in `used` like any other. The emptiness check is v1.9's
 full scan on main, about the cost of the allocation the caller already made (a lead request asks
 `EditorController.addLayerWith` and its siblings to build blank layers directly). Masks stay flat
-until A8's solid tiles (a lead request). Until A9 step 4 the panel's row thumbnails read
-`layer.bitmap`, so a blank layer whose row is on screen materializes.
+until A8's solid tiles (a lead request). Since A9 step 4 the panel's row thumbnails read the
+store (`LayerThumbnails`): a blank layer shows its transparent placeholder and nothing
+materializes.
 
 `LayerTree.Index` (`LayerTree.index(layers)` / `index(doc)`): one O(n) build (three passes over
 the list: parents through the nearest id above, block starts, then what each layer inherits from
@@ -3629,8 +3719,8 @@ R13, sections 2.0, 2.2, 2.6 and 2.7 of the v1.10 design; J4-J6, J8, I28, I29. Co
 `engine/tiles/ResidencyPolicy.kt`, `engine/Undo.kt` (undo on tiles),
 `tools/transform/LayerBoundsCache.kt`; the regions `EditorController.kt` `v110-A8 activate`,
 `LayerStructure.kt` `v110-A8 duplicate` (two blocks) and `DataLift.kt` `v110-A8 pins` (two
-blocks). The engine level decides whether any of it runs: CLASSIC (production until A10) installs
-no policy (P6) and every layer stays FLAT, as in v1.9.
+blocks). The engine level decides whether any of it runs: CLASSIC installs no policy (P6) and
+every layer stays FLAT, as in v1.9.
 
 **Tiles (`TileOps`, `SolidTiles`, `PackedPool`).** A parked store is a grid of 256 px `Tile`s.
 A transparent cell has no tile. A uniform opaque cell is a `SolidTiles` color: refcounted, its
@@ -3695,7 +3785,9 @@ throughout:
   2. Cold tiles of parked layers go next, coldest first by `Tile.lastUse`.
 
   At FULL a tile is written to the swap when the swap has room; otherwise it is packed. Order 1
-  of the design (evicting clean layers to the saved file) is A10's.
+  of the design (evicting clean layers to the saved file) is not wired in 2.0: A10 built
+  `NativeWatch.evict`, but nothing calls it (A10 LR2, deferred past 2.0; see A10's "Eviction to
+  the saved file").
 
 A park (`ParkCutter`) pins the layer and reads its flat content and mask. The worker cuts them.
 The posted task puts the stores in with `Layer.rehouse`: the same pixels, so `pixelGeneration` is
@@ -3711,8 +3803,8 @@ pins the lifted layer from `lift` to `release` (region `v110-A8 pins`).
 
 **Activation in the editor (region `v110-A8 activate`).** `prepareLayer` starts the unpark of a
 layer about to be selected, so the switch finds it FLAT. It is meant for the press on a layer
-row, before the release selects the row, but nothing calls it yet: the layers panel (A7's
-`ui/layers/LayersPanel.kt`) calls only `selectLayer` (a LeadRequest). `selectLayer` prepares the
+row, before the release selects the row, but nothing calls it: the layers panel (A7's
+`ui/layers/LayersPanel.kt`) calls only `selectLayer` (A8 LR5, deferred past 2.0). `selectLayer` prepares the
 layer itself and then sets the index, and the setter activates: a layer whose tiles are all
 resident is FLAT before the tool sees it, and one with tiles out of RAM is read by the worker
 while `activating` holds input. While an asynchronous activation
@@ -3861,10 +3953,10 @@ The layers panel is A9's.
   apply behind the undo. The order holds, but until the undo applies the step is in the history
   and not yet in the layer.
 - A park does not reuse the last edit's tiles (design 2.6): a parked layer's tiles are cut anew.
-- Nothing calls `prepareLayer` at the press on a layer row yet, so the unpark starts at the
-  release (`selectLayer`), not at the press (design 2.7; a LeadRequest for A7's
-  `ui/layers/LayersPanel.kt`, left to Gate 2: a press that starts a scroll of the panel must not
-  make big layers FLAT).
+- Nothing calls `prepareLayer` at the press on a layer row, so the unpark starts at the
+  release (`selectLayer`), not at the press (design 2.7; A8 LR5 for A7's
+  `ui/layers/LayersPanel.kt`, deferred past 2.0: a press that starts a scroll of the panel must
+  not make big layers FLAT, and the switch timings are within budget without it).
 
 <!-- /v110-A8 -->
 
@@ -3989,8 +4081,8 @@ stays. `FolderThumbnails.key` mixes the children's `pixelGeneration`, `contentVe
   placeholder (F1 has no reload). Pictures from tiles hold at most `TILE_PICTURES_BYTES`
   (16 MiB) per panel; the oldest go first.
 - A8's `ResidencyPolicy` gives the UI no park notification (its `onParked` is a test hook; a
-  park observer is left to Gate 2), so the picture is made when a row first shows a parked layer
-  without one, not at park time.
+  park observer, a frozen `ResidencyHooks` decision, is deferred past 2.0), so the picture is
+  made when a row first shows a parked layer without one, not at park time.
 - A worker that refuses the read (`RejectedExecutionException`, shut down) closes the pin at
   once and keeps the placeholder until the key changes, as a failed read does.
 - A folder's picture never reads on main either. When some layer of its block holds tiles that
@@ -4044,6 +4136,21 @@ check's M5 <= 30 ms; `ProjectionRules.aboveOn`), `LiveAdjust.aboveProjection`
   projection within 4 LSB, the first frame after the lift leaves nothing approximate and the
   display equals the full draw; Undo and Redo give back the frames bit for bit; a second stroke
   reuses the projection without a build.
+
+**Accepted deviations (the A9 merge, lead rulings).**
+- X5: the above projection's error is bounded at 4 LSB per channel with at most 1 % of the drawn
+  bytes over 2 LSB (`AboveProjectionErrorTest`: `MAX_LSB` 4, `TAIL`), not the design's 2 LSB;
+  the first update after every lift is exact.
+- A pass-through folder above the active layer is eligible only at 100 % opacity.
+- `StrokeFrame100PlainTimingTest` holds a 6.0 ms PC budget where the design says 2.5 ms (3.97 ms
+  at the merge run, about 24 ms x6): device check Q8 (composite p95 15 ms at 100 layers) may
+  miss, and `docs/device-checks-2.0.md` tells the user so.
+- The budgets of `AboveBuildTimingTest` (8 ms, the lift 30 ms), `BandAssemblerTimingTest` (3.4 ms)
+  and `ThumbnailAtParkTimingTest` (26 ms) are self-chosen; the design has no row for them.
+- `FolderThumbnails` reads at most 16 MiB per folder picture (`FOLDER_READ_BYTES`).
+- `testing/FakeSwapStore.swapOut` (a frozen kit) does not give a dropped tile's TILES bytes back
+  to the ledger; the tests work around it (`A9Docs.swapOut`, `WaitingTimingKit.packAll`), and
+  the kit change is deferred past 2.0.
 
 Tests: `test:v110/a9/` (`TiledCompositeGoldenTest`, `BlankSkipExactTest`, `Api28BlendParityTest`,
 `WaitingTileOverTileRamTest`, `BelowProjectionExactTest`, `PixelReadsTiledTest`,
@@ -4137,8 +4244,10 @@ session is open, before the editor exists; the editor's chrome installs one when
   again after 60 s (`CAP_REFRESH_MS`). `canWrite` is false past the cap or under 1 GiB free
   (`MIN_FREE`); the residency then keeps parking in RAM.
 - Faults: a failed write returns its pages, turns writes off for the session and throws (the
-  tile stays resident); a failed read or a CRC mismatch throws `IOException` and the caller
-  restores the layer from its last save.
+  tile stays resident); a failed read or a CRC mismatch throws `IOException`. The design's
+  caller that restores the layer from its last save (`EngineLabels110.SWAP_READ_FAILED`) is not
+  wired: the label has no caller on main and the readers let the exception through (an open gap
+  at Gate 2).
 - Slow reads: every read is timed; a p95 over 40 ms of the last 50 records `slowSwapReads`
   (`AutoCheckRunner.markSlowSwapReads`), so the next open runs at TILES until the next check.
 - `close` closes the slab files at once and deletes the directory on its own `swap-close` thread.
@@ -4152,11 +4261,12 @@ session is open, before the editor exists; the editor's chrome installs one when
 layer whose content equals its last save (`SavedFileRef`) and that was not read in the last 8 frame
 epochs, coldest first (`NativeWatch.evictionOrder`). The layer then holds an EVICTED
 `TiledPixels` (`evictedTo`, no tiles, no `pixelGeneration` change) and comes back through
-`NativeWatch.reload` (the whole Deflate stream, until A11's streamed load). Nothing calls it yet:
-nothing keeps a layer's saved-file reference after a save (A11), the residency policy (A8)
-neither evicts nor reloads, and `TileOps` refuses an EVICTED store (deferred to Gate 2 at the
-A10 merge: the callers in A8's policy, A11's saved-file references and the EVICTED reload in
-`TileOps` and the readers are cross-area; nothing makes a layer EVICTED in the app meanwhile).
+`NativeWatch.reload` (the whole Deflate stream). Nothing calls it: nothing keeps a layer's
+saved-file reference after a save (A11), the residency policy (A8) neither evicts nor reloads,
+and `TileOps` refuses an EVICTED store. Not wired in 2.0: deferred past 2.0 (A10 LR2; the
+callers in A8's policy, A11's saved-file references and the EVICTED reload in `TileOps` and the
+readers are cross-area and large). Nothing makes a layer EVICTED in the app, so it stays
+consistent, and at FULL the swap store moves cold tiles out of memory.
 
 **The activation ring (design 2.7).** `EngineEditorChrome` shows a small ring with
 `EngineLabels110.PREPARING_LAYER` in the pill slot (`ChromeLayout.pillTop`) when a layer's
@@ -4344,10 +4454,10 @@ dispose. `ResizeTabs` asks `LayerBudget.current.canTransformCanvas(doc, w, h)`; 
 layers' stores (`Layer(-1, name, pixels)` with `maskPixels`, both layers pinned) and records
 `MergedStoresAction`, which keeps the lower layer's old stores by reference.
 **Views of an adjustment layer** (merge down, `compositeImage` of the layered export, the
-thumbnail) share the real layer's stores, but `AdjustmentStage` reads the mask through
-`Layer.mask`, whose materialization disposes the store it replaces: on a view that is the real
-layer's tiled mask, whose tiles would be released (the mask lost, also for undo).
-`privateAdjustmentMask(view)` (`CanvasOps.kt`) first gives such a view a FLAT mask of its own
+thumbnail) share the real layer's stores. At the A11 merge `AdjustmentStage` read the mask
+through `Layer.mask`, whose materialization disposes the store it replaces: on a view that is the
+real layer's tiled mask, whose tiles would be released (the mask lost, also for undo); A9 has
+since made it read `maskPixels`. `privateAdjustmentMask(view)` (`CanvasOps.kt`) still first gives such a view a FLAT mask of its own
 (tiled: `TileOps.materialize`; blank: a transparent bitmap), recycled once the view is drawn.
 Every A11 `byteSize` (`StoreSwapAction`, `MaskStoreAction`, `MergedStoresAction`, the canvas
 operation's `bytesOf`) is the stores' `logicalBytes()`, fixed at construction (design 2.6). `FolderLift` reads a
@@ -4373,21 +4483,26 @@ destination already picked is never opened for writing (its empty document is de
 payload write (`toJson`, so `toBase64`, `deflated`, the SVG and PDF writers) still throws it as
 the last line. 1000 layers still write and read back.
 
-**Not built, and what waits for other areas.**
-- Steps 6 (two decoder threads at open) and 7 (the "Opening layer n of m" line) are not built
-  (both cuttable); the open decodes one layer after another on one IO thread.
+**Not built at the A11 merge, and what waited for other areas.**
+- Steps 6 (parallel decode at open) and 7 (the "Opening layer n of m" line,
+  `EngineLabels110.OPENING_LAYERS`, under the open spinner) were not built at the merge (both
+  cuttable; the open decoded one layer after another on one IO thread). Gate 2 builds both (lane
+  open, O1 and O2; no cut 5 or 6), so the open of a big artwork decodes several layers at a time
+  and shows its progress.
 - `PayloadImport`, `VectorImport` and `PdfImport` still render every new layer's bitmap before
-  the insert; only the insert parks them.
-- An evicted store (A8/A10) cannot be mapped yet: a canvas operation on one is refused with
-  `CANVAS_OP_TOO_BIG`. The thumbnail uses the compositor, not A9's `BandAssembler`; the swap-in
-  half of the autosave (reading swapped tiles) is A10's. There is no `LayerTree` index here, so
-  per-layer loops stay O(n). `OtherTabs` (not A11's) still reads `opaqueBounds` off main without
-  a lease (deferred by the lead to A10's merge or Gate 2: safe while nothing swaps or evicts; the
-  fix is `CanvasSnapshot.take` on main and `release()` on main after the read). `RemoveLayerAction.byteSize` (A8's `Undo.kt`) is still a live getter
-  over `bitmap` and `mask`: the history's trim sums every step's `byteSize` on each push once it
-  holds two steps, so a merge down or delete of a parked layer materializes the removed layer
-  there (design 2.6 gives the fix to A8). `AdjustmentStage` reading `Layer.mask` is the root of the view hazard above
-  (deferred by the lead to A9's merge, A9 owns the file); `privateAdjustmentMask` is A11's workaround.
+  the insert; only the insert parks them. A share file of hundreds of phone-size layers
+  (`check-500`) therefore needs Gate 2's import peak fix (lane open, O3) to import on a phone.
+- An evicted store cannot be mapped: a canvas operation on one is refused with
+  `CANVAS_OP_TOO_BIG` (nothing makes a layer EVICTED in 2.0). The thumbnail uses the compositor,
+  which draws tiled stores itself (A9). A save or an autosave reads packed and swapped tiles off
+  main through `Tile.bitmapForRead` (`TileOps.readRegion`). Per-layer loops here stay O(n).
+  `OtherTabs` (not A11's) reads `opaqueBounds` off main without a lease (deferred by the lead to
+  Gate 2, lane open O6: the fix is `CanvasSnapshot.take` on main and `release()` on main after
+  the read).
+- Fixed since by their owners: `RemoveLayerAction.byteSize` (A8's `Undo.kt`) is the stores'
+  `logicalBytes()`, fixed at construction, so a merge down or delete of a parked layer no longer
+  materializes it in the history's trim; `AdjustmentStage` reads `maskPixels` (A9).
+  `privateAdjustmentMask` stays as A11's guard for the views of an adjustment layer.
 
 Tests (`v110/a11/`): `StreamedLoadParityTest`, `StreamedLoadNoScratchTest`, `BlankFastPathTest`,
 `TiledSaveByteIdenticalTest`, `FormatFourDeterminismTest`, `ClassicRefusesBigArtworkTest`,
@@ -4418,6 +4533,15 @@ Tests (`v110/a11/`): `StreamedLoadParityTest`, `StreamedLoadNoScratchTest`, `Bla
   ready-made actions (add/remove/move layer, props, mask, selection, whole-document bitmaps, lambda).
 - `BitmapUtils`, `BlendModes`, `ViewTransform` (doc <-> screen; `dp()`, `zoom`).
 
+**v1.10: layers are stores, not bitmaps.** A layer's pixels are a `PixelStore` (`Layer.pixels`,
+`maskPixels`): FLAT (one bitmap), BLANK (no bytes until the first write), TILED (a parked layer:
+256 px tiles, resident, packed or swapped) or FOLDER. `Layer.bitmap` is a counted facade that
+materializes a non-flat layer on main; engine code reads the store instead
+(`Compositor.drawLayerPixels`, `BandAssembler`, `PixelReads`, `TileOps.readRegion`) and takes a
+`pin()` or a `snapshot()` to read a layer off main. The level (CLASSIC, TILES, FULL), the
+budgets J and R, `PixelLedger` and the residency are per editor session (`EngineConfig`). See
+"Layer storage (v1.10)" and the A7-A11 blocks.
+
 ### How a pixel edit is recorded
 ```kotlin
 if (!controller.checkEditable()) return
@@ -4428,6 +4552,17 @@ controller.commitEdit(rec, "Brush")       // color-mode constraint + undo + redr
 // or rec.abort() to restore (cancelled gesture)
 ```
 Whole-layer ops: `controller.editWholeLayer(layer, "Label") { bitmap -> ... }`.
+
+**v1.10: undo on tile references.** `beginEdit` first settles any undo or redo still waiting for
+swapped tiles (`UndoManager.settleWaiting`), so an edit never lands before a waiting step of the
+same pixels; `checkEditable` asks admission before the first write to a BLANK or parked layer
+(`admitWrite`, refused with `EngineLabels110.PAINT_REFUSED` or `STORAGE_FULL`). The finished
+`PixelEditAction` holds ONE map of undo tiles by tile index (null = transparent), each held once,
+and its `byteSize` is fixed at construction. On a FLAT layer an undo copies the tiles in; on a
+PARKED layer `TiledPixels.replaceTiles` swaps them into the store in place, so nothing is copied
+or materialized and `pixelGeneration` stays. A step that finds SWAPPED tiles waits for the
+worker while canvas input is held, and later steps queue behind it. See "Undo on tiles" in
+"Layer storage (v1.10)" and the A8 block.
 
 ## Layer tree and folders (v1.7: `model/LayerTree.kt`, `engine/LayerStructure.kt`, `engine/FolderComposite.kt`, `ui/layers/`)
 
@@ -6114,6 +6249,46 @@ What v1.7 does with a v1.8 project (the rows of design §8.1, checked against th
 
 Corrections to design §8.1, found at integration: its "What v1.7 shows" column describes v1.7's re-render, not what it shows on open (the saved pixels), and its "What a v1.7 save keeps" column describes a layer v1.7 edited. The array row is the one where an untouched project changes: the spec loses its look at the first v1.7 save while the cache keeps the looked pixels, so back in v1.8 the array's cache and its spec differ (I1) until the array is re-rendered.
 
+## Formats and compatibility (v1.10)
+
+Written by the lead at Gate 2 from design 6.1 ("v1.9 opening v1.10"), checked against the code at
+`70e5c5ed`. It adds rows to the v1.9 table ("v1.9 foundation", the compatibility section).
+
+v1.10 changes one version. `ProjectFormat.VERSION` is 4 (`storage/ProjectFile.kt`), and a save
+writes 4 only for an artwork v1.9 could not hold (I30): `ProjectFormat.writtenVersion(layers, w,
+h)` gives 4 when `v19OpenCount` (every non-folder layer, every mask, and the array source pixels
+in layer units, as v1.9's `effectiveLayerCount` counted them) is above `v19Cap(w, h)` or above
+100. `v19Cap` is computed for a fixed 512 MiB heap (`V19_HEAP`), so the format never depends on the
+phone: 25 layers at 1080 x 2408, 14 at 2048 x 2048, 2 at 4000 x 5000. Every other artwork gets
+v1.9's 1, 2 or 3 (I14). `FormatFourDeterminismTest` checks both outcomes. Unchanged: `LayerCodec`
+(BWLY) 1, `TextCodec` 5, `ShapeCodec` 2, `VectorCodec` 1, `ArrayCodec` 1, `Payload` 2, and the
+backup folder's `settings.json` and state files (format 1). The two new document fields,
+`ArraySpec.hideSource` (R4) and `ArrayLook.colorMode` (R5), are `@EncodeDefault(NEVER)`: an array
+without them is written byte for byte as v1.9 wrote it. The engine's own files are new and live
+only in `noBackupFilesDir`.
+
+| What 1.10 writes | v1.9 opens it | v1.9 edits and saves it | 1.10 opens v1.9's |
+|---|---|---|---|
+| An artwork v1.9 could hold (`writtenVersion` 1-3) | As before, on a heap of at least 512 MiB (the heap `v19Cap` is computed for). Its files are byte-identical to a v1.9 save of the same pixels and structure (X6, I13: `TiledSaveByteIdenticalTest`, `BandedSaveByteIdenticalTest`). On a smaller heap v1.9 treats it as any v1.9 artwork made on a bigger phone: it opens and only adding stops | Fully | Opens at every level. At Classic, formats 1-3 always open, as in v1.9 |
+| An artwork above v1.9's cap (format 4) | Refused with "This artwork was saved by a newer version of Brushwork" (`ProjectRepository.kt:273`; design 6.1 says 261); no crash | - | - |
+| Format 4 opened by 1.10 at Classic | - | - | Opens when its painted layers fit `ClassicOpen.capacity` (`storage/LayerEntries.kt`; J16). A painted layer is a content or mask pixel file that is not the blank encoding, plus the array pixels in layer units. The capacity is `max(v19Cap(J), (Rstable - 3.8 L - 184 MB) / L)`, with `Rstable` from `0.30 x totalMem` and no step-down, so it depends on the phone alone and every artwork made at Classic on that phone fits. Otherwise the open is refused with `NEEDS_FULL_STORAGE` ("This artwork has more layers than Classic layer storage can open.") and offers `OPEN_WITH_FULL`, unless Classic's reason is memory (`ClassicOpen.refusedForMemory`, UQ16). Tests: `ClassicRefusesBigArtworkTest`, `Qa110OpenWithFullUiTest` |
+| Layer files (BWLY) | Codec 1, unchanged (V4: v1.9 throws on any other version, so it is never bumped) | Unchanged | Unchanged |
+| Blank and adjustment layers (BLANK at run time) | Written as v1.9 writes them (full files); opens normally | Fully | The blank fast path: a file of exactly the blank encoding's length whose every byte equals it (`LayerCodec.isBlankEncoding`; a prefix is not enough). Design 6.1 says "by length and CRC"; the code compares every byte (`BlankFastPathTest`) |
+| Swap slabs (`swap/<session UUID>/`), `engine-check.json`, `engine-check.fingerprint`, `engine-state.json`, `engine-check.running`, `engine-probe/`, `editor-open` | In `noBackupFilesDir`: never in a project, Auto Backup, the backup folder or its `settings.json` (I34), so v1.9 never sees them | - | `SwapJanitor.purge` (posted by `EngineStartup.onAppCreate`) deletes everything under `swap/` that is not a live session's directory (`SwapJanitorPurgeTest`). The other files are the check's and the exit watch's memory and stay |
+| The layer storage choice: preference `engine.mode` in `brushwork_settings` (`AppSettings.layerStorageMode`, an enum name) | v1.9 never reads it. `SharedPreferences` keeps keys it does not read, so a v1.9 settings write leaves it | Kept | Missing, or a name this version does not know, means AUTOMATIC. Like every setting it goes into Auto Backup and the backup folder's `settings.json`, so a restore brings the user's choice back; the check's result does not travel (it is in `noBackupFilesDir`). Design 6.1 names an `AppSettings` key `layerStorageMode` read through `Json { ignoreUnknownKeys }` (`AppSettings.kt:24`); the code stores a plain string preference |
+| `engine-state.json` fields `engineCheckPending`, `lastExitSeen`, `slowSwapReads` (design 2.11), and the check result's new fields | In `noBackupFilesDir`: never restored to another phone, never seen by v1.9 | - | All `@EncodeDefault(NEVER)` with `ignoreUnknownKeys`. Missing means no pending check, `lastExitSeen = 0` and no slow reads |
+| `UiPrefs` keys `engine.noticeShownAt`, `engine.lmkNoticeShownAt`, `hint.arrayBehind`, `hint.sidePicks` | Not journaled (I26); ignored | - | Missing means "not shown yet" (`hint.sidePicks` 0) |
+| Array `hideSource = true` (R4, Behind) | The saved cache (copies only) draws right | The first re-render also draws copy 0, exactly under the source; a v1.9 save drops the field (I4) | Missing means false |
+| Array look `colorMode = RECOLOR` (R5, Recolored) | The saved cache draws right | A re-render draws Tint with the same stops; a v1.9 save drops the mode | Missing means TINT |
+| R1 side moved, turned or flipped | Identical render: the side is only a matrix; a v1.9 Shape-tool reopen draws the same stroke width (an isometry, J18, V6) | Fully | Unchanged |
+| R1 side unlinked or deleted; a legacy shape layer converted for an edit | Plain objects; a vector layer | Fully | Unchanged |
+| R2 and R6 colors (objects, text, box colors) | Ordinary colors; no new field | Fully | Unchanged |
+| R11 converted shape | An ordinary custom-point `VShape` | Fully | Unchanged |
+| R12 sharp and smooth | The existing point flags | Fully | Unchanged |
+| R3 without Behind or Recolored, R7, R8, R10 | No document change | - | - |
+| Share format (Payload) above 1,000 layers | Never written: 1.10 refuses at export, before any work (`Payload.refusal`, `LayersLabels110.PAYLOAD_TOO_MANY`; every write path refuses with it; `PayloadRefusalTest`, `ExportRefusedBeforeWorkTest`). The reader's limit is the same 1,000 | - | - |
+| Backup folder | Copies project folders unchanged; v1.9 restores a format-4 project and then refuses to open it, as above | Unchanged | Unchanged |
+
 ## Testing and CI (v1.8)
 
 **The `Timing` category (F0).**
@@ -6313,6 +6488,97 @@ masks, folders, adjustments, blank, sparse and hidden layers, at most 512 x 512)
 `ProjectionOracle.kt` (a frame drawn layer by layer with the projections off),
 `FakeObjectColorEditor.kt` and `FakeCornerEditor.kt` (the F0 editor interfaces with their
 contracts, recording every call).
+
+**The jobs as they run (Gate 2; design 6.5).** "Build APK" (`.github/workflows/android.yml`):
+- `unit`: three shards at CLASSIC (`-PtestShard=<i> -PtestShards=3`), everything except `Timing`;
+  45 min each.
+- `unit-full`: three shards with `-PengineMode=full -PunitFull`; no `Timing`, `ClassicOnly`,
+  `EngineGolden` or backlog class; 45 min each.
+- `timing`: one JVM, `-PtimingOnly`; 30 min. The R13 timing tests set their level through
+  `EngineRule`; the rest run at CLASSIC.
+- `test-count` (after `unit` and `unit-full`): both floors over both sets of shard XML; 10 min.
+- `release`: needs `unit`, `unit-full`, `timing` and `test-count`; 30 min.
+
+"Soak tests" (`.github/workflows/soak.yml`, nightly at 02:30 UTC and on dispatch):
+- `soak`: `-PsoakOnly` runs `SoakHarnessTest` and `Soak500LayersTest` alone in one JVM. The
+  NIGHTLY plan of `Soak500LayersTest` (`bw.testSet` "soak") edits about 500 layers for 20 minutes
+  at FULL, then replays the same steps at CLASSIC. Timeout 60 min.
+- `chaos`: the `com.brushwork.paint.engine`, `tools` and `storage` test packages with
+  `-PengineMode=full -PparkChaos -PunitFull`, three shards of 45 min.
+
+A red nightly never blocks a merge. It blocks the release tag until it is green, and Gate 2 needs
+three green soak nights in a row. Design 6.5 also names a `bench` job (`qa110/P1ProxyBench`,
+writing `.wt/v110-p1.txt`); it was not built. `-Pbench` still runs only v1.9's
+`qa19/P0ProxyBench`, locally. The x6 proxies of v1.10 are the medians of the `timing` tests times
+6, as each area's report records them.
+
+**Fallbacks (the lead only, in order).** A `unit` or `unit-full` shard above 30 min on two runs in
+a row: go to four shards (`-PtestShards=4`); the lead updates `CiShardFilterTest` for n = 4 (it
+keeps n = 3 for the history) and the `test-count` shard lists. `timing` above 25 min: move
+`BelowRebuildTimingTest` and `Open200TimingTest` to the `-Pbench` run, whose output then holds
+their budgets.
+
+**Both floors and the backlog after Gate 2.** `app/src/test/test-count.txt` holds the `unit`
+count and `app/src/test/test-count-full.txt` the `unit-full` count. Only the lead writes them
+("CI: shards, `unit-full` and the two floors" above). Timing has no floor file; its count is
+recorded below. The backlog file is `app/src/test/unit-full-backlog.txt`, not the design's
+`.wt/v110-full-backlog.txt` (`.wt/` is not in the repository). Every area removed its lines
+before it merged, so at `70e5c5ed` the file holds only its header comment, and it stays empty.
+
+**Known CI flakes (v1.10).** The v1.9 list in "Testing and CI (v1.9)" still holds. These failed
+once in the v1.10 merges and passed when rerun alone:
+- `v19/a7a/MagneticLassoGuardTest` (CI shard 2 at A4's push, "the finger's loupe"; locally at the
+  A7 merge).
+- `v19/a6/MaskFramePerfTest.onA4AtFitTooLocally` under load (the A3 merge: live at most 0.6 x
+  exact failed 5 tries; alone, live 2.39 ms against exact 5.19 ms).
+- `qa17/Qa17CompatSessionUiTest` in a local `unit-full` run and
+  `segmentation/SegmentationPipelineTest` on CI (the A8 merge).
+- `qa16/LayerWindowFingerWalkTest` (lane fonts, item F9, reports what it found).
+
+A failure is rerun once. A second failure is a real one, recorded with the runner's CPU line. A
+budget is never loosened.
+
+**Device checks.** `docs/device-checks-2.0.md` is what the user runs on the T606 with the
+release (design 7): engine checks Q1-Q13, each with its budget and the ring to read from Settings
+> Layer storage > Copy details, and feel checks FC1-FC8. Q8 tells the user it may miss: the
+composite of 100 layers measured 3.97 ms on the PC at the A9 merge (about 24 ms x6) against the
+15 ms target (`StrokeFrame100PlainTimingTest` keeps its 6.0 ms PC budget, an A9 deviation). The
+check artworks come from `qa110/DeviceCheckArtworks.kt` (Gate 2, lane docs). Its
+`DeviceCheckArtworksGenerator` runs only when the environment variable `BW_DEVICE_ARTWORKS` is
+set, so CI skips it:
+
+```
+$env:BW_DEVICE_ARTWORKS='1'; gradlew testDebugUnitTest --tests "*.DeviceCheckArtworksGenerator" --rerun
+```
+
+It writes `check-200.pdf`, `check-500.pdf`, `check-100-blend.pdf` and `check-4000x5000-50.pdf`
+under `app/build/device-check-artworks/`. These are Brushwork PDF share files: one picture per
+layer plus the Brushwork data, streamed through `PdfWriter`. Each layer holds seeded random
+strokes over about 35 % of the canvas. On the PC at Gate 2 the four files took about 60 s in all
+and came to about 54, 136, 27 and 37 MB. The lead attaches them to the GitHub release under
+Assets. `DeviceCheckArtworksTest` runs the same code at 64 x 64 and brings the file back through
+the gallery's import (`GalleryImports.pdfPayloadSpec`, then `ExchangeUiState.importUri`). It
+checks the names, blend modes, coverage and pixels. Importing `check-500` on the phone needs the
+layer-by-layer import of lane open's O3 (the A11 block, "Not built").
+
+**What the lead does when a device check fails** (design 7, with 1.10.x as 2.0.x). A failed check
+never holds the release. It is fixed in a 2.0.x update:
+- **Q1 gives Classic or "without storage swap".** Read the reason and the numbers in Copy
+  details. If a threshold is wrong for this class of phone, ship a 2.0.x with the corrected
+  `AutoCheck.decide` table (`engine/check/AutoCheck.kt`). Until then the user may choose "Full:
+  unlimited layers" in Settings (UQ12).
+- **Q5 or Q7 over budget.** Tune the read-ahead (`SwapReadAhead`, `engine/tiles/SlabSwapStore.kt`)
+  or the projection rules (`ProjectionRules.MIN_LAYERS`, now 8) in a 2.0.x.
+- **Q2, Q6 or Q13 closes the app.** The step-down already protects the work ("Safety nets"
+  under "Layer storage (v1.10)"). Lower the R factor in a 2.0.x: the session's share is
+  `MemoryBudget.TOTAL_SHARE` (0.30). `ClassicOpen.rStable` and `AutoCheck`'s rule 1 write the
+  same 0.30 themselves. Leave `rStable` as it is, so artworks made at Classic still open there (a
+  session's R stays at or below `Rstable`). Decide in the check's table whether rule 1 follows.
+- **A feel check fails.** A 2.0.x fix in the owning area's files.
+- A failure never changes an explicit answer (R13 Full with the automatic check, R1, R11) and
+  never brings R9 back.
+
+The floor is <n> after Gate 2, unit-full <m>, Timing <t>.
 
 ## UI (`ui/`)
 `MainActivity` → gallery or editor. `ui/common/Components.kt` holds shared controls (sheets,
