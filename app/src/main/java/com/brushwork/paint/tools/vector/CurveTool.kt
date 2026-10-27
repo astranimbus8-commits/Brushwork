@@ -838,15 +838,21 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         settings = look.copy(unit = own.unit, nudgeStepPx = own.nudgeStepPx, ownLayer = own.ownLayer).sanitized(fallback = own)
     }
 
-    /** The pending path is gone: the tool's own settings come back (see [ownSettings], [userClosed]). */
+    /**
+     * The pending path is gone: the tool's own settings come back (see [ownSettings], [userClosed]).
+     * v1.10 G2 (V2): and the user's main color and options its Object colors edits replaced, at
+     * once ([CurveColorsDelegate.colorsSessionEnded]; every caller has painted the path by now).
+     */
     private fun endLook() {
         userClosed?.let { c ->
             userClosed = null
             settings = settings.copy(closed = c)
         }
-        val own = ownSettings ?: return
-        ownSettings = null
-        settings = own.sanitized()
+        ownSettings?.let { own ->
+            ownSettings = null
+            settings = own.sanitized()
+        }
+        colors.colorsSessionEnded()
     }
 
     /** Each tool keeps its own options (v1.6: Path's quick starts set fill and stroke without touching Curve's). */

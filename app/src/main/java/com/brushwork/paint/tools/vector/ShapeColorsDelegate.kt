@@ -218,6 +218,21 @@ internal class ShapeColorsDelegate(private val host: ShapeColorsHost) : ObjectCo
     }
 
     /**
+     * v1.10 G2 (V2): the new shape's session ended (✓, ✕ or discard), told synchronously by the
+     * tool once the shape's pixels are painted (`ShapeTool.endColorsSession`): the restore point
+     * is given back now, not a frame later through the watch, so an object opened in the same call
+     * (the bars' Edit while a new shape is pending) takes the user's main color and options as the
+     * ones to give back, never this shape's object-only ones. Nothing while no restore point is
+     * held or its shape is still open.
+     */
+    fun colorsSessionEnded() {
+        if (restore == null || (host.open && host.session == restoreSession)) return
+        watch?.cancel()
+        watch = null
+        endOfNewShape(restoreSession)
+    }
+
+    /**
      * A new shape's session ended: each value that still holds what this editor set gets the
      * user's back (the options saved again: a strip edit meanwhile saved the shape's).
      */

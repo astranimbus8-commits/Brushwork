@@ -322,6 +322,21 @@ internal class CurveColorsDelegate(private val host: CurveColorsHost) : ObjectCo
         watchEnd()
     }
 
+    /**
+     * v1.10 G2 (V2): the new path ended (✓, ✕, discard, undone away), told synchronously by the
+     * tool once the path's pixels are painted (`CurveTool.endLook`): the restore points are given
+     * back now, not a frame later through the watch, so a path object opened in the same call (the
+     * bars' Edit while a new path is pending) takes the user's main color and options as the ones
+     * to give back, never this path's object-only ones. Nothing while a path is open or no restore
+     * point is held.
+     */
+    fun colorsSessionEnded() {
+        if (host.open || (restoreLook == null && restoreColor == null)) return
+        watch?.cancel()
+        watch = null
+        endOfNewPath()
+    }
+
     /** Gives the restore points back once the open path ends. */
     private fun watchEnd() {
         if (watch?.isActive == true) return

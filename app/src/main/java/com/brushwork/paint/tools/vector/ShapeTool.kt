@@ -4176,6 +4176,23 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
     }
 
     override fun commit() {
+        commitPending()
+        endColorsSession()
+    }
+
+    /**
+     * v1.10 G2 (V2): once the pending new shape is gone (placed or discarded) and its pixels are
+     * painted, the user's main color and options its Object colors edits replaced come back at
+     * once ([ShapeColorsDelegate.colorsSessionEnded]), so an object opened in the same call
+     * starts from the user's. Not in [resetPending]: the commits reset before they paint, and a
+     * brush outline is painted with the main color ([BrushStrokePreview.commit]). Nothing while a
+     * shape is still pending (a refused commit).
+     */
+    private fun endColorsSession() {
+        if (box == null) colors.colorsSessionEnded()
+    }
+
+    private fun commitPending() {
         val b = box ?: return
         if (eraseOn) {
             commitErase()
@@ -4294,6 +4311,8 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
             refreshPreview()
         }
         controller.invalidateOverlay()
+        // (Also placed by "Turn into path", which opens the Path tool right after.)
+        endColorsSession()
     }
 
     // ------------------------------------------------------------------ joining a shape layer (v1.9, R14 S1)
@@ -4598,6 +4617,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         if (vectorSession != null) endObjectEdit()
         releaseVectorPreview()
         controller.invalidateOverlay()
+        endColorsSession()
     }
 
     override fun onActivate() {
