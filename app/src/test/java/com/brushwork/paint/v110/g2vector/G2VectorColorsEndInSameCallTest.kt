@@ -161,6 +161,62 @@ class G2VectorColorsEndInSameCallTest {
         assertColor("undo and redo leave the main color", RED, c.color)
     }
 
+    /**
+     * V2 review: the placed path gives its restore points back in the call that places it
+     * (`CurveTool.endLook`), not later through the watch. Else they outlive it: the watch fires
+     * only when the opened path closes, and then takes a main color the user picked meanwhile,
+     * equal to the placed path's color, for its own and gives back the red.
+     */
+    @Test
+    fun aColorPickedOnThePathOpenObjectOpensStaysWhenItCloses() {
+        val c = kit.controller()
+        c.color = RED
+        val other = VPath(
+            0,
+            subpaths = listOf(VSubpath(listOf(VAnchor(40f, 40f, true), VAnchor(120f, 40f, true), VAnchor(80f, 110f, true)), closed = true)),
+            polyline = true,
+            fill = VPaint.Solid(YELLOW),
+            stroke = VStrokeStyle(color = PURPLE, width = 4f),
+        )
+        val id = A6Paths.add(kit, c, other).single()
+        c.selectTool(ToolId.POLYLINE)
+        val line = c.tools.getValue(ToolId.POLYLINE) as CurveTool
+        line.update { it.copy(stroke = CurveStroke.PLAIN, plainWidth = 6f, useBrushSize = false, fill = true, fillColor = null, closed = true) }
+        for (p in listOf(Vec2(200f, 150f), Vec2(300f, 150f), Vec2(300f, 250f), Vec2(200f, 250f))) assertTrue(line.addAnchor(p))
+        line.deselect()
+        frame()
+        val colors = requireNotNull(line.objectColors) { "a path is open" }
+        colors.begin()
+        colors.preview(ObjectColorTarget.STROKE, BLUE)
+        colors.commit()
+        assertColor("the new path's line is the main color while it is open", BLUE, c.color)
+
+        // The other path opens: the new one is placed first, in this one call.
+        assertTrue(line.openObject(c.vec.id, id, CurveKind.POLYLINE))
+        assertTrue("the path opens", kit.idleUntil { line.isReopened && line.hasPendingWork })
+        assertColor("the placed path keeps its line", BLUE, (c.vec.vector!!.objects.last() as VPath).stroke!!.color)
+        frame()
+        assertColor("the opened path's line color is the main color", PURPLE, c.color)
+
+        // The user picks blue (the placed path's color) as the main color: the opened path takes it.
+        c.color = BLUE
+        frame()
+        val steps = c.undoManager.undoCount
+        line.commit()
+        frame()
+        assertColor("the color the user picked meanwhile stays", BLUE, c.color)
+        assertColor("the opened path took it", BLUE, (c.vec.vector!!.byId(id) as VPath).stroke!!.color)
+        assertEquals("the opened path's step", steps + 1, c.undoManager.undoCount)
+        c.undo()
+        kit.idle()
+        assertColor("undo gives the opened path its own color back", PURPLE, (c.vec.vector!!.byId(id) as VPath).stroke!!.color)
+        assertColor("undo leaves the main color", BLUE, c.color)
+        c.redo()
+        kit.idle()
+        assertColor("redo gives it the picked color again", BLUE, (c.vec.vector!!.byId(id) as VPath).stroke!!.color)
+        assertColor("redo leaves the main color", BLUE, c.color)
+    }
+
     private companion object {
         const val RED = 0xFFFF0000.toInt()
         const val BLUE = 0xFF0000FF.toInt()
