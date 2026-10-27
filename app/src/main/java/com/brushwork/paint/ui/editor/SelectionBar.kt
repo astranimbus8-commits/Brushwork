@@ -69,6 +69,7 @@ import com.brushwork.paint.tools.text.TextTool
 import com.brushwork.paint.tools.text.textRectOf
 import com.brushwork.paint.ui.common.ArrayLabels
 import com.brushwork.paint.ui.common.ArrayLabels110
+import com.brushwork.paint.ui.common.FitText
 import com.brushwork.paint.ui.common.LayerLabels19
 import com.brushwork.paint.ui.common.ObjectBarLabels110
 import com.brushwork.paint.ui.common.SavedSelectionLabels
@@ -388,16 +389,20 @@ private fun BarItem(
     ) {
         Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(20.dp))
         Spacer(Modifier.height(2.dp))
-        Text(
+        // v1.10 Gate 2 (I27): at a large font scale the label shrinks into the item's 46 dp, never
+        // under its font scale 1 size ([FitText]), instead of wrapping past its lines ("Copy",
+        // "Deselect", "Content aware" at 1.3 and 2.0); a [fit] item still grows to its one line.
+        // The items keep their widths (the bar's scroll stops and end padding stay as they are).
+        FitText(
             label,
-            style = MaterialTheme.typography.labelSmall,
             fontSize = 10.sp,
-            lineHeight = if (lines > 1) 11.sp else 12.sp,
+            modifier = if (fit) Modifier.padding(horizontal = 4.dp) else Modifier,
             color = tint,
+            lineHeight = if (lines > 1) 11.sp else 12.sp,
+            textAlign = TextAlign.Center,
             maxLines = lines,
             softWrap = !fit,
-            textAlign = TextAlign.Center,
-            modifier = if (fit) Modifier.padding(horizontal = 4.dp) else Modifier,
+            style = MaterialTheme.typography.labelSmall,
         )
     }
 }
