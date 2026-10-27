@@ -78,7 +78,7 @@ class DeviceCheckArtworksTest {
 
     /** [path] in the repository, found above the test JVM's working directory (the app module). */
     private fun docFile(path: String): File {
-        val start = File(System.getProperty("user.dir")).absoluteFile
+        val start = File(System.getProperty("user.dir") ?: ".").absoluteFile
         val file = generateSequence(start) { it.parentFile }.map { File(it, path) }.firstOrNull { it.isFile }
         assertNotNull("$path not found above $start", file)
         return file!!
