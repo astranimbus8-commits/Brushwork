@@ -75,8 +75,13 @@ import kotlin.random.Random
  * painted layer at its full size, so a canvas rotation of about 500 painted 256 px layers weighs
  * about 125 MiB and a second one drops the first at Classic only, while FULL keeps both and its
  * undo of the older one then has nothing to replay against). Both runs therefore set
- * `MemoryBudget.UNDO_CAP_PROPERTY` to no byte cap ([NO_UNDO_BYTE_CAP]): the history is bounded
- * by its 150 steps alone, the same at both levels.
+ * `MemoryBudget.UNDO_CAP_PROPERTY` to no byte cap ([NO_UNDO_BYTE_CAP]), and after every edit both
+ * keep the newest [Plan.undoSteps] steps alone ([keepNewestSteps]): the same history at both
+ * levels. The nightly plan keeps 32: with 150 the FULL run's history (its tiles in the ledger)
+ * grew to about 1.1 GiB within 150 steps of 2 % rotations, and the FULL run refused a rotation
+ * with "Not enough memory to change the canvas with this many layers" that the Classic replay
+ * (whose ledger holds no layer) made. 32 steps hold about 4 rotations at most, well under R; an
+ * undo chain never comes near 32 steps (8 % of the edits undo).
  *
  * Leaks of tiled stores. A8 (undo on tiles, step 4) and A11 (canvas operations on stores, with
  * pins, step 4) are merged, so [PRE_A8_A11_DROPS] is false: the soak takes no pins of its own, and
@@ -222,6 +227,7 @@ class Soak500LayersTest {
                 val where = "$level, step $step"
                 edit(editor.c, rnd, plan, step)
                 settle(editor.c, where)
+                keepNewestSteps(editor.c, plan, where)
                 unpin()
                 drops.landed(editor.c.doc)
                 if (step % plan.reopenEvery == 0) editor = reopen(editor, drops)
@@ -435,6 +441,17 @@ class Soak500LayersTest {
     }
 
     /**
+     * v1.10 G2: the history both runs keep (the class KDoc): the newest [Plan.undoSteps] steps, the
+     * older ones dropped as the memory governor drops them (`UndoManager.trimOldest`, which
+     * disposes them). After the edit landed no grouping holds the trim, so a trim skipped at one
+     * level fails here, at its step.
+     */
+    private fun keepNewestSteps(c: EditorController, plan: Plan, where: String) {
+        c.undoManager.trimOldest(plan.undoSteps) { false }
+        assertTrue("$where: the undo history keeps the newest ${plan.undoSteps} steps", c.undoManager.undoCount <= plan.undoSteps)
+    }
+
+    /**
      * The main queue going idle: its idle handlers run once, as `MessageQueue.next` runs them (the
      * paused looper of Robolectric does not run them itself); one that answers false is removed.
      */
@@ -497,8 +514,9 @@ class Soak500LayersTest {
 
     /**
      * How long and how large: the canvas side, the layers at the start and at most, the steps at
-     * most and the minutes at most (0: no time limit), a checkpoint every [checkEvery] steps and a
-     * save with a reopen every [reopenEvery].
+     * most and the minutes at most (0: no time limit), a checkpoint every [checkEvery] steps, a
+     * save with a reopen every [reopenEvery], and the undo steps both runs keep ([undoSteps]; 150
+     * is the history's own limit, so the suite keeps every step it may).
      */
     private enum class Plan(
         val size: Int,
@@ -509,9 +527,10 @@ class Soak500LayersTest {
         val checkEvery: Int,
         val reopenEvery: Int,
         val seed: Long,
+        val undoSteps: Int,
     ) {
-        SUITE(64, 8, 24, 160, 0, 20, 80, 1_105L),
-        NIGHTLY(256, 480, 500, 1_000_000, 20, 100, 1_000, 500L),
+        SUITE(64, 8, 24, 160, 0, 20, 80, 1_105L, 150),
+        NIGHTLY(256, 480, 500, 1_000_000, 20, 100, 1_000, 500L, 32),
     }
 
     /** A layer budget with room for every layer of the soak (the budget is not under test; v1.9's cap is 100). */
@@ -531,7 +550,7 @@ class Soak500LayersTest {
 
         const val ROOM = 10_000
 
-        /** The undo cap both runs set (`MemoryBudget.UNDO_CAP_PROPERTY`): none in bytes, so only the 150 steps bound the history. */
+        /** The undo cap both runs set (`MemoryBudget.UNDO_CAP_PROPERTY`): none in bytes, so only steps bound the history ([Plan.undoSteps]). */
         const val NO_UNDO_BYTE_CAP = Long.MAX_VALUE
 
         /** How long one edit may take to land (real ms; a rotation of 500 layers on the nightly run). */
