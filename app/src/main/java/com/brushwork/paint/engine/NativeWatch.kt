@@ -145,8 +145,11 @@ object NativeWatch {
 
     /**
      * True from a CRITICAL tick until available memory is back above `threshold` +
-     * [RECOVER_MARGIN]: no new painted layer should be admitted meanwhile (read by the write
-     * admission, A7's `admitWrite`, after the merge). Any thread.
+     * [RECOVER_MARGIN]: no new painted layer is admitted meanwhile. `MemoryBudget.admitNative`
+     * refuses `NativePurpose.LAYER` (so `Layer.admitWrite`, `Document.materialize` and the flat
+     * activation say no) and `LayerBudgetV110.firstWriteRefusal` says
+     * `EngineLabels110.PAINT_REFUSED` (the A10 merge). False again at [reset]: when the editor's
+     * chrome stops watching and when an `EditorSession` is made. Any thread.
      */
     @Volatile
     var refusingNewLayers = false

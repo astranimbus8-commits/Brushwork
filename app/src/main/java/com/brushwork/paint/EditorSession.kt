@@ -44,6 +44,11 @@ class EditorSession(private val app: BrushworkApp, val projectId: String) {
     // v1.10 (A10): the swap session directory (the session's swap store) is installed in the
     // second region of this name (after the engine session below is open); NativeWatch and the
     // editor-open marker run with the editor's lifecycle in `EngineEditorChrome`.
+    // A new session refuses no new layer (design 2.12): NativeWatch's refusal of the last editor
+    // ends here, before the engine session opens and the load admits its layers.
+    init {
+        com.brushwork.paint.engine.NativeWatch.reset()
+    }
     // endregion
 
     private var controller: EditorController? = null

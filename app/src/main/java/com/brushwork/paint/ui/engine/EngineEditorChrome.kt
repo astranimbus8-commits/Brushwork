@@ -87,7 +87,8 @@ import kotlinx.coroutines.withContext
  * the editor-open marker of [ExitWatch] is written at once and kept current at `ON_START`,
  * `ON_STOP` and each change of the layer count or the canvas size (a stroke writes nothing), and
  * deleted when the editor goes; while it is started,
- * [NativeWatch] ticks every 2 s with the memory read off main; and the window's frame metrics
+ * [NativeWatch] ticks every 2 s with the memory read off main (its refusal of new layers ends
+ * when the watch stops, `NativeWatch.reset`); and the window's frame metrics
  * feed `EngineStats` (each UI frame's total duration, on a background thread). Each runs on a
  * phone and, under Robolectric, only when a test asks (`ExitWatch.markerRuns`,
  * `NativeWatch.watchRuns`, `EngineStats.keepUnderRobolectric`). The marker and the watch live
@@ -106,12 +107,17 @@ fun EngineEditorChrome(controller: EditorController) {
     if (NativeWatch.watchRuns) {
         LaunchedEffect(controller, lifecycle) {
             NativeWatch.reset()
-            lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
-                while (true) {
-                    delay(NativeWatch.WATCH_MS)
-                    val snap = withContext(Dispatchers.IO) { runCatching { EngineConfig.memoryProbe.snapshot() }.getOrNull() } ?: continue
-                    NativeWatch.tick(snap)
+            try {
+                lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                    while (true) {
+                        delay(NativeWatch.WATCH_MS)
+                        val snap = withContext(Dispatchers.IO) { runCatching { EngineConfig.memoryProbe.snapshot() }.getOrNull() } ?: continue
+                        NativeWatch.tick(snap)
+                    }
                 }
+            } finally {
+                // The refusal of new layers lives with the watch: it ends when the editor goes.
+                NativeWatch.reset()
             }
         }
     }
