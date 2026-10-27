@@ -569,7 +569,10 @@ private fun TallNumberLine(row: LayerRowModel, n: Int, modifier: Modifier) {
         val room = constraints.maxWidth
         val mask = wantsMask && remember(measurer, base, density, digits, room, row.alphaLocked, row.locked, row.lockedByFolder) {
             with(density) {
-                fun width(text: String, style: TextStyle) = measurer.measure(text, base.merge(style), maxLines = 1, softWrap = false).size.width
+                // (Above font scale 1, at the sizes they have at font scale 1: the badges keep
+                // them, see [NumberLineBadges], and the number's floor is in dp, [fitTextStyle].)
+                fun width(text: String, style: TextStyle) =
+                    measurer.measure(text, base.merge(style).copy(fontSize = scale1Sp(style.fontSize.value)), maxLines = 1, softWrap = false).size.width
                 var need = width(digits, TextStyle(fontSize = IbisDims.LayerRowTextMin, fontWeight = FontWeight.Normal)) +
                     width("MASK", MASK_TEXT) + (MASK_PAD * 2 + BADGE_GAP).roundToPx()
                 if (row.alphaLocked) need += width("α", ALPHA_TEXT) + (ALPHA_LOCK + BADGE_GAP).roundToPx()
@@ -589,7 +592,12 @@ private fun TallNumberLine(row: LayerRowModel, n: Int, modifier: Modifier) {
     }
 }
 
-/** The number line's badges: MASK (when [mask]), α + lock, lock (v1.7: a dimmed lock when a folder above is locked). */
+/**
+ * The number line's badges: MASK (when [mask]), α + lock, lock (v1.7: a dimmed lock when a folder
+ * above is locked). v1.10 Gate 2 (I27): like the thumbnail's badges, they keep their font scale 1
+ * sizes at every font scale, beside their dp icons on the 22 dp line (at 2.0 the α grew past the
+ * line and squeezed the number out of its box).
+ */
 @Composable
 private fun NumberLineBadges(row: LayerRowModel, mask: Boolean) {
     if (mask) {
@@ -597,6 +605,8 @@ private fun NumberLineBadges(row: LayerRowModel, mask: Boolean) {
             "MASK",
             color = IbisColors.Accent,
             style = LocalTextStyle.current.merge(MASK_TEXT),
+            fontSize = scale1Size(MASK_TEXT.fontSize),
+            lineHeight = scale1Size(MASK_TEXT.lineHeight),
             maxLines = 1,
             softWrap = false,
             modifier = Modifier.testTag(LayerWindowTags.badge(row.layer.id, LayerWindowTags.BADGE_MASK)).border(1.dp, IbisColors.Accent, RoundedCornerShape(2.dp)).padding(horizontal = MASK_PAD),
@@ -874,21 +884,26 @@ private fun RowThumbnail(
         if (overlayText != null) {
             // Across the whole thumbnail, not just the picture: a tall canvas's picture is too
             // narrow for a word ("To" / "ne"). The effect's name is spoken with the row's values
-            // (RowValues), not here.
-            Text(
-                overlayText,
-                color = IbisColors.ListText,
-                fontSize = 9.sp,
-                lineHeight = 10.sp,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                textAlign = TextAlign.Center,
-                modifier = Modifier
+            // (RowValues), not here. v1.10 Gate 2 (I27): at a large font scale it shrinks into the
+            // 62 dp thumbnail, never under its font scale 1 size ("Gradation Map" was cut at 2.0);
+            // silent inside a cleared box, so the I27 checks still read its layout.
+            Box(
+                Modifier
                     .padding(horizontal = 3.dp)
                     .background(Color(0xCCFFFFFF))
                     .padding(horizontal = 2.dp)
                     .clearAndSetSemantics { },
-            )
+            ) {
+                FitText(
+                    overlayText,
+                    fontSize = 9.sp,
+                    color = IbisColors.ListText,
+                    lineHeight = 10.sp,
+                    textAlign = TextAlign.Center,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
         badge()
     }
@@ -989,7 +1004,8 @@ internal fun AlphaLockBadge(tint: Color, tag: String? = null) {
         Modifier.clearAndSetSemantics { if (tag != null) testTag = tag },
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text("α", color = tint, style = LocalTextStyle.current.merge(ALPHA_TEXT))
+        // (Font scale 1 sizes at every font scale, beside the 9 dp lock: see [NumberLineBadges].)
+        Text("α", color = tint, style = LocalTextStyle.current.merge(ALPHA_TEXT), fontSize = scale1Size(ALPHA_TEXT.fontSize), lineHeight = scale1Size(ALPHA_TEXT.lineHeight))
         Icon(Icons.Filled.Lock, contentDescription = null, tint = tint, modifier = Modifier.size(ALPHA_LOCK))
     }
 }

@@ -22,9 +22,12 @@ import com.brushwork.paint.array.ArrayLookKit
 import com.brushwork.paint.core.Affine2
 import com.brushwork.paint.core.LengthUnit
 import com.brushwork.paint.core.Vec2
+import com.brushwork.paint.filters.FilterRegistry
+import com.brushwork.paint.masks.AdjustmentEffects
 import com.brushwork.paint.model.Document
 import com.brushwork.paint.qa16.Finger
 import com.brushwork.paint.qa16.LayerWalk
+import com.brushwork.paint.qa16.QaCurves
 import com.brushwork.paint.qa19.Qa19Harness
 import com.brushwork.paint.qa19.Qa19Ui
 import com.brushwork.paint.smoke.Smoke
@@ -42,8 +45,12 @@ import com.brushwork.paint.tools.text.TextCodec
 import com.brushwork.paint.tools.text.TextItem
 import com.brushwork.paint.tools.text.TextRenderer
 import com.brushwork.paint.tools.text.TextSpec
+import com.brushwork.paint.tools.vector.CornerStyle
 import com.brushwork.paint.tools.vector.CurveStroke
 import com.brushwork.paint.tools.vector.CurveTool
+import com.brushwork.paint.tools.vector.ShapeStyle
+import com.brushwork.paint.tools.vector.ShapeTool
+import com.brushwork.paint.tools.vector.ShapeType
 import com.brushwork.paint.ui.common.LocalIncrements
 import com.brushwork.paint.ui.common.ObjectColorLabels110
 import com.brushwork.paint.ui.common.PaintMode
@@ -54,6 +61,7 @@ import com.brushwork.paint.ui.common.V18Tags
 import com.brushwork.paint.ui.editor.chrome.ChromeScreen
 import com.brushwork.paint.ui.editor.chrome.ChromeTags
 import com.brushwork.paint.ui.layers.LayerLabels
+import com.brushwork.paint.ui.layers.LayerWindowTags
 import com.brushwork.paint.ui.theme.BrushworkTheme
 import com.brushwork.paint.ui.theme.IbisDims
 import com.brushwork.paint.ui.tools.CoordinatePill
@@ -85,7 +93,9 @@ import org.robolectric.annotation.Config
  * each with no text past its box ([Qa19Ui.assertNoTextOverflow], no exception; the documents'
  * names fit at font scale 1, the Large fonts rule):
  * - F1 the layer window over raster, text ("T" badge) and vector ("V") layers and a saved
- *   selection: every layer's name and the saved selection's whole inside the window;
+ *   selection: every layer's name and the saved selection's whole inside the window; the
+ *   fullest rows (two-digit numbers, a masked, clipped, alpha-locked, locked row, an adjustment
+ *   layer, an open pass-through folder): no text of the window cut;
  * - F2, F3 the Object colors sheet from a Polyline's pill: its title (`BwSheet`'s header) and the
  *   color body ("Previous", "Current");
  * - F4 the X / Y pill alone beside "Select several", a stand-in tool at each unit's worst-case
@@ -96,7 +106,7 @@ import org.robolectric.annotation.Config
  * - F7 Curve and Path open, a point at 150 %: on the More row the thickness slider comes before
  *   "All points 100 %" (its line, its place on it), no hidden item; the settings sheet offers the
  *   paint mode's Fill segment and no "No stroke" chip;
- * - FC7 points selected (Polyline, Curve): the pill's color and corner cells whole on screen, no
+ * - FC7 points selected (Polyline, Curve, Shape): the pill's color and corner cells whole on screen, no
  *   two of the pill's cells overlap; a vector object's bar and its More row: every label whole.
  *
  * One test: Compose's frame clock only serves the first test of a Robolectric sandbox. The 360 dp
@@ -111,9 +121,12 @@ class Qa110FontScaleG2UiTest {
         try {
             for (width in listOf(392, 360)) {
                 if (width == 360) RuntimeEnvironment.setQualifiers(Qa19Ui.Q360)
+                // The baseline: the fullest rows' texts fit at font scale 1 (the Large fonts rule's premise).
+                h.section("$width dp, font scale 1.0: F1 the fullest rows") { fullestRows(h, width, 1f, "$width dp, font scale 1.0") }
                 for (scale in Qa19Ui.FONT_SCALES) {
                     val at = "$width dp, font scale $scale"
                     h.section("$at: F1 the layer window") { layerWindow(h, width, scale, at) }
+                    h.section("$at: F1 the fullest rows") { fullestRows(h, width, scale, at) }
                     h.section("$at: F2 F3 the Object colors sheet") { colorsSheet(h, width, scale, at) }
                     h.section("$at: F4 the pill's worst-case values") { pillValues(width, scale, at) }
                     h.section("$at: F5 the bubble") { bubble(h, width, scale, at) }
@@ -182,6 +195,55 @@ class Qa110FontScaleG2UiTest {
             val r = text(s, n) ?: throw AssertionError("$at: \"$n\" is not shown; shown: ${Qa19Ui.shown().take(80)}")
             assertTrue("$at: \"$n\" ($r) inside the layer window ($window)", r.left >= window.left - EPS && r.right <= window.right + EPS && r.width > 0f)
             Qa19Ui.assertNoTextOverflow("$at, the layer window at \"$n\"")
+        }
+    }
+
+    /**
+     * The rows with the most to show (G2 review): two-digit numbers; the top row masked (its mask
+     * edited), clipped, alpha-locked and locked (the number line's MASK, α + lock and lock
+     * badges, as `PolishRowBadgesTest`); a Gradation Map adjustment layer (its effect's name over
+     * the thumbnail, two lines at font scale 1); an open pass-through folder ("Pass through", or "Pass" over "through") around a
+     * layer. Every row scrolled into view by a finger: no text of the window cut. (The top row's
+     * name line is 46 dp at 360 dp: "Layer 10" is ellipsized there at font scale 1 already, as in
+     * v1.9, so the row is named "Inks".)
+     */
+    private fun fullestRows(h: Qa19Harness, width: Int, scale: Float, at: String) {
+        val s = editor(h, width, scale, Smoke.document(256, 256, layers = 10, whiteBottom = true)) { c ->
+            c.renameLayer(c.doc.layers.last(), "Inks")
+            val folder = requireNotNull(c.putInNewFolder(c.doc.layers[1])) { "the folder" }
+            c.setFolderOpen(folder, true)
+            c.setFolderPassThrough(folder, true)
+            c.selectLayer(c.doc.layers[4])
+            val effect = requireNotNull(FilterRegistry.byId(GRADATION_MAP)) { "the effect" }
+            val adjustment = requireNotNull(c.addAdjustmentLayer(AdjustmentEffects.defaultSpec(effect, drawingColor = c.color), null)) { "the adjustment layer" }
+            c.renameLayer(adjustment, "Map")
+            val top = c.doc.layers.last()
+            c.selectLayer(top)
+            c.addMask(top)
+            top.apply { clipping = true; locked = true; alphaLocked = true }
+            c.notifyLayersChanged()
+        }
+        val c = s.c
+        val top = c.doc.layers.last()
+        val rows = c.doc.layers.size
+        assertEquals("$at: two-digit numbers", 12, rows)
+        assertTrue("$at: the top row edits its mask", top.editingMask)
+        val adjustment = c.doc.layers.single { it.isAdjustmentLayer }
+        val effectName = AdjustmentEffects.displayName(adjustment.adjustment!!)
+        assertEquals("$at: the effect over the thumbnail", "Gradation Map", effectName)
+        assertTrue("$at: the pass-through folder", c.doc.layers.any { it.folder?.passThrough == true })
+        LayerWalk.open(s)
+        Qa19Ui.settle()
+        assertEquals("$at: the top row's name", "Inks", top.name)
+        for (n in rows downTo 1) {
+            LayerWalk.reveal(s, LayerLabels.selectRow(n))
+            if (n == rows) {
+                assertNotNull("$at: the α + lock badge", s.tagged(LayerWindowTags.badge(top.id, LayerWindowTags.BADGE_ALPHA)))
+                assertNotNull("$at: the lock badge", s.tagged(LayerWindowTags.badge(top.id, LayerWindowTags.BADGE_LOCK)))
+            }
+            // (The effect's name is silent, yet its text is read by the overflow check.)
+            if (n == c.doc.indexOf(adjustment) + 1) assertNotNull("$at: \"$effectName\" over the thumbnail", text(s, effectName))
+            Qa19Ui.assertNoTextOverflow("$at, the fullest rows at row $n")
         }
     }
 
@@ -366,17 +428,28 @@ class Qa110FontScaleG2UiTest {
     // ------------------------------------------------------------------ FC7
 
     private fun pointsSelected(h: Qa19Harness, width: Int, scale: Float, at: String) {
-        for (id in listOf(ToolId.POLYLINE, ToolId.CURVE)) {
+        for (id in listOf(ToolId.POLYLINE, ToolId.CURVE, ToolId.SHAPE)) {
             val what = "$at, ${id.label} with points selected"
             val s = editor(h, width, scale)
-            val tool = if (id == ToolId.POLYLINE) {
-                polyline(s)
-            } else {
-                s.c.selectTool(id)
-                Qa19Ui.settle()
-                (s.c.currentTool as CurveTool).also { t ->
-                    t.update { it.copy(fill = true, fillColor = 0xFFFF8000.toInt(), closed = true) }
-                    for (p in listOf(Vec2(60f, 80f), Vec2(170f, 80f), Vec2(170f, 160f), Vec2(60f, 160f))) t.addAnchor(p)
+            val tool: PointEditor = when (id) {
+                ToolId.POLYLINE -> polyline(s)
+                ToolId.SHAPE -> {
+                    // A rectangle's points open (as `Qa110SharpCellUiTest`'s Shape).
+                    s.c.selectTool(id)
+                    Qa19Ui.settle()
+                    (s.c.currentTool as ShapeTool).also { t ->
+                        t.update { it.copy(type = ShapeType.RECTANGLE, style = ShapeStyle.STROKE, corner = CornerStyle.SHARP, keepProportions = false, fromCenter = false, snapAngle = false) }
+                        QaCurves.drag(s, Vec2(60f, 70f), Vec2(110f, 80f))
+                        t.setPointEditing(true)
+                    }
+                }
+                else -> {
+                    s.c.selectTool(id)
+                    Qa19Ui.settle()
+                    (s.c.currentTool as CurveTool).also { t ->
+                        t.update { it.copy(fill = true, fillColor = 0xFFFF8000.toInt(), closed = true) }
+                        for (p in listOf(Vec2(60f, 80f), Vec2(170f, 80f), Vec2(170f, 160f), Vec2(60f, 160f))) t.addAnchor(p)
+                    }
                 }
             }
             tool.selectPoints(PointSelection.of(tool.pointCount, 1, 2))
@@ -386,7 +459,7 @@ class Qa110FontScaleG2UiTest {
             val trash = onScreen(s, "$what: the pill's trash", s.tagged(V17Tags.PILL_TRASH))
             assertNoOverlap(s, what, trash.top..color.bottom)
             Qa19Ui.assertNoTextOverflow(what)
-            tool.discard()
+            (tool as Tool).discard()
             Qa19Ui.settle()
         }
         // A vector object's bar, its More row open too: every label whole.
@@ -442,5 +515,7 @@ class Qa110FontScaleG2UiTest {
         const val MINUS = '−'
         const val TEXT_LAYER = "Words"
         const val VECTOR_LAYER = "Lines"
+        /** An effect whose name takes the thumbnail's two lines at font scale 1 ("Gradation" over "Map"). */
+        const val GRADATION_MAP = "adjust.gradation_map"
     }
 }
