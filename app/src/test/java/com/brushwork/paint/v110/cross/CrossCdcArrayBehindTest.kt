@@ -6,6 +6,7 @@ import com.brushwork.paint.array.ArrayBehind
 import com.brushwork.paint.array.ArrayLookKit
 import com.brushwork.paint.engine.ArrayDraw
 import com.brushwork.paint.engine.EngineLevel
+import com.brushwork.paint.engine.tiles.ResidencyState
 import com.brushwork.paint.filters.FilterRegistry
 import com.brushwork.paint.model.ArrayLook
 import com.brushwork.paint.model.LayerData
@@ -39,7 +40,8 @@ import org.robolectric.ParameterizedRobolectricTestRunner
  * `hideSource` included, is kept the same instance; the layer shows exactly its new data drawn
  * with that array (copy 0 still hidden: the source's place stays empty), and the source layer is
  * untouched. Undo gives back the objects (the same instance) and the pixels exactly, Redo the
- * new ones. CLASSIC and FULL (where the source layer parks once inactive).
+ * new ones. CLASSIC and FULL (where the source layer is parked once inactive: the test level's
+ * `ChaosResidency` parks every inactive layer).
  */
 @RunWith(ParameterizedRobolectricTestRunner::class)
 class CrossCdcArrayBehindTest(private val level: EngineLevel) {
@@ -100,6 +102,7 @@ class CrossCdcArrayBehindTest(private val level: EngineLevel) {
         c.selectLayer(made)
         ArrayLookKit.edit(c, made, made.array!!.spec.copy(look = tint))
         assertSame(made, c.activeLayer)
+        if (level == EngineLevel.FULL) assertEquals("the source layer parked once inactive", ResidencyState.PARKED, source.residency)
         val arr = made.array!!
         assertTrue("hideSource kept with the tint", arr.spec.hideSource)
         val before = made.vector!!

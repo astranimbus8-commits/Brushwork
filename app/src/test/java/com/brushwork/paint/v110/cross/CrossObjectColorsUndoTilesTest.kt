@@ -43,13 +43,14 @@ import org.robolectric.Shadows.shadowOf
 /**
  * v1.10 Gate 2 cross test (R2 x A8 x A10): the Object colors of an open shape, then its layer
  * parked and swapped out. A reopened shape gets a new stroke and fill through the Object colors
- * editor (as the sheet drives it: `begin`, `preview`, OK's `commit`) and ✓: ONE step carrying the
- * colors, the layer's pixels drawn in them. The user then selects another layer; at FULL the
- * editor's own policy parks the shape layer (its tick, past `PARK_DELAY_MS`) and its tiles are
- * written out to the swap store (a [FakeSwapStore], through the tile worker), so the store holds
- * SWAPPED tiles. Undo and Redo are then one step each and give back the shape data and the
- * layer's pixels exactly (read from its store without materializing it). At CLASSIC the same
- * steps run with no park and no swap.
+ * editor (as the sheet drives it: `begin`, `preview`, OK's `commit`) and ✓: the reopening, the
+ * colors and ✓ are ONE step carrying the colors, the layer's pixels drawn in them. The user then
+ * selects another layer; at FULL the editor's own policy parks the shape layer (its tick, past
+ * `PARK_DELAY_MS`) and its tiles are written out to the swap store (a [FakeSwapStore], through the
+ * tile worker), so the store holds SWAPPED tiles. Undo, then (after the tiles Undo put back are
+ * swapped out too) Redo are one step each and give back the shape data and the layer's pixels
+ * exactly (read from its store without materializing it). At CLASSIC the same steps run with no
+ * park and no swap.
  */
 @RunWith(ParameterizedRobolectricTestRunner::class)
 class CrossObjectColorsUndoTilesTest(private val level: EngineLevel) {
@@ -121,6 +122,7 @@ class CrossObjectColorsUndoTilesTest(private val level: EngineLevel) {
         val placedPixels = pixels(layer)
 
         // Reopened, its colors changed through the editor, then ✓: one step.
+        val steps = c.undoManager.undoCount
         c.tap(60f, 60f)
         assertSame("reopened", layer, tool.editingLayer)
         val ed = requireNotNull(tool.objectColors) { "an open shape has colors" }
@@ -128,7 +130,7 @@ class CrossObjectColorsUndoTilesTest(private val level: EngineLevel) {
         ed.preview(ObjectColorTarget.STROKE, BLUE)
         ed.preview(ObjectColorTarget.FILL, GREEN)
         ed.commit()
-        val steps = c.undoManager.undoCount
+        assertEquals("the reopening and the colors record no step of their own", steps, c.undoManager.undoCount)
         tool.commit()
         settle()
         assertEquals("one step", steps + 1, c.undoManager.undoCount)
@@ -139,13 +141,14 @@ class CrossObjectColorsUndoTilesTest(private val level: EngineLevel) {
         assertEquals("the fill drawn green", hex(GREEN), hex(pixelAt(coloredPixels, c, 70, 60)))
         assertEquals("the stroke drawn blue", hex(BLUE), hex(pixelAt(coloredPixels, c, 30, 60)))
 
-        // Parked and swapped out (FULL), then Undo and Redo: one step each, data and pixels exact.
+        // Parked and swapped out (FULL) before Undo and again before Redo: one step each, data and pixels exact.
         parkAndSwapOut(c, layer)
         c.undo()
         settle()
         assertEquals("undo: one step", steps, c.undoManager.undoCount)
         assertEquals("undo: the shape as placed", placed, shapeOf(layer))
         assertArrayEquals("undo: the pixels as placed", placedPixels, pixels(layer))
+        parkAndSwapOut(c, layer)
         c.redo()
         settle()
         assertEquals("redo: one step", steps + 1, c.undoManager.undoCount)

@@ -144,6 +144,14 @@ class CrossRecolorExportTest(private val level: EngineLevel) {
         val layer = ArrayLookKit.vectorArray(c, listOf(ArrayLookKit.box(20f, 30f, 60f, 70f), ArrayLookKit.box(20f, 90f, 60f, 130f, fill = translucent)))
         val look = ArrayLook(opacityEnd = 0.5f, tint = listOf(VStop(0f, RED), VStop(1f, BLUE)), tintStrength = 0.6f, colorMode = ArrayColorMode.RECOLOR)
         ArrayLookKit.edit(c, layer, layer.array!!.spec.copy(count = 3, look = look))
+        // The bound tells the two modes apart: every copy's Recolored color is beyond it from its Tinted one.
+        for (argb in own) for (target in listOf(RED, BLUE)) {
+            val r = ColorUtils.recolor(argb, target, 0.6f)
+            val t = ArrayTint.apply(argb, target, 0.6f)
+            val tol = if (argb ushr 24 == 0xFF) 1 else 3
+            val apart = listOf(16, 8, 0).any { abs(((r shr it) and 0xFF) - ((t shr it) and 0xFF)) > tol }
+            assertTrue("%08X to %08X: recolored %08X, tinted %08X".format(argb, target, r, t), apart)
+        }
 
         check(c, layer, ArrayColorMode.RECOLOR, own) { argb, target -> ColorUtils.recolor(argb, target, 0.6f) }
         ArrayLookKit.edit(c, layer, layer.array!!.spec.copy(look = look.copy(colorMode = ArrayColorMode.TINT)))

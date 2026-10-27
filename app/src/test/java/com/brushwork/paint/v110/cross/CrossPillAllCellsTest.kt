@@ -59,7 +59,8 @@ import kotlin.math.roundToInt
  * - each cell shows whole inside the pill's 8 dp margins: row 1 the move icon, X, Y, "#", the
  *   trash and "Select several"; row 2 Object colors, the Scale row (keep, Scale X, Scale Y, "Scale
  *   increments") and Sharp / Smooth; folded, `[move][colors][trash][several][sharp]` in one row;
- *   no text overflows its box (unfolded, folded, with a dialog or the sheet open);
+ *   no text overflows its box (unfolded with "Select several" off and on, folded, with a dialog
+ *   or the sheet open);
  * - each tap acts once. "Select several", "#", "Scale increments", keep and the move icon switch
  *   their state once and record nothing; Object colors opens the Object colors sheet (Back
  *   closes it, nothing recorded); X, Y, Scale X and Scale Y open their dialog, and the typed value
@@ -133,6 +134,17 @@ class CrossPillAllCellsTest(private val level: EngineLevel) {
     private fun tagged(s: ChromeScreen, tag: String, what: String): Rect = reachable(s, what, s.tagged(tag))
 
     private fun named(s: ChromeScreen, label: String): Rect = reachable(s, "\"$label\"", Finger.control(s, label))
+
+    /** Every cell of the unfolded pill's two rows whole on screen inside its margins, and no text cut ([at]: the case). */
+    private fun wholeRows(s: ChromeScreen, at: String) {
+        for (label in listOf(FOLD, X_CELL, Y_CELL, INCREMENTS_LABEL, PillLabels.KEEP_PROPORTIONS, PillLabels.SCALE_X, PillLabels.SCALE_Y, PillLabels.SCALE_INCREMENTS)) named(s, label)
+        tagged(s, V17Tags.PILL_TRASH, "$at: the trash")
+        tagged(s, V18Tags.PILL_SEVERAL, "$at: Select several")
+        tagged(s, V17Tags.PILL_SCALE_ROW, "$at: the Scale row")
+        tagged(s, V110Tags.PILL_COLOR, "$at: Object colors")
+        tagged(s, V110Tags.PILL_SHARP, "$at: Sharp / Smooth")
+        Qa19Ui.assertNoTextOverflow(at)
+    }
 
     private fun tap(s: ChromeScreen, r: Rect) = Finger.tapAt(s, r.center.x, r.center.y)
 
@@ -214,19 +226,16 @@ class CrossPillAllCellsTest(private val level: EngineLevel) {
         val at = "$id at $width dp"
 
         // Row 1 and row 2 whole on screen; no text cut.
-        for (label in listOf(FOLD, X_CELL, Y_CELL, INCREMENTS_LABEL, PillLabels.KEEP_PROPORTIONS, PillLabels.SCALE_X, PillLabels.SCALE_Y, PillLabels.SCALE_INCREMENTS)) named(s, label)
+        wholeRows(s, "$at, unfolded")
         val trash = tagged(s, V17Tags.PILL_TRASH, "$at: the trash")
         assertEquals("$at: the trash deletes the selected points", trash, Finger.control(s, PillLabels.DELETE_POINTS))
-        tagged(s, V17Tags.PILL_SCALE_ROW, "$at: the Scale row")
-        tagged(s, V110Tags.PILL_COLOR, "$at: Object colors")
-        tagged(s, V110Tags.PILL_SHARP, "$at: Sharp / Smooth")
-        Qa19Ui.assertNoTextOverflow("$at, unfolded")
 
-        // "Select several": one tap, on.
+        // "Select several": one tap, on; every cell still whole and no text cut.
         assertEquals("Off", PillTestKit.severalState())
         tap(s, tagged(s, V18Tags.PILL_SEVERAL, "$at: Select several"))
         assertEquals("$at: Select several on", "On", PillTestKit.severalState())
         assertTrue(editor.selectSeveral)
+        wholeRows(s, "$at, unfolded, Select several on")
 
         // Sharp / Smooth: each tap one step; smooth and sharp swap, a mix becomes all sharp.
         val sel = selected(tool)
