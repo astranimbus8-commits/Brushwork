@@ -1,8 +1,5 @@
-package com.brushwork.paint.v110.a3
+package com.brushwork.paint.compat19
 
-import com.brushwork.paint.compat18.VAnchorV18
-import com.brushwork.paint.compat18.VStopV18
-import com.brushwork.paint.compat18.VSubpathV18
 import kotlinx.serialization.EncodeDefault
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
@@ -10,15 +7,14 @@ import kotlinx.serialization.json.Json
 import kotlin.math.abs
 
 /*
- * v1.10 (A3 review): a FROZEN copy of v1.9.0's array spec and its JSON (`model/ArrayModel.kt`,
- * `model/ArrayCodec.kt` at tag v1.9.0), in test sources only: the `array` field of a
- * `project.json` layer entry as v1.9 writes and reads it. It stands in for the lead's frozen
- * `compat19` kit (design R4 (e), R5 (e); A3's LeadRequest), which no gate has landed; delete it
- * when that kit lands and decode with the kit instead. Every serialized property, its order,
- * default and `@EncodeDefault` is v1.9's. v1.9's guide and stops are v1.8's classes (the
- * vector model is unchanged from v1.8.0 to v1.9.0), so the frozen `compat18` ones serve. The
- * source container (unchanged, VERSION 1), `ArraySpec.mapped` and `resolved` (which needs
- * `ArrayLayout`) are not copied. Never change it: it is what v1.9 is.
+ * v1.10 G2 (compat19 kit): a FROZEN copy of v1.9.0's array spec, its look and its JSON settings
+ * (`model/ArrayModel.kt`, `model/ArrayCodec.kt` at tag v1.9.0), in test sources only: the `array`
+ * field of a `project.json` layer entry as v1.9 writes and reads it. A3 froze it in
+ * `v110/a3/ArraySpecV19.kt` until this kit landed; it moved here unchanged except that the guide
+ * and the tint stops are the kit's [VSubpathV19] and [VStopV19]. Every serialized property, its
+ * order, default and `@EncodeDefault` is v1.9's. The source container (unchanged, VERSION 1),
+ * `ArraySpec.mapped` and `resolved` (which needs `ArrayLayout`) are not copied. Never change it:
+ * it is what v1.9 is.
  */
 
 /** v1.9's `ArrayMode`. */
@@ -39,7 +35,7 @@ data class ArrayLookV19(
     val turnStart: Float = 0f,
     val turnEnd: Float = 0f,
     val easing: ArrayEasingV19 = ArrayEasingV19.LINEAR,
-    val tint: List<VStopV18> = emptyList(),
+    val tint: List<VStopV19> = emptyList(),
     val tintStrength: Float = 0f,
 ) {
     /** v1.9's `ArrayLook.isIdentity`. */
@@ -87,7 +83,7 @@ data class ArraySpecV19(
     val centerY: Float? = null,
     val sweepDeg: Float = 360f,
     val rotateCopies: Boolean = true,
-    val guide: VSubpathV18? = null,
+    val guide: VSubpathV19? = null,
     val spacing: Float = 0f,
     val alignToCurve: Boolean = true,
     val moveX: Float = 100f,
@@ -140,10 +136,10 @@ data class ArraySpecV19(
         private const val MAX_TURN = 3600f
         private val DEFAULT = ArraySpecV19()
 
-        private fun sanitizedGuide(g: VSubpathV18): VSubpathV18 {
+        private fun sanitizedGuide(g: VSubpathV19): VSubpathV19 {
             fun ok(v: Float?) = v == null || (v.isFinite() && abs(v) <= MAX_COORD)
             var changed = g.anchors.size > MAX_GUIDE_ANCHORS
-            val out = ArrayList<VAnchorV18>(minOf(g.anchors.size, MAX_GUIDE_ANCHORS))
+            val out = ArrayList<VAnchorV19>(minOf(g.anchors.size, MAX_GUIDE_ANCHORS))
             for (a in g.anchors) {
                 if (out.size >= MAX_GUIDE_ANCHORS) break
                 if (!a.x.isFinite() || !a.y.isFinite() || abs(a.x) > MAX_COORD || abs(a.y) > MAX_COORD) { changed = true; continue }
@@ -185,45 +181,3 @@ object ArrayCodecV19 {
         }
     }
 }
-
-// ---------------------------------------------------------------------- not v1.9's code
-
-/**
- * The v1.9 spec holding the same values as v1.10's [s], field by field (never through JSON), for
- * the compat tests; v1.10's `hideSource` and the look's `colorMode` have no v1.9 field and are left out.
- */
-internal fun v19Twin(s: com.brushwork.paint.model.ArraySpec): ArraySpecV19 = ArraySpecV19(
-    mode = ArrayModeV19.valueOf(s.mode.name),
-    count = s.count,
-    relativeX = s.relativeX,
-    relativeY = s.relativeY,
-    constantX = s.constantX,
-    constantY = s.constantY,
-    centerX = s.centerX,
-    centerY = s.centerY,
-    sweepDeg = s.sweepDeg,
-    rotateCopies = s.rotateCopies,
-    guide = s.guide?.let { g -> VSubpathV18(g.anchors.map { a -> VAnchorV18(a.x, a.y, a.sharp, a.inX, a.inY, a.outX, a.outY, a.width) }, g.closed) },
-    spacing = s.spacing,
-    alignToCurve = s.alignToCurve,
-    moveX = s.moveX,
-    moveY = s.moveY,
-    turnDeg = s.turnDeg,
-    scale = s.scale,
-    pivotX = s.pivotX,
-    pivotY = s.pivotY,
-    editingSource = s.editingSource,
-    look = s.look?.let { l ->
-        ArrayLookV19(
-            opacityStart = l.opacityStart,
-            opacityEnd = l.opacityEnd,
-            sizeStart = l.sizeStart,
-            sizeEnd = l.sizeEnd,
-            turnStart = l.turnStart,
-            turnEnd = l.turnEnd,
-            easing = ArrayEasingV19.valueOf(l.easing.name),
-            tint = l.tint.map { VStopV18(it.offset, it.color) },
-            tintStrength = l.tintStrength,
-        )
-    },
-)

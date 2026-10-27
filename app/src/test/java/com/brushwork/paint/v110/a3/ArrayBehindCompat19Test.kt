@@ -1,5 +1,7 @@
 package com.brushwork.paint.v110.a3
 
+import com.brushwork.paint.compat19.ArrayCodecV19
+import com.brushwork.paint.compat19.v19Twin
 import com.brushwork.paint.model.ArrayCodec
 import com.brushwork.paint.model.ArrayLook
 import com.brushwork.paint.model.ArrayMode
@@ -14,8 +16,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * v1.10 (R4 (b), (e); I4): v1.9's own spec decoder ([ArrayCodecV19], the frozen copy of v1.9.0
- * standing in for the lead's `compat19` kit) reads the `array` JSON v1.10 saves for a copies-only
+ * v1.10 (R4 (b), (e); I4): v1.9's own spec decoder ([ArrayCodecV19] of the frozen `compat19`
+ * kit, v1.9.0's copy) reads the `array` JSON v1.10 saves for a copies-only
  * layer ("Array behind", `hideSource = true`) in every mode: every other field as written, and
  * `hideSource` dropped, so v1.9 opens the saved cache (copies only) and its save writes exactly
  * what v1.10 writes for the same array without the field. v1.10 reads that save back as
