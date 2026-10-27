@@ -96,7 +96,7 @@ class G2OpenTrimUndoTilesTest {
         assertEquals("the trim is said", StabilityLabels19.UNDO_TRIMMED, c.message)
         assertTrue("the layer keeps its pixels", after.contentEquals(A8Kit.pixelsOf(layer).first))
 
-        // The newer steps still undo: back to the 4th stroke's color.
+        // The newer steps still undo: back to the 3rd stroke's color (the 4th to 7th undone).
         repeat(STROKES - 3) { c.undo(); idle() }
         assertEquals(colors[2], layer.bitmap.getPixel(SIZE / 2, SIZE / 2))
         repeat(STROKES - 3) { c.redo(); idle() }

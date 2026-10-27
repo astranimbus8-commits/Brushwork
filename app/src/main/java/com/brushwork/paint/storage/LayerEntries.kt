@@ -143,8 +143,11 @@ internal object LayerEntries {
         val loads = List(decoders) { StreamedLoad(dir, doc.width, doc.height, tiled = !classic, classicRoom = capacity?.room ?: Long.MAX_VALUE) }
         // The array source pixels (v1.7 containers) stay bitmaps.
         val allocated = ArrayList<Bitmap>()
-        val parallel = if (decoders > 1) ParallelDecode(dto.layers, dto.formatVersion, active, loads) else null
+        var parallel: ParallelDecode? = null
         try {
+            // Gate 2 review: inside the try, so a decoder that cannot start (a phone out of threads
+            // throws OutOfMemoryError) releases what the started ones built, as any failure does.
+            if (decoders > 1) parallel = ParallelDecode(dto.layers, dto.formatVersion, active, loads)
             for ((i, entry) in dto.layers.withIndex()) {
                 if (!isActive()) throw CancellationException(OPEN_CANCELLED)
                 val decoded = parallel?.take(i, isActive) ?: decode(entry, dto.formatVersion, loads[0], flat = i == active)
@@ -192,6 +195,13 @@ internal object LayerEntries {
     /** Test seam (O1): the decoders an open uses at most ([DECODERS]); 1 keeps the one-band load. */
     @Volatile
     internal var maxDecoders = DECODERS
+
+    /**
+     * Test seam (O1, Gate 2 review): starts one decoder thread; a test makes one start fail as a
+     * phone out of threads does (`Thread.start` throws OutOfMemoryError).
+     */
+    @Volatile
+    internal var startDecoder: (Thread) -> Unit = { it.start() }
 
     /**
      * How many threads decode [dto]'s pixel files on a [w] x [h] canvas: 1 at Classic (not
@@ -280,10 +290,21 @@ internal object LayerEntries {
         @Volatile
         private var stopped = false
 
-        private val threads = loads.mapIndexed { k, load ->
-            Thread({ decodeAll(load) }, "Brushwork open decoder ${k + 1}").apply {
-                isDaemon = true
-                start()
+        /** The decoders started so far ([stop] joins exactly these). */
+        private val threads = ArrayList<Thread>(loads.size)
+
+        init {
+            // Gate 2 review: a decoder that cannot start stops and joins the ones already running
+            // before the failure leaves (the opener then releases every store they built).
+            try {
+                for ((k, load) in loads.withIndex()) {
+                    val t = Thread({ decodeAll(load) }, "Brushwork open decoder ${k + 1}").apply { isDaemon = true }
+                    startDecoder(t)
+                    threads += t
+                }
+            } catch (e: Throwable) {
+                stop()
+                throw e
             }
         }
 

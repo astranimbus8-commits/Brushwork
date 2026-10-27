@@ -40,7 +40,10 @@ import org.robolectric.RuntimeEnvironment
  * `LayerOps.addMask` (a disabled mask: mask and props in one step), settles the undo first. When
  * the call returns, the undo has applied, the mask is in the layer, and the history holds the
  * undo first, then the mask: undo takes the mask away with the undone pixels kept, redo puts it
- * back.
+ * back. Gate 2 review: with the undo of an Add mask queued behind such a waiting undo (the mask
+ * still in the layer), Delete, Apply and Invert mask (the Layers panel's, and the controller's
+ * Invert) look at the layer only once both undos applied: no mask is left, nothing changes, no
+ * step is added and redo still brings the mask back.
  */
 @RunWith(RobolectricTestRunner::class)
 class G2OpenMaskWhileUndoWaitsTest {
@@ -133,5 +136,80 @@ class G2OpenMaskWhileUndoWaitsTest {
         val before = undoWaiting(c, l)
         LayerOps.addMask(c, l, fromSelection = false)
         assertMaskAfterTheUndo(c, l, before, steps)
+    }
+
+    /**
+     * Gate 2 review: [l] gets a mask ("Add mask"), then its pixels are painted, the stroke's tiles
+     * go to the swap and undo is asked twice: the paint's undo waits for its tiles and the Add
+     * mask's undo is queued behind it, so the layer still holds the mask (the panel still offers
+     * Delete, Apply and Invert mask). Returns the pixels before the paint.
+     */
+    private fun maskUndoQueued(c: EditorController, l: Layer): IntArray {
+        c.addMask(l, fromSelection = false)
+        c.setEditingMask(l, false)
+        A8Kit.drain()
+        assertEquals("Add mask", A8Kit.newestStep(c).label)
+        val before = undoWaiting(c, l)
+        c.undo()
+        assertTrue("the Add mask's undo is queued: the mask is still in the layer", l.hasMask)
+        return before
+    }
+
+    /**
+     * Both undos applied before the mask operation looked at the layer: no mask is left, so it
+     * changed nothing and added no step, and the redo side still holds the Add mask and the paint.
+     */
+    private fun assertBothUndosAndNothingElse(c: EditorController, l: Layer, before: IntArray, stepsBeforeTheMask: Int) {
+        assertNull("the paint's undo applied", c.activating)
+        assertArrayEquals("the undone pixels", before, A8Kit.pixelsOf(l).first)
+        assertFalse("the Add mask's undo took the mask away", l.hasMask)
+        assertEquals("no step was added", stepsBeforeTheMask, c.undoManager.undoCount)
+        assertEquals("the redo side still holds the Add mask", "Add mask", c.undoManager.redoLabel)
+        c.redo()
+        A8Kit.drain()
+        assertTrue("redo puts the mask back", l.hasMask)
+        assertTrue("the mask as it was added", A8Kit.pixelsOf(l).second!!.all { it == -1 })
+        assertArrayEquals(before, A8Kit.pixelsOf(l).first)
+        assertEquals("the paint still to redo", "Paint", c.undoManager.redoLabel)
+    }
+
+    @Test
+    fun deleteMaskWhileTheUndoOfAddMaskWaitsAddsNoStep() {
+        val c = editor()
+        val l = c.doc.layers[2]
+        val steps = c.undoManager.undoCount
+        val before = maskUndoQueued(c, l)
+        LayerOps.deleteMask(c, l)
+        assertBothUndosAndNothingElse(c, l, before, steps)
+    }
+
+    @Test
+    fun applyMaskWhileTheUndoOfAddMaskWaitsBakesNothingIn() {
+        val c = editor()
+        val l = c.doc.layers[2]
+        val steps = c.undoManager.undoCount
+        val before = maskUndoQueued(c, l)
+        LayerOps.applyMask(c, l)
+        assertBothUndosAndNothingElse(c, l, before, steps)
+    }
+
+    @Test
+    fun invertMaskWhileTheUndoOfAddMaskWaitsInvertsNothing() {
+        val c = editor()
+        val l = c.doc.layers[2]
+        val steps = c.undoManager.undoCount
+        val before = maskUndoQueued(c, l)
+        LayerOps.invertMask(c, l)
+        assertBothUndosAndNothingElse(c, l, before, steps)
+    }
+
+    @Test
+    fun theControllersInvertMaskWhileTheUndoOfAddMaskWaitsInvertsNothing() {
+        val c = editor()
+        val l = c.doc.layers[2]
+        val steps = c.undoManager.undoCount
+        val before = maskUndoQueued(c, l)
+        c.invertMask(l)
+        assertBothUndosAndNothingElse(c, l, before, steps)
     }
 }

@@ -165,6 +165,9 @@ class EditorSession(private val app: BrushworkApp, val projectId: String) {
                 // a refused admission is an OutOfMemoryError, caught below. The open's ms go to EngineStats.
                 val started = System.nanoTime()
                 // v1.10 Gate 2 (O2): "Opening layer n of m" once the open has run 1 s, gone before [state] changes.
+                // Gate 2 review: no delay shows it from the first layer on (set before the load
+                // starts, so it never depends on when the line's coroutine first runs).
+                openingShown = OpeningLine.delayMs <= 0L
                 val line = launch {
                     delay(OpeningLine.delayMs)
                     openingShown = true

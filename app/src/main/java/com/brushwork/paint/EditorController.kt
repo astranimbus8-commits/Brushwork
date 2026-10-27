@@ -2527,8 +2527,11 @@ class EditorController(
     // endregion
 
     fun deleteMask(layer: Layer = activeLayer) {
-        val m = layer.mask ?: return
         editScope {
+            // v1.10 Gate 2 review (G2-O-a): the mask is read once an undo still waiting for its
+            // tiles, and the undos queued behind it, applied (editScope settles them): when one of
+            // them took the mask away, nothing is left to delete and no step is added.
+            val m = layer.mask ?: return@editScope
             // An editable mask's spec goes with its mask (I1), in the same step.
             val dataBefore = layer.dataSnapshot()
             val action = MaskChangeAction(layer, m, null, "Delete mask")
@@ -2548,10 +2551,12 @@ class EditorController(
     fun applyMask(layer: Layer = activeLayer) {
         // v1.10 (A11, design 2.3): the layer admits the write first; the mask is read through
         // its store (a parked mask draws from its tiles, as the canvas shows it) and goes into
-        // the step by reference.
-        val m = layer.maskPixels ?: return
-        if (!layer.admitWrite()) { toast(LayerBudgetV110.firstWriteRefusal()); return }
+        // the step by reference. v1.10 Gate 2 review (G2-O-a): both are read once an undo still
+        // waiting for its tiles, and the undos queued behind it, applied (editScope settles them),
+        // so a mask such an undo took away is never baked in nor brought back by this step's undo.
         editScope {
+            val m = layer.maskPixels ?: return@editScope
+            if (!layer.admitWrite()) { toast(LayerBudgetV110.firstWriteRefusal()); return@editScope }
             val rec = beginEdit(layer, EditTarget.CONTENT)
             rec.touchAll()
             compositor.drawMaskPixels(Canvas(layer.bitmap), layer, BitmapUtils.newMaskApplyPaint())
@@ -2610,8 +2615,11 @@ class EditorController(
     }
     // endregion
 
-    fun invertMask(layer: Layer = activeLayer) {
-        val m = layer.mask ?: return
+    fun invertMask(layer: Layer = activeLayer) = editScope<Unit> {
+        // v1.10 Gate 2 review (G2-O-a): checked once an undo still waiting for its tiles, and the
+        // undos queued behind it, applied (editScope settles them; the edit's recorder would
+        // otherwise settle them after this check and find no mask to invert).
+        if (!layer.hasMask) return@editScope
         editWholeLayer(layer, "Invert mask", EditTarget.MASK) { bmp ->
             val src = BitmapUtils.copy(bmp)
             val invert = android.graphics.ColorMatrix(

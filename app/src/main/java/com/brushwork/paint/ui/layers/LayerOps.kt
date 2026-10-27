@@ -518,13 +518,19 @@ object LayerOps {
     fun invertMask(c: EditorController, layer: Layer) {
         if (!layer.hasMask || !c.checkEditable(layer)) return
         commitPendingWork(c)
-        // An editable mask stays editable: its spec is inverted (v1.5), not its pixels.
-        val spec = layer.maskSpec
-        if (spec != null) {
-            guardMemory(c, "Invert mask") { MaskEdits.apply(c, layer, spec.copy(invert = !spec.invert), "Invert mask") }
-            return
+        // v1.10 Gate 2 review (G2-O-a): one edit scope, so an undo still waiting for its tiles,
+        // and the undos queued behind it, apply before the mask and its spec are read (an undone
+        // Add mask is not brought back as a new inverted mask).
+        c.editScope {
+            if (!layer.hasMask) return@editScope
+            // An editable mask stays editable: its spec is inverted (v1.5), not its pixels.
+            val spec = layer.maskSpec
+            if (spec != null) {
+                guardMemory(c, "Invert mask") { MaskEdits.apply(c, layer, spec.copy(invert = !spec.invert), "Invert mask") }
+                return@editScope
+            }
+            guardMemory(c, "Invert mask") { c.invertMask(layer) }
         }
-        guardMemory(c, "Invert mask") { c.invertMask(layer) }
     }
 
     fun setMaskEnabled(c: EditorController, layer: Layer, enabled: Boolean) {

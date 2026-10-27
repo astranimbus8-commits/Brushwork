@@ -37,8 +37,8 @@ import java.util.concurrent.atomic.AtomicInteger
  * (T606 memory) and still makes the layers exactly as the one-band load: the entry order with
  * slow painted entries between fast blank ones and a folder, the active entry FLAT, the others
  * tiled or BLANK, every byte the same; "Opening layer n of m" hears every entry once in order. A
- * damaged later entry and a cancelled open release every store the decoders built and leave no
- * decoder thread behind. The decoder count follows the budget (R >= 2·d·L: one when R < 4·L, two
+ * damaged later entry, a cancelled open and a decoder that cannot start release every store the
+ * decoders built and leave no decoder thread behind. The decoder count follows the budget (R >= 2·d·L: one when R < 4·L, two
  * below 6·L, three below 8·L), one at Classic and never more than the pixel entries.
  */
 @RunWith(RobolectricTestRunner::class)
@@ -52,6 +52,7 @@ class G2OpenParallelDecodeTest {
     @After
     fun decoders() {
         LayerEntries.maxDecoders = LayerEntries.DECODERS
+        LayerEntries.startDecoder = { it.start() }
     }
 
     /**
@@ -147,6 +148,44 @@ class G2OpenParallelDecodeTest {
         }
         assertTrue("the open was cancelled", job.isCancelled)
         assertEquals("it stopped before the 4th layer", 3, heard.get())
+        assertEquals("no decoder is left", emptyList<String>(), alive())
+        assertEquals("every tile built is released", tilesBefore, EngineConfig.budget.ledger.of(LedgerCategory.TILES))
+        assertEquals("every reservation (the bands) is back", nativeBefore, EngineConfig.budget.ledger.native)
+    }
+
+    /**
+     * Gate 2 review: the 3rd decoder cannot start (a phone out of threads: `Thread.start` throws
+     * OutOfMemoryError, which the session says as "Not enough memory to open this artwork"). The
+     * open fails with it, the 2 decoders already running are stopped and joined, and everything
+     * they built is released.
+     */
+    @Test
+    fun aDecoderThatCannotStartLeavesNoDecoderAndNoStoreBehind() {
+        project("nothread")
+        val tilesBefore = EngineConfig.budget.ledger.of(LedgerCategory.TILES)
+        val nativeBefore = EngineConfig.budget.ledger.native
+        val started = AtomicInteger()
+        val heard = AtomicInteger()
+        LayerEntries.startDecoder = { t ->
+            if (started.incrementAndGet() == 3) {
+                // Only once the running decoders built tiles (entry 0 is painted), so the release is real.
+                val until = System.currentTimeMillis() + 10_000L
+                while (EngineConfig.budget.ledger.of(LedgerCategory.TILES) <= tilesBefore) {
+                    if (System.currentTimeMillis() > until) throw AssertionError("the first decoders built no tile in 10 s")
+                    Thread.sleep(1)
+                }
+                throw OutOfMemoryError("pthread_create failed")
+            }
+            t.start()
+        }
+        try {
+            load("nothread") { n, _ -> heard.set(n) }
+            fail("an open whose decoders could not start returned a document")
+        } catch (e: OutOfMemoryError) {
+            assertEquals("pthread_create failed", e.message)
+        }
+        assertEquals("the 3rd start failed", 3, started.get())
+        assertEquals("no layer was made", 0, heard.get())
         assertEquals("no decoder is left", emptyList<String>(), alive())
         assertEquals("every tile built is released", tilesBefore, EngineConfig.budget.ledger.of(LedgerCategory.TILES))
         assertEquals("every reservation (the bands) is back", nativeBefore, EngineConfig.budget.ledger.native)

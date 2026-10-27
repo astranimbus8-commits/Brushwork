@@ -92,7 +92,11 @@ class G2OpenPhoneOpenTimingTest {
         const val H = 2408
         const val LAYERS = 20
 
-        /** A regression guard of the whole open (PC); the probe's point is the printed line. */
-        const val BUDGET_MS = 1000.0
+        /**
+         * The whole open on the PC, from Q4 (R13: 200 phone layers in 6 s on the T606): 30 ms a
+         * layer there, 5 ms on the PC (x 6), 100 ms for these 20. Gate 2 review: it was 1000 ms, a
+         * guard the one-decoder open of before (165 ms on a quiet PC) also passed.
+         */
+        const val BUDGET_MS = 100.0
     }
 }
