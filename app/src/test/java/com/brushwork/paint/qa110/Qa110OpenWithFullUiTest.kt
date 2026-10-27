@@ -1,6 +1,8 @@
 package com.brushwork.paint.qa110
 
+import com.brushwork.paint.EditorSession
 import com.brushwork.paint.OpenFailedScreen
+import com.brushwork.paint.OpeningScreen
 import com.brushwork.paint.qa19.Qa19Ui
 import com.brushwork.paint.storage.ClassicOpen
 import com.brushwork.paint.ui.common.EngineLabels110
@@ -19,6 +21,9 @@ import org.robolectric.annotation.Config
  * 2.0 (I27). When Classic refused a big artwork for a reason other than memory, the refusal comes
  * with the "Open with Full storage" button above "Back to gallery", and a tap on it reaches the
  * session; when the reason is memory there is no such button. No text is cut.
+ *
+ * v1.10 Gate 2 (lane open, O2): the open spinner (`OpeningScreen`) shows "Opening layer n of m"
+ * under it while the session reports progress, uncut at every width and scale, and nothing else.
  */
 // Own sandbox (the test recomposer policy and paused Choreographer are global).
 @RunWith(RobolectricTestRunner::class)
@@ -57,6 +62,14 @@ class Qa110OpenWithFullUiTest {
                             Qa19Ui.click(BACK, exact = true)
                             assertEquals("$where, for memory: back to the gallery", 1, back)
                             assertEquals("$where, for memory", 1, taps)
+
+                            // v1.10 Gate 2 (lane open, O2): the open spinner with "Opening layer n of m" under it
+                            // (a big artwork after 1 s), and without it (an open shorter than that).
+                            h.show(fontScale = scale) { OpeningScreen(EditorSession.OpenProgress(437, 500)) }
+                            assertShown("$where, opening", EngineLabels110.OPENING_LAYERS.format(437, 500))
+                            Qa19Ui.assertNoTextOverflow("$where, opening")
+                            h.show(fontScale = scale) { OpeningScreen(null) }
+                            assertFalse("$where, a short open: no line", Qa19Ui.has(EngineLabels110.OPENING_LAYERS.format(437, 500), exact = true))
                         }
                     }
                 }

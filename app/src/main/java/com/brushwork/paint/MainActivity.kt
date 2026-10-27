@@ -16,6 +16,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -23,6 +24,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.brushwork.paint.fonts.FontOpenIntent
 import com.brushwork.paint.ui.common.EngineLabels110
@@ -65,7 +67,7 @@ private fun AppRoot(app: BrushworkApp) {
             val exit = { app.closeEditor { openId = null } }
             BackHandler { exit() }
             when (val st = session.state) {
-                is EditorSession.State.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+                is EditorSession.State.Loading -> OpeningScreen(session.opening.collectAsState().value)
                 is EditorSession.State.Failed -> OpenFailedScreen(
                     message = st.message,
                     offersFullStorage = session.offersFullStorage,
@@ -78,6 +80,30 @@ private fun AppRoot(app: BrushworkApp) {
                     onSaveNow = { session.saveNow() },
                 )
             }
+        }
+    }
+}
+
+/**
+ * The open spinner (v1.0) and, v1.10 Gate 2 (lane open, O2; design 4.4 A11 step 7), under it
+ * "Opening layer n of m" ([EngineLabels110.OPENING_LAYERS]) while [progress] is not null: an
+ * open that has run 1 s (`EditorSession.opening`), updated as the layers decode.
+ */
+@Composable
+internal fun OpeningScreen(progress: EditorSession.OpenProgress?) {
+    Column(
+        Modifier.fillMaxSize().padding(24.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        CircularProgressIndicator()
+        if (progress != null) {
+            Text(
+                EngineLabels110.OPENING_LAYERS.format(progress.layer, progress.of),
+                color = MaterialTheme.colorScheme.onBackground,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(top = 16.dp),
+            )
         }
     }
 }
