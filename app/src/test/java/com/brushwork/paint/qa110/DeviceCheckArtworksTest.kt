@@ -28,7 +28,8 @@ import kotlin.math.abs
  * takes on the phone: the gallery's "New from SVG or PDF" sizes the artwork from the file's
  * Brushwork data ([GalleryImports.pdfPayloadSpec]) and the editor restores every layer into it
  * ([ExchangeUiState.importUri] with the gallery's pending request), with the names, blend modes
- * and pixels written.
+ * and pixels written. The device checks' table and ARCHITECTURE's paragraph describe the same
+ * four files.
  */
 @RunWith(RobolectricTestRunner::class)
 class DeviceCheckArtworksTest {
@@ -57,6 +58,30 @@ class DeviceCheckArtworksTest {
         for (spec in listOf(DeviceCheckArtworks.CHECK_200, DeviceCheckArtworks.CHECK_500, DeviceCheckArtworks.CHECK_4000X5000_50)) {
             assertEquals(spec.name, LayerBlendMode.NORMAL, DeviceCheckArtworks.blendOf(spec, spec.layers))
         }
+    }
+
+    /** The user's table and the lead's paragraph name the files the generator writes, at its sizes. */
+    @Test
+    fun theDocsDescribeTheGeneratedFiles() {
+        val checks = docFile("docs/device-checks-2.0.md").readText(Charsets.UTF_8)
+        val architecture = docFile("docs/ARCHITECTURE.md").readText(Charsets.UTF_8)
+        for (spec in DeviceCheckArtworks.ALL) {
+            val row = "| `${spec.fileName}` | ${spec.layers} painted layers at ${spec.width} × ${spec.height}"
+            assertTrue("device-checks-2.0.md has the row \"$row\"", checks.contains(row))
+            assertTrue("ARCHITECTURE.md names ${spec.fileName}", architecture.contains("`${spec.fileName}`"))
+        }
+        val blend = DeviceCheckArtworks.CHECK_100_BLEND
+        val alternate = "layers ${blend.blendAbove + 1} to ${blend.layers} alternate Multiply and Screen"
+        assertTrue("device-checks-2.0.md says \"$alternate\"", checks.contains(alternate))
+        assertTrue("the generator's switch", architecture.contains("BW_DEVICE_ARTWORKS"))
+    }
+
+    /** [path] in the repository, found above the test JVM's working directory (the app module). */
+    private fun docFile(path: String): File {
+        val start = File(System.getProperty("user.dir")).absoluteFile
+        val file = generateSequence(start) { it.parentFile }.map { File(it, path) }.firstOrNull { it.isFile }
+        assertNotNull("$path not found above $start", file)
+        return file!!
     }
 
     @Test

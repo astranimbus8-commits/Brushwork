@@ -2705,9 +2705,11 @@ above. Each paragraph names what F1 provides and which area filled the rest.
 file (P3 order 1, the EVICTED state's callers and reload) is **not wired** in 2.0: the code exists
 (`NativeWatch.evict`, `reload`) but nothing calls it, so no layer becomes EVICTED in the app, and
 at FULL the swap store is what moves cold tiles out of memory (A10 LR2, deferred past 2.0). On
-the T606 (4 GB, J = 512 MiB, R about 1.19 GB) a 1080 x 2408 artwork holds 84 painted layers at
-CLASSIC, more at TILES, and up to the 10,000 guard at FULL as free storage allows; the largest
-canvas is about 6400 x 6400 (`CanvasCeilingTest`).
+the T606 (4 GB, J = 512 MiB) a 1080 x 2408 artwork holds 84 painted layers at CLASSIC at design
+2.15's R = 1100 MB (`MemoryBudgetFormulaTest.classicCountsMatchTheDesignTable`) and about 93 at
+the test preset's R of about 1.19 GB (0.30 x totalMem, `MemoryPreset.T606`), more at TILES, and up
+to the 10,000 guard at FULL as free storage allows; the largest canvas is about 6100 x 6100 at
+R = 1100 MB and 6400 x 6400 at the preset (`CanvasCeilingTest`).
 
 **Levels and modes (J1, I31).** The user picks `LayerStorageMode` (AUTOMATIC, the default; FULL;
 CLASSIC) in `AppSettings.layerStorageMode`; the engine runs an `EngineLevel`. CLASSIC is stage S1:
@@ -2746,8 +2748,9 @@ the 10,000 guard and the store's room (`noFixedLimit`: the panel shows "n" alone
 dialog "No fixed limit"), the refusal texts, and `GovernorPolicyV110.trimUndo`. A10: while
 `NativeWatch.refusingNewLayers` holds, `MemoryBudget.admitNative` refuses `NativePurpose.LAYER`
 before the ledger is asked, so no layer becomes a new full-size painted layer
-(`EngineLabels110.PAINT_REFUSED`). `AndroidMemoryProbe.attach` has no caller on main: the probe
-reads through the process' current application (a lead request).
+(`EngineLabels110.PAINT_REFUSED`). `AndroidMemoryProbe.attach` has no caller on main (a call
+from `BrushworkApp.onCreate` is a lead request): the probe reads through the process' current
+application (`ActivityThread.currentApplication`).
 
 **States and residency (P1-P6, J6, I29).** A layer is FOLDER (`FolderPixels`), BLANK
 (`BlankPixels`, 0 bytes until its first write), FLAT (`FlatPixels`, one bitmap), PARKED
@@ -4309,7 +4312,10 @@ asynchronous activation (`EditorController.activating`) holds the canvas for 250
 **`EngineStats` (design 3.3 and 7).** Rings of the last 50 values per `EngineStat`, in memory only;
 `EngineStats.summary` gives each ring's p50 and p95 for Copy details and the Details list. The
 chrome feeds the UI frames from the window's frame metrics on a `frame-metrics` thread, tagged
-stroke, panel scroll or other. Under Robolectric nothing is kept unless a test sets
+stroke, panel scroll or other. Nothing on main calls `EngineStats.panelScrolled()` (an open gap
+at Gate 2: the layers panel's scroll should call it), so the panel's scroll frames are tagged other
+and `FRAME_PANEL` stays empty; device check Q2 then reads `FRAME_OTHER`. Under Robolectric
+nothing is kept unless a test sets
 `keepUnderRobolectric`.
 
 **Read-ahead (step 8, cut 1; design 2.8, Q5).** `SwapReadAhead` (in `SlabSwapStore.kt`), run by
@@ -6539,8 +6545,12 @@ A failure is rerun once. A second failure is a real one, recorded with the runne
 budget is never loosened.
 
 **Device checks.** `docs/device-checks-2.0.md` is what the user runs on the T606 with the
-release (design 7): engine checks Q1-Q13, each with its budget and the ring to read from Settings
-> Layer storage > Copy details, and feel checks FC1-FC8. Q8 tells the user it may miss: the
+release (design 7): engine checks Q1-Q13, each with its budget and the ring to read from
+Settings, Layer storage, Copy details, and feel checks FC1-FC8. Q2 reads `FRAME_OTHER` when
+`FRAME_PANEL` is empty (nothing calls `EngineStats.panelScrolled()`, the A10 block). FC8 brings
+the artworks to the 1.9 phone through the backup folder ("Back up now", then 1.9's "Restore
+artworks…"), so 1.9 opens the 2.0 project files themselves (a share file would be imported,
+not opened). Q8 tells the user it may miss: the
 composite of 100 layers measured 3.97 ms on the PC at the A9 merge (about 24 ms x6) against the
 15 ms target (`StrokeFrame100PlainTimingTest` keeps its 6.0 ms PC budget, an A9 deviation). The
 check artworks come from `qa110/DeviceCheckArtworks.kt` (Gate 2, lane docs). Its

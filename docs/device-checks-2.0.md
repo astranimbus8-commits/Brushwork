@@ -44,8 +44,8 @@ Import each file once. The checks then open the artwork from the gallery.
 ## How to read the numbers
 
 Brushwork keeps the times of its last 50 layer switches, opens, saves, stroke frames and so on in
-memory. To read them, open an artwork, tap the ⋯ button in the top bar, then **Settings** at the
-end of the menu, then **Layer storage**:
+memory. To read them, open an artwork, tap the ⋯ button ("More options") in the top bar, then
+**Settings** at the end of the menu, then **Layer storage**:
 - **Copy details** copies everything as text. Paste it into your message with the check's number.
 - **Details** shows the same text on screen.
 
@@ -57,7 +57,7 @@ most that. The names are:
 - `COMPOSITE`: drawing the canvas for one stroke frame
 - `INPUT_TO_COMPOSITE`: from your finger to the canvas
 - `FRAME_STROKE`, `FRAME_PANEL`, `FRAME_OTHER`: screen frames while painting, while scrolling the
-  layers panel, and otherwise
+  layers panel, and otherwise (2.0 may count the scrolling frames as `FRAME_OTHER`; see Q2)
 - `LEDGER_PEAK`: the most memory the layers took
 
 The numbers are lost when the app closes, and a new start begins with none. So before each
@@ -69,7 +69,7 @@ the check, before you start the next one.
 | # | Check | Steps | Pass |
 |---|---|---|---|
 | Q1 | The automatic check: result and time | Install 2.0 over 1.9. Open the gallery and wait 10 s. Open an artwork, then Settings > Layer storage. Copy details. Then swipe the app away within 1 s of the next gallery start, and start it again. | The subtitle reads "Automatic: Full" ("Automatic: Full, without storage swap" is accepted when free storage is under 2 GB). The "Ran:" line shows at most **3 s** (3000 ms). The "Running now:" line shows R between **800 and 1,400 MiB**. No notice shows in the gallery. The swiped check runs again by itself at the next start, and the subtitle stays "Automatic: Full". |
-| Q2 | 500 layers at phone size | Open `check-500`. Scroll the layers panel from top to bottom and back. Add one layer. Paint one stroke. Save (go back to the gallery). | `OPEN` at most **15 s**; while it opens, the line "Opening layer n of m" under the spinner counts up. `FRAME_PANEL` p95 at most **17 ms**. Every thumbnail placeholder is filled within 2 s after the scrolling stops. Layer 501 is added with no refusal. `SAVE_LAYER` at most **300 ms**. |
+| Q2 | 500 layers at phone size | Open `check-500`. Scroll the layers panel from top to bottom and back. Copy details at once, before you add a layer. Add one layer. Paint one stroke. Save (go back to the gallery). Open the artwork again and copy details. | `OPEN` at most **15 s**; while it opens, the line "Opening layer n of m" under the spinner counts up. In the first copy, the scrolling frames have a p95 of at most **17 ms**: read `FRAME_PANEL`, or `FRAME_OTHER` when there is no `FRAME_PANEL` line (a missing `FRAME_PANEL` line is not a fail). Every thumbnail placeholder is filled within 2 s after the scrolling stops. Layer 501 is added with no refusal. In the second copy, `SAVE_LAYER` at most **300 ms**. |
 | Q3 | 200 layers at phone size | Open `check-200`. Paint one stroke on each of 10 layers spread through the stack. Add 10 layers. | No refusal. The layers panel count reads "210". "Preparing the layer" never shows. |
 | Q4 | Open and save | Close `check-200` and open it again. Paint one stroke and save. Then paint for 2 minutes, through at least one autosave. | The reopen takes at most **6 s** (`OPEN`), with "Opening layer n of m" under the spinner. `SAVE_LAYER` at most **300 ms**. `FRAME_STROKE` p95 at most **20 ms** while the autosave runs. |
 | Q5 | Layer switch | In `check-200`, tap 20 different layers. Copy details. Swipe the app away and start it again. In `check-4000x5000-50`, tap 10 layers you have not touched since the open. Copy details. | At phone size `SWITCH` p95 at most **60 ms**, and "Preparing the layer" never shows. At 4000 × 5000 `SWITCH` p95 at most **600 ms**; the small ring with "Preparing the layer" may show after a quarter of a second. |
@@ -95,7 +95,7 @@ There is no number to read here. Answer yes or no, with a sentence when no.
 | FC5 | Select about 500 points of a path and drag them near a guide. Then select a few sharp and a few smooth points and tap the corner button on the pill. Select a Polyline point and long-press the same place. | The group snaps to the guide, shows the guide line and does not lag. The mixed points all become sharp, and one Undo turns them back. On the Polyline the corner button is greyed in the same place, and its name reads "Polyline points are always sharp". |
 | FC6 | Select a shape, tap "Edit", change it, and tap ✓. Select a path with a gradient fill, tap the More button of the object bar, then "Turn into shape". Then Undo. | Edit opens the Shape tool, and you stay in it after ✓. Turn into shape opens the Shape tool with a message that names the gradient change ("Gradient fill became its first color"). The message shows for about 10 seconds, or until you close it, and its "Undo" brings the path back, as one Undo does. |
 | FC7 | Set the phone's largest font size. Open a shape with points selected, then open the object bar. | The pill's color and corner buttons can be seen, and nothing overlaps. The object bar's labels can be read. |
-| FC8 | Optional, with a second phone that has 1.9: open a 2.0 artwork with few layers, then `check-200`. | The first one opens. The second one shows "This artwork was saved by a newer version of Brushwork". |
+| FC8 | Optional, with a second phone that has 1.9. On the 2.0 phone, make a new artwork with 3 layers and keep the imported `check-200`. In an artwork's Settings, under Backup, tap "Choose backup folder", pick a folder such as Documents/Brushwork, then tap "Back up now". Copy that folder to the 1.9 phone (with a computer, for example). On the 1.9 phone, in an artwork's Settings under Backup, tap "Restore artworks…", pick the copied folder and restore both artworks (if 1.9 already uses a backup folder, tap "Change folder", pick the copied folder, then "Restore them"). Open both in 1.9. | The 3-layer artwork opens. `check-200` shows "This artwork was saved by a newer version of Brushwork", and 1.9 does not close. |
 
 ## What to send back
 
