@@ -96,6 +96,7 @@ import com.brushwork.paint.ui.common.FitText
 import com.brushwork.paint.ui.common.FolderLabels
 import com.brushwork.paint.ui.common.SavedSelectionLabels
 import com.brushwork.paint.ui.common.V17Tags
+import com.brushwork.paint.ui.common.scale1Size
 import com.brushwork.paint.ui.editor.EditorIcons
 import com.brushwork.paint.ui.theme.IbisColors
 import com.brushwork.paint.ui.theme.IbisDims
@@ -939,7 +940,9 @@ private fun BadgeBox(description: String, modifier: Modifier, content: @Composab
 @Composable
 private fun LetterBadge(letter: String, description: String, modifier: Modifier) =
     BadgeBox(description, modifier) {
-        Text(letter, color = Color.White, fontSize = 10.sp, lineHeight = 12.sp, fontWeight = FontWeight.Bold)
+        // v1.10 Gate 2 (I27): the badge stays 16 dp high at every font scale, so its letter keeps
+        // its font scale 1 size (at 2.0 a text layer's "T" grew past the badge).
+        Text(letter, color = Color.White, fontSize = scale1Size(10.sp), lineHeight = scale1Size(12.sp), fontWeight = FontWeight.Bold)
     }
 
 /** "T" badge of an editable text layer (row [n]). */
@@ -971,9 +974,10 @@ private fun FrameBadgeView(frame: FrameBadge, description: String, modifier: Mod
     BadgeBox(description, modifier) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Filled.Link, contentDescription = null, tint = Color.White, modifier = Modifier.size(10.dp))
-            Text(frame.text, color = Color.White, fontSize = 9.sp, lineHeight = 11.sp, fontWeight = FontWeight.Bold)
+            // Like [LetterBadge]'s letter: font scale 1 sizes in the 16 dp badge (I27).
+            Text(frame.text, color = Color.White, fontSize = scale1Size(9.sp), lineHeight = scale1Size(11.sp), fontWeight = FontWeight.Bold)
             if (frame.overset) {
-                Text("+", color = DANGER, fontSize = 11.sp, lineHeight = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.background(Color.White).padding(horizontal = 1.dp))
+                Text("+", color = DANGER, fontSize = scale1Size(11.sp), lineHeight = scale1Size(11.sp), fontWeight = FontWeight.Bold, modifier = Modifier.background(Color.White).padding(horizontal = 1.dp))
             }
         }
     }
