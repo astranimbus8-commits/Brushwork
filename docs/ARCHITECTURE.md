@@ -4154,7 +4154,9 @@ epochs, coldest first (`NativeWatch.evictionOrder`). The layer then holds an EVI
 `TiledPixels` (`evictedTo`, no tiles, no `pixelGeneration` change) and comes back through
 `NativeWatch.reload` (the whole Deflate stream, until A11's streamed load). Nothing calls it yet:
 nothing keeps a layer's saved-file reference after a save (A11), the residency policy (A8)
-neither evicts nor reloads, and `TileOps` refuses an EVICTED store (LeadRequest).
+neither evicts nor reloads, and `TileOps` refuses an EVICTED store (deferred to Gate 2 at the
+A10 merge: the callers in A8's policy, A11's saved-file references and the EVICTED reload in
+`TileOps` and the readers are cross-area; nothing makes a layer EVICTED in the app meanwhile).
 
 **The activation ring (design 2.7).** `EngineEditorChrome` shows a small ring with
 `EngineLabels110.PREPARING_LAYER` in the pill slot (`ChromeLayout.pillTop`) when a layer's
@@ -4178,11 +4180,19 @@ asynchronous activation (`EditorController.activating`) holds the canvas for 250
   `EngineLabels110.LMK_NOTICE` once.
 - `NativeWatch.tick` every 2 s while the editor is started (the memory read off main): under
   `threshold` + 256 MiB available it reports critical (the residency's and the governor's
-  `pressure`) and `refusingNewLayers` holds until `threshold` + 512 MiB (the layer admission does
-  not read it yet: LeadRequest); a ledger drift over 256 MiB from the native heap asks for one GC;
-  each tick records `EngineStat.LEDGER_PEAK`. The marker and the watch run in `EngineEditorChrome`,
-  with the shown editor's lifecycle, not in `EditorSession`'s region `v110-A10 session` as the
-  design's region table has them: the session is made before the editor shows and has no lifecycle.
+  `pressure`) and `refusingNewLayers` holds until `threshold` + 512 MiB; a ledger drift over 256
+  MiB from the native heap asks for one GC; each tick records `EngineStat.LEDGER_PEAK`. The marker
+  and the watch run in `EngineEditorChrome`, with the shown editor's lifecycle, not in
+  `EditorSession`'s region `v110-A10 session` as the design's region table has them: the session
+  is made before the editor shows and has no lifecycle.
+- The refusal's reader (the A10 merge): while `refusingNewLayers` holds, `MemoryBudget.admitNative`
+  refuses `NativePurpose.LAYER` before the ledger is asked (every other purpose as before), so no
+  blank, parked or evicted layer becomes a new full-size painted layer (`Layer.admitWrite`,
+  `Document.materialize`, the flat activation, whose OutOfMemoryError A8 already handles by keeping
+  the layer parked), and `LayerBudgetV110.firstWriteRefusal` says `EngineLabels110.PAINT_REFUSED`
+  (for memory, also at FULL with a store). It ends with the watch (`NativeWatch.reset` in the
+  chrome's `finally`) and when an `EditorSession` is made (region `v110-A10 session`, before the
+  engine session opens and the load admits its layers). Test: `NativeWatchRefusesNewLayersTest`.
 - `CrashLog` adds an Engine line to each crash report: the level, R, the native bytes the ledger
   holds, the step-down and the open artwork's layer count.
 
@@ -4235,8 +4245,8 @@ watch and step-down, the pressure net, the stats rings, the low-storage message,
 neighbours, waits, drops, trims, refusals, pause and faults in `ReadAheadNeighboursTest`, and in
 the real editor with its lifecycle in `ReadAheadEditorUiTest`) and `Soak500LayersTest`: random
 edits at FULL with park chaos and swap, replayed at CLASSIC and compared bit for bit at each
-checkpoint (a small plan in the suite; the 500-layer, 20-minute plan under `bw.testSet = soak`,
-once `-PsoakOnly` includes it: LeadRequest). After the close the tile ledger and the swap are back
+checkpoint (a small plan in the suite; the 500-layer, 20-minute plan under `bw.testSet = soak`:
+`-PsoakOnly`, the nightly soak job, runs it beside `SoakHarnessTest` since the A10 merge). After the close the tile ledger and the swap are back
 to where they started. With A8 (undo on tiles) and A11 (canvas operations on stores, with pins)
 merged, `PRE_A8_A11_DROPS` is false: the soak pins nothing, and at the close every store replaced
 during the run (undo steps hold them until then) and every store still held must have let go of
