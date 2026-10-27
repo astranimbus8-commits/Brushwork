@@ -138,7 +138,9 @@ android {
                 val ci = System.getenv("CI") != null
                 val timingOnly = project.hasProperty("timingOnly")
                 // v1.9 (design 2.2, 5.5): -PsoakOnly runs SoakHarnessTest alone, serially (the
-                // nightly soak job), whatever its category.
+                // nightly soak job), whatever its category. v1.10 (design 6.5, the A10 merge): with
+                // Soak500LayersTest, which runs its NIGHTLY plan there (bw.testSet "soak": about 500
+                // layers for 20 minutes at FULL, then the CLASSIC replay).
                 val soakOnly = project.hasProperty("soakOnly")
                 // v1.9 gate 1 (LA1, design 2.7): -Pbench runs the P0 proxy bench (qa19/P0ProxyBench)
                 // alone, serially. Every CI run leaves it out, so the CI counts never include it;
@@ -165,6 +167,7 @@ android {
                 }
                 if (soakOnly) {
                     it.filter.includeTestsMatching("*.SoakHarnessTest")
+                    it.filter.includeTestsMatching("*.Soak500LayersTest")
                     it.filter.isFailOnNoMatchingTests = false
                 }
                 if (bench) {
