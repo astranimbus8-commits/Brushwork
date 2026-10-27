@@ -120,7 +120,12 @@ android {
                 // Each test class with its own instrumentedPackages gets a Robolectric sandbox, and
                 // core/Parallel's threads keep evicted sandboxes reachable: one JVM for the whole
                 // suite (~2650 tests) runs out of memory, so start a fresh one every 40 classes.
-                it.forkEvery = 40
+                // v1.10 lead (CI fix after A10's merge): each sandbox also unpacks Robolectric's native
+                // runtime (about 200 MB of fonts, ICU data and the library) into a temporary folder of
+                // its own, deleted only when its JVM exits. A JVM of 40 classes held about 8 GB, the two
+                // JVMs of a CI shard about 16 GB, and unit-full shard 1 filled the runner's disk until the
+                // runner died. On CI a fresh JVM every 12 classes keeps both under about 5 GB.
+                it.forkEvery = if (System.getenv("CI") != null) 12 else 40
                 // v1.10 lead (CI fix at A8's merge): the ubuntu-26.04 runners keep /tmp in a small
                 // tmpfs with a quota, and every fork above unpacks Robolectric's native runtime (about
                 // 200 MB) there, beside each test's app folders: the shards of the first run on that
