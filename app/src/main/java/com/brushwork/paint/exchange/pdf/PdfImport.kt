@@ -13,7 +13,6 @@ import com.brushwork.paint.exchange.ImportTarget
 import com.brushwork.paint.exchange.NewLayer
 import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.Layer
-import com.brushwork.paint.model.recycleUnlessShared
 import java.util.concurrent.CancellationException
 import kotlin.math.max
 import kotlin.math.min
@@ -69,6 +68,8 @@ object PdfImport {
         try {
             for (index in pages.take(target.room)) {
                 if (cancelled()) throw CancellationException("Import stopped")
+                // v1.10 Gate 2 (O3): the page before is parked before this one renders.
+                ImportLayers.parkNewest(out)
                 val page = renderPage(r, index, target, transparent)
                 val bmp = BitmapUtils.createLayerBitmap(target.width, target.height)
                 try {
@@ -80,7 +81,8 @@ object PdfImport {
                 out += NewLayer("Page ${index + 1}", bmp)
             }
         } catch (e: Throwable) {
-            out.forEach { it.bitmap.recycleUnlessShared() }
+            // Pages already parked release their tiles (fresh, this thread's alone until the insert).
+            out.forEach { it.recycleBitmaps() }
             throw e
         }
         return out

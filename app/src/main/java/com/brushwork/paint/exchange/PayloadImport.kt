@@ -61,8 +61,13 @@ object PayloadImport {
 
     class Prepared(val layers: List<NewLayer>, val activeIndex: Int, val outcome: ImportOutcome)
 
-    /** Builds the layers of [p] (bottom first) for [target]. Not on the main thread. */
-    fun prepare(p: BrushworkPayload, images: Images, target: ImportTarget): Prepared {
+    /**
+     * Builds the layers of [p] (bottom first) for [target]. Not on the main thread. v1.10 Gate 2
+     * (O3): when [parks], each pixel layer is parked before the next one is rendered
+     * (`ImportLayers.parkNewest`; the last stays FLAT), so the import holds about one layer's
+     * bitmap at a time (masks stay FLAT until the insert parks them).
+     */
+    fun prepare(p: BrushworkPayload, images: Images, target: ImportTarget, parks: Boolean = true): Prepared {
         val place = VectorImport.placement(p.width.toFloat() to p.height.toFloat(), target.width, target.height, fill = false)
         val keep = place == Affine.IDENTITY
         val dropped = LinkedHashMap<String, Int>()
@@ -86,6 +91,8 @@ object PayloadImport {
             var bmp: Bitmap? = null
             var arrayed: RestoredArray? = null
             try {
+                // v1.10 Gate 2 (O3): the pixel layer before is parked before this one renders.
+                if (parks) ImportLayers.parkNewest(out)
                 var vector: VectorContent? = null
                 if (pl.kind == PayloadKind.VECTOR && pl.vector != null) {
                     val sound = sound(pl.vector)
@@ -165,7 +172,8 @@ object PayloadImport {
      */
     fun picture(p: BrushworkPayload, images: Images, target: ImportTarget): Bitmap? {
         if (p.layers.isEmpty() || fitting(p.layers, target.room - 1).size < p.layers.size) return null
-        val prepared = prepare(p, images, target.copy(room = target.room - 1))
+        // Composited at once (every layer FLAT, read below), never parked.
+        val prepared = prepare(p, images, target.copy(room = target.room - 1), parks = false)
         try {
             val doc = Document("picture", "picture", target.width, target.height, p.dpi)
             doc.colorMode = target.colorMode
