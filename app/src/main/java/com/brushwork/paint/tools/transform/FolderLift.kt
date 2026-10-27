@@ -14,13 +14,13 @@ import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.EditTarget
 import com.brushwork.paint.engine.LayerRenderOverride
 import com.brushwork.paint.engine.MultiLayerRenderOverride
+import com.brushwork.paint.engine.budget.LayerBudgetV110
 import com.brushwork.paint.engine.flatBitmapOf
 import com.brushwork.paint.engine.tiles.TileOps
 import com.brushwork.paint.engine.tiles.TiledPixels
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.LayerData
 import com.brushwork.paint.model.LayerTree
-import com.brushwork.paint.ui.common.EngineLabels110
 import com.brushwork.paint.vector.LayerDataTransforms
 import com.brushwork.paint.vector.lift.LiftGeometry
 import kotlin.math.ceil
@@ -116,7 +116,7 @@ internal class FolderLift(
             if (!c.checkUsable(l, allowHidden = true)) return false
             if (l.alphaLocked) { c.toast(alphaLockedMessage(l)); return false }
             // v1.10 (A11, design 2.3): each child is written, so each admits the write first.
-            if (!l.admitWrite()) { c.toast(EngineLabels110.PAINT_REFUSED); return false }
+            if (!l.admitWrite()) { c.toast(LayerBudgetV110.firstWriteRefusal()); return false }
         }
         // Planned before anything changes: an arrayed child that can't take [m] refuses it all.
         val arrays = HashMap<Layer, LayerData>()

@@ -55,6 +55,7 @@ import com.brushwork.paint.engine.UndoAction
 import com.brushwork.paint.engine.UndoManager
 import com.brushwork.paint.engine.ViewTransform
 import com.brushwork.paint.engine.budget.LayerBudgetV110
+import com.brushwork.paint.engine.tiles.BlankPixels
 import com.brushwork.paint.engine.tiles.FolderPixels
 import com.brushwork.paint.engine.live.LiveAdjust
 import com.brushwork.paint.filters.Filter
@@ -1597,19 +1598,25 @@ class EditorController(
     /**
      * [addLayer] whose new layer is set up by [init] (editable data, mask...) before it is
      * inserted, so the step and the tool's re-activation see it complete.
+     *
+     * v1.10 Gate 2 (O5): the new layer is BLANK from the start (`BlankPixels`, 0 bytes until its
+     * first write), at every engine level: no layer-sized bitmap is made and the insert's blank
+     * safety net (`LayerStructure`, region `v110-A7 blank`) has nothing to scan, where it read a
+     * fresh bitmap row by row on main (about 30 ms per Add layer at 4000 x 5000 on the T606).
+     * [init] sets data and a mask only; a caller that draws reads `layer.bitmap`, which
+     * materializes the layer as v1.10's blank layers always did.
      */
     private fun addLayerWith(name: String?, index: Int?, label: String, init: (Layer) -> Unit): Layer? {
         if (!canAddLayer) { toast(layerLimitMessage()); return null }
-        val bmp = try { BitmapUtils.createLayerBitmap(doc.width, doc.height) } catch (e: OutOfMemoryError) { toast("Not enough memory for another layer"); return null }
         // v1.6 (V4): the step's edit scope sits INSIDE withToolPaused, so the tool's pending work
         // commits first (its own steps and events), and a layer-list listener amends this step.
         return withToolPaused {
             editScope {
-                val layer = Layer(doc.newLayerId(), name ?: uniqueLayerName("Layer ${doc.pixelLayerCount + 1}"), bmp)
+                val layer = Layer(doc.newLayerId(), name ?: uniqueLayerName("Layer ${doc.pixelLayerCount + 1}"), BlankPixels(doc.width, doc.height))
                 init(layer)
                 // v1.7 (rule S): at [index] in the folder of the row below it, else at structure.insertionPoint().
                 val at = index?.let { val i = it.coerceIn(0, doc.layers.size); LayerStructure.Insertion(i, doc.parentBelow(i)) }
-                if (structure.insert(layer, at, label)) layer else { bmp.recycle(); null }
+                if (structure.insert(layer, at, label)) layer else null
             }
         }
     }
@@ -2296,7 +2303,7 @@ class EditorController(
     // region v110-A11 canvasOps
     private fun flipLayerNow(layer: Layer, horizontal: Boolean) = editScope {
         // v1.10 (A11, design 2.3): a whole-layer write on any layer; the layer admits it first.
-        if (!layer.admitWrite()) { toast(EngineLabels110.PAINT_REFUSED); return@editScope }
+        if (!layer.admitWrite()) { toast(LayerBudgetV110.firstWriteRefusal()); return@editScope }
         val flip: (EditorController) -> Unit = { c ->
             c.structural {
                 // In place (self-inverse): the layer keeps its bitmaps, so an earlier step that
@@ -2498,11 +2505,17 @@ class EditorController(
      * v1.9 (A7b step 6, design 3.2 A7b, R9): a mask is a full-size bitmap, as much memory as a layer,
      * and [effectiveLayerCount] counts it: at [maxLayers] none is added, [layerLimitMessage]
      * says so (nothing changes).
+     *
+     * v1.10 Gate 2 (G2-O-a): it runs in [editScope], so an undo still waiting for its tiles
+     * applies first (`UndoManager.settle`) and the checks see the layer as that undo leaves it:
+     * when the call returns, the mask is in the layer and its step comes after the undo (before,
+     * its [MaskChangeAction] queued its first apply behind the waiting undo and sat in the history
+     * without being in the layer).
      */
-    fun addMask(layer: Layer = activeLayer, fromSelection: Boolean = selection != null) {
-        if (layer.isFolder) { toast(FolderLabels.NO_MASK); return }
-        if (layer.hasMask) return
-        if (!canAddLayer) { toast(layerLimitMessage()); return }
+    fun addMask(layer: Layer = activeLayer, fromSelection: Boolean = selection != null) = editScope {
+        if (layer.isFolder) { toast(FolderLabels.NO_MASK); return@editScope }
+        if (layer.hasMask) return@editScope
+        if (!canAddLayer) { toast(layerLimitMessage()); return@editScope }
         val mask = BitmapUtils.createMaskBitmap(doc.width, doc.height, if (fromSelection) 0xFF000000.toInt() else -1)
         val sel = selection
         if (fromSelection && sel != null) Canvas(mask).drawBitmap(sel.mask, 0f, 0f, Paint().apply { color = -1 })
@@ -2537,7 +2550,7 @@ class EditorController(
         // its store (a parked mask draws from its tiles, as the canvas shows it) and goes into
         // the step by reference.
         val m = layer.maskPixels ?: return
-        if (!layer.admitWrite()) { toast(EngineLabels110.PAINT_REFUSED); return }
+        if (!layer.admitWrite()) { toast(LayerBudgetV110.firstWriteRefusal()); return }
         editScope {
             val rec = beginEdit(layer, EditTarget.CONTENT)
             rec.touchAll()

@@ -46,6 +46,7 @@ import com.brushwork.paint.engine.CanvasRotation
 import com.brushwork.paint.engine.CanvasSnapshot
 import com.brushwork.paint.engine.ColorModeConverter
 import com.brushwork.paint.model.ColorMode
+import com.brushwork.paint.model.Document
 import com.brushwork.paint.ui.common.ChoiceChips
 import com.brushwork.paint.ui.common.LengthField
 import com.brushwork.paint.ui.common.NumberField
@@ -88,6 +89,22 @@ internal fun ColumnScope.TrimCropTab(
     TabScaffold { TrimCropBody(c, unit, onUnitChange, busy, thumbnail, onApplied) }
 }
 
+/**
+ * The painted area Trim shows: [read] (`CanvasOps.opaqueBounds`) of [doc]'s visible layers, off
+ * main. v1.10 Gate 2 (O6, G2-O-d): the snapshot is a lease taken on main (`CanvasSnapshot.take`:
+ * the tiled stores' snapshots and a pin on every pixel layer, so nothing parks, swaps out or
+ * frees what the read reads) and released on main once the read returned or the caller's
+ * coroutine went away (the composition's coroutine resumes on main). Call it from main.
+ */
+internal suspend fun paintedBounds(doc: Document, read: (CanvasSnapshot) -> Rect = { CanvasOps.opaqueBounds(it) }): Rect {
+    val lease = CanvasSnapshot.take(doc)
+    try {
+        return withContext(Dispatchers.Default) { read(lease.snapshot) }
+    } finally {
+        lease.release()
+    }
+}
+
 @Composable
 private fun TrimCropBody(
     c: EditorController,
@@ -103,9 +120,8 @@ private fun TrimCropBody(
     val dpi = doc.dpi.toDouble()
     val sel = c.selection?.takeUnless { it.isEmpty }
     val detected by produceState<Detected?>(null) {
-        val snap = CanvasSnapshot.of(doc)
         value = try {
-            Detected(withContext(Dispatchers.Default) { CanvasOps.opaqueBounds(snap) })
+            Detected(paintedBounds(doc))
         } catch (e: OutOfMemoryError) {
             null
         }

@@ -7,6 +7,7 @@ import android.os.Build
 import android.util.Log
 import com.brushwork.paint.BrushworkApp
 import com.brushwork.paint.engine.budget.AndroidExitInfo
+import com.brushwork.paint.engine.budget.AndroidMemoryProbe
 import com.brushwork.paint.engine.budget.Budgets
 import com.brushwork.paint.engine.check.AutoCheckRunner
 import com.brushwork.paint.engine.check.CheckNotices
@@ -21,7 +22,8 @@ import java.util.concurrent.TimeUnit
  * `EngineConfig.applyIdle`). F1: nothing, so the app starts as v1.9.
  *
  * A10, on the main thread (cheap: a few small files): the exit source gets the application
- * ([AndroidExitInfo.attach]); the editor-open marker the last process left is taken
+ * ([AndroidExitInfo.attach]; Gate 2, O6: the memory probe too, [AndroidMemoryProbe.attach]); the
+ * editor-open marker the last process left is taken
  * ([ExitWatch.takeMarker]) before an editor can be restored and write its own; the gallery's
  * budget from the stored check result ([CheckStore]; none stored, nothing changes); the
  * step-down's notice ([ExitWatch.noticeAtStart]) and the check's ([CheckNotices.atStart]) if one
@@ -62,6 +64,8 @@ object EngineStartup {
     fun onAppCreate(app: Application) {
         val brush = app as? BrushworkApp ?: return
         AndroidExitInfo.attach(app)
+        // v1.10 Gate 2 (O6): the memory probe reads the application's ActivityManager, not the process' current one.
+        AndroidMemoryProbe.attach(app)
         val marker = runCatching { ExitWatch.takeMarker(app) }.getOrNull()
         val check = CheckStore.read(app)
         val mode = brush.settings.layerStorageMode
