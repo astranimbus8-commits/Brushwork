@@ -34,7 +34,8 @@ import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * v1.10 Gate 2 (lane open, O1; design 4.4 A11 step 6): the open decodes on 4 threads at FULL
- * (T606 memory) and still makes the layers exactly as the one-band load: the entry order with
+ * (T606 memory; the test counts the 4 decoder threads it starts) and still makes the layers
+ * exactly as the one-band load: the entry order with
  * slow painted entries between fast blank ones and a folder, the active entry FLAT, the others
  * tiled or BLANK, every byte the same; "Opening layer n of m" hears every entry once in order. A
  * damaged later entry, a cancelled open and a decoder that cannot start release every store the
@@ -81,13 +82,23 @@ class G2OpenParallelDecodeTest {
         val dto = ProjectFormat.read(A11Kit.dirOf("order"))
         assertEquals("the T606 budget admits 4 decoders here", 4, LayerEntries.decodersFor(dto, w, h, tiled = true))
         val tilesBefore = EngineConfig.budget.ledger.of(LedgerCategory.TILES)
+        // Gate 2 review: count the decoder threads each open starts, so a load that falls back to
+        // one band (no ParallelDecode, or one thread) fails here and not only in the local timing probe.
+        val started = AtomicInteger()
+        LayerEntries.startDecoder = { t ->
+            started.incrementAndGet()
+            t.start()
+        }
 
         LayerEntries.maxDecoders = 1
         val one = load("order")
+        val startedByOne = started.getAndSet(0)
         LayerEntries.maxDecoders = LayerEntries.DECODERS
         val heard = ArrayList<Pair<Int, Int>>()
         val two = load("order") { n, m -> synchronized(heard) { heard += n to m } }
         try {
+            assertEquals("the one-band load starts no decoder thread", 0, startedByOne)
+            assertEquals("the open ran on 4 decoder threads", 4, started.get())
             assertEquals("every entry once, in order", (1..12).map { it to 12 }, heard)
             assertEquals("the entry order", (1L..12L).toList(), two.layers.map { it.id })
             for (i in 0 until 12) {
