@@ -3580,10 +3580,11 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
     /**
      * Opens the topmost shape object of the active vector layer at [p] (not [skip]) for
      * editing; false when there is none.
+     * v1.10 G2 (V6): none on a copies-only layer (`VectorLayers.hidesObjects`).
      */
     private fun openShapeObjectAt(p: Vec2, skip: Long?): Boolean {
         val layer = controller.doc.activeLayer
-        if (!isVectorTarget(layer) || !controller.doc.effectiveVisible(layer) || controller.doc.effectiveLocked(layer)) return false
+        if (!isVectorTarget(layer) || controller.vectors.hidesObjects(layer) || !controller.doc.effectiveVisible(layer) || controller.doc.effectiveLocked(layer)) return false
         val content = layer.vector ?: return false
         val tol = controller.docLength(HIT_TOLERANCE_DP)
         for (i in content.objects.indices.reversed()) {

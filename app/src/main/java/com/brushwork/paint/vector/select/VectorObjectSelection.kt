@@ -44,14 +44,15 @@ object VectorObjectSelection {
 
     /**
      * Selects the objects of the active vector layer that [sel] touches, combined by [mode] with
-     * the objects selected there now; false = not handled (not a vector layer). Small searches
+     * the objects selected there now; false = not handled (not a vector layer; v1.10 G2 (V6): nor a
+     * copies-only layer, whose objects are the hidden source of its copies). Small searches
      * finish before this returns; large ones in the background (the selection changes when they
      * are done; a newer selection cancels them). While a vector update still renders, the search
      * waits for it (it looks at the landed objects).
      */
     fun select(c: EditorController, sel: Selection, mode: SelectionMode): Boolean {
         val layer = c.activeLayer
-        if (layer.vector == null) return false
+        if (layer.vector == null || c.vectors.hidesObjects(layer)) return false
         val st = state(c)
         st.job?.cancel()
         st.job = null
