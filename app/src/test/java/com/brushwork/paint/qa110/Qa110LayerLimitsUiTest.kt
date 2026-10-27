@@ -212,10 +212,10 @@ private object Limits {
 
     /**
      * Opens [c]'s layer window from the layers button, checks the header's count says [text] (and
-     * TalkBack reads [description], when given) and that the header's texts (the title and the
-     * count, A7's) are not cut, then closes the window. The rows below (layer names, blend modes,
-     * opacities, the Selection Layer row: v1.9's, not A7's) are left out: at font scale 1.3 and
-     * 2.0 they overflow their rows (lead request).
+     * TalkBack reads [description], when given) and that no text of the window is cut: the
+     * header's title and count (A7's), and the rows below, the layer names, blend modes and
+     * opacities and the Selection Layer row (v1.10 Gate 2 fonts F1: they fit their rows at font
+     * scale 1.3 and 2.0 too); then closes the window.
      */
     fun assertHeader(where: String, c: EditorController, text: String, description: String? = null) {
         Qa19Ui.click("Open layers (active layer ${c.doc.activeLayerIndex + 1})", exact = true)
@@ -228,7 +228,7 @@ private object Limits {
         if (description != null) {
             assertEquals("$where: read", description, count.config.getOrNull(SemanticsProperties.ContentDescription)?.joinToString(""))
         }
-        Qa19Ui.assertNoTextOverflow("$where, the layer window's header") { it != text && it != LayerLabels.TITLE }
+        Qa19Ui.assertNoTextOverflow("$where, the layer window")
         Qa19Ui.click(LayerLabels.CLOSE, exact = true)
         Smoke.pump(400)
         Qa19Ui.settle()

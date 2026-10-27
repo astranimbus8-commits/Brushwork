@@ -79,6 +79,7 @@ import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
@@ -91,6 +92,7 @@ import com.brushwork.paint.model.LayerTree
 import com.brushwork.paint.model.Selection
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.ui.common.ArrayLabels
+import com.brushwork.paint.ui.common.FitText
 import com.brushwork.paint.ui.common.FolderLabels
 import com.brushwork.paint.ui.common.SavedSelectionLabels
 import com.brushwork.paint.ui.common.V17Tags
@@ -435,7 +437,7 @@ private fun RowScope.RowParts(
                 TallNumberLine(row, n, Modifier.fillMaxWidth().height(NUMBER_LINE).alpha(dim))
             } else {
                 Row(Modifier.fillMaxWidth().height(16.dp).alpha(dim), verticalAlignment = Alignment.CenterVertically) {
-                    Text(n.toString(), color = IbisColors.ListText, fontSize = 12.sp, lineHeight = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                    FitText(n.toString(), fontSize = 12.sp, color = IbisColors.ListText, fontWeight = FontWeight.SemiBold, lineHeight = 14.sp, maxLines = 1)
                     Spacer(Modifier.width(4.dp))
                     RowName(row.name, Modifier.weight(1f, fill = false))
                     Spacer(Modifier.weight(1f))
@@ -530,12 +532,18 @@ private class BlendSplit(val words: List<String>, val style: TextStyle, val heig
 private fun rememberBlendSplit(label: String, maxWidthPx: Int): BlendSplit? {
     val measurer = rememberTextMeasurer(cacheSize = 0)
     val base = LocalTextStyle.current
-    return remember(measurer, base, label, maxWidthPx) {
+    val density = LocalDensity.current
+    return remember(measurer, base, density, label, maxWidthPx) {
         val words = label.split(' ', limit = 2)
         if (words.size < 2) return@remember null
-        val oneLine = measurer.measure(label, base.copy(fontSize = IbisDims.LayerRowTextMin), maxLines = 1, softWrap = false)
+        // (Above font scale 1, at the sizes they have at font scale 1: see [fitTextStyle].)
+        val oneLine = measurer.measure(label, base.copy(fontSize = density.scale1Sp(IbisDims.LayerRowTextMin.value)), maxLines = 1, softWrap = false)
         if (oneLine.size.width <= maxWidthPx) return@remember null
-        val style = base.copy(fontSize = SPLIT_BLEND_TEXT, lineHeight = (SPLIT_BLEND_TEXT.value + SPLIT_LINE_GAP.value).sp, lineHeightStyle = EXACT_LINES)
+        val style = base.copy(
+            fontSize = density.scale1Sp(SPLIT_BLEND_TEXT.value),
+            lineHeight = density.scale1Sp(SPLIT_BLEND_TEXT.value + SPLIT_LINE_GAP.value),
+            lineHeightStyle = EXACT_LINES,
+        )
         val height = words.sumOf { measurer.measure(it, style, maxLines = 1, softWrap = false).size.height }
         BlendSplit(words, style, height)
     }
@@ -710,8 +718,9 @@ private val SPLIT_LINE_GAP = 1.sp
 private fun rememberFittedStyle(lines: List<String>, constraints: Constraints, max: TextUnit, min: TextUnit, lineGap: TextUnit): TextStyle {
     val measurer = rememberTextMeasurer(cacheSize = 0)
     val base = LocalTextStyle.current
-    return remember(measurer, base, lines, constraints.maxWidth, constraints.maxHeight, max, min, lineGap) {
-        fitTextStyle(measurer, lines, base, constraints.maxWidth, constraints.maxHeight, max, min, lineGap)
+    val density = LocalDensity.current
+    return remember(measurer, base, density, lines, constraints.maxWidth, constraints.maxHeight, max, min, lineGap) {
+        fitTextStyle(measurer, lines, base, constraints.maxWidth, constraints.maxHeight, max, min, lineGap, density)
     }
 }
 
@@ -720,6 +729,12 @@ private fun rememberFittedStyle(lines: List<String>, constraints: Constraints, m
  * [lines] fits [maxWidthPx] on one line and all of them stacked, each line [lineGap] taller than
  * the size, fit [maxHeightPx]; at [min] when none does (the lines then ellipsize). One size for
  * all the lines, as ibisPaint sets "100%" over "Normal".
+ *
+ * v1.10 Gate 2 (I27, the Large fonts rule): above font scale 1 ([density]'s) the sizes are worked
+ * out as laid out, from [max] as it shows at this scale down to [min] and [lineGap] as they show
+ * at font scale 1 (the rows keep their dp heights). So the values and the Selection row fit at
+ * 1.3 and 2.0 wherever they fit at font scale 1, never smaller than there, and lay out as there
+ * at the floor. At font scale 1 (or without [density]) the sizes are sp as before.
  */
 internal fun fitTextStyle(
     measurer: TextMeasurer,
@@ -730,11 +745,15 @@ internal fun fitTextStyle(
     max: TextUnit,
     min: TextUnit,
     lineGap: TextUnit,
+    density: Density? = null,
 ): TextStyle {
+    val large = density != null && density.fontScale > 1f
+    /** [v] in the units the search runs in (sp at font scale 1, dp above it) as a text size. */
+    fun unit(v: Float): TextUnit = if (large) density!!.scale1Sp(v) else v.sp
     // Each line exactly its line height (Mode.Tight: a line would otherwise keep at least the
     // font's full ascent and descent, 1.17 em, and two 18 sp lines would not fit the 40 dp eye
     // line; the glyphs, caps 0.71 em and descenders 0.21 em, stay well inside 1.11 em).
-    fun style(sp: Float) = base.copy(fontSize = sp.sp, lineHeight = (sp + lineGap.value).sp, lineHeightStyle = EXACT_LINES)
+    fun style(sp: Float) = base.copy(fontSize = unit(sp), lineHeight = unit(sp + lineGap.value), lineHeightStyle = EXACT_LINES)
     /** The widest line and the stacked height at [sp] (px). */
     fun measure(sp: Float): Pair<Int, Int> {
         val s = style(sp)
@@ -748,7 +767,7 @@ internal fun fitTextStyle(
         return w to h
     }
     fun fits(sp: Float): Boolean = measure(sp).let { (w, h) -> w <= maxWidthPx && h <= maxHeightPx }
-    val top = max.value
+    val top = if (large) with(density!!) { max.toDp().value } else max.value
     val bottom = min.value
     val (w0, h0) = measure(top)
     if (w0 <= maxWidthPx && h0 <= maxHeightPx) return style(top)
@@ -761,18 +780,27 @@ internal fun fitTextStyle(
 }
 
 private const val FIT_STEP = 0.5f
+
+/**
+ * v1.10 Gate 2: [v] sp as laid out at font scale 1 (that many dp), as a text size at this font
+ * scale; [v] sp at font scale 1 or below.
+ */
+private fun Density.scale1Sp(v: Float): TextUnit = if (fontScale > 1f) v.dp.toSp() else v.sp
+
 private val EXACT_LINES = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.Both, LineHeightStyle.Mode.Tight)
 
 @Composable
 private fun RowName(name: String, modifier: Modifier) {
-    Text(
+    // v1.10 Gate 2 (I27): at a large font scale the name shrinks into its 16 dp line, never under
+    // its font scale 1 size; a name too long even then ellipsizes as it does at font scale 1.
+    FitText(
         name,
-        color = IbisColors.ListText,
         fontSize = IbisDims.LayerRowText,
+        modifier = modifier,
+        color = IbisColors.ListText,
         lineHeight = 14.sp,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
-        modifier = modifier,
     )
 }
 
