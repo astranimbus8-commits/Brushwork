@@ -32,6 +32,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -255,12 +256,20 @@ class ProjectRepository(private val context: Context) {
     /**
      * Loads a project into a new [Document]. Throws [FileNotFoundException] if the project
      * doesn't exist and [CorruptProjectException] (with a readable message) if it is damaged.
+     *
+     * v1.10 Gate 2 (lane open, O1, O2): the load stops between layers once this coroutine is
+     * cancelled (a [kotlinx.coroutines.CancellationException], every store released), and
+     * [progress] hears (n, m) on the load's IO thread after the n-th of m layer entries is read
+     * (`LayerEntries.readLayers`).
      */
-    suspend fun load(id: String): Document = lockFor(id).withLock {
-        withContext(Dispatchers.IO) { loadLocked(id) }
+    suspend fun load(id: String, progress: ((Int, Int) -> Unit)? = null): Document = lockFor(id).withLock {
+        withContext(Dispatchers.IO) {
+            val open = this
+            loadLocked(id, isActive = { open.isActive }, progress)
+        }
     }
 
-    private fun loadLocked(id: String): Document {
+    private fun loadLocked(id: String, isActive: () -> Boolean, progress: ((Int, Int) -> Unit)?): Document {
         val dir = dirOf(id)
         if (!dir.isDirectory) throw FileNotFoundException("This artwork no longer exists")
         val dto = try {
@@ -284,7 +293,7 @@ class ProjectRepository(private val context: Context) {
         doc.ruler = dto.ruler
 
         // Layer entries and saved selections: LayerEntries (v1.7 X3; load order in §4.3).
-        LayerEntries.readLayers(dir, dto, doc)
+        LayerEntries.readLayers(dir, dto, doc, isActive, progress)
         LayerEntries.readSelections(dir, dto, doc)
         doc.symmetry = dto.symmetry.sanitized()
         doc.paper = dto.paper
