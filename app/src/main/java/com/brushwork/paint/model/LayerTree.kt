@@ -202,6 +202,17 @@ object LayerTree {
 
         /** [LayerTree.isClipBase]. */
         fun isClipBase(index: Int): Boolean = tree.clipBase[index]
+
+        /**
+         * v1.10 Gate 2 (O4): the flat index of the top of the sibling unit directly above [index]
+         * (`LayerTreeRows.siblingAbove`: the first layer above with the same parent id, unless the
+         * parent itself comes first), or -1.
+         */
+        fun siblingAbove(index: Int): Int {
+            if (index !in 0 until size) return -1
+            val j = tree.above[index]
+            return if (j < size && layers[j].parentId == layers[index].parentId) j else -1
+        }
     }
 
     /** The arrays of an [Index]: passes down and up the list, O(n). */
@@ -220,13 +231,15 @@ object LayerTree {
         val asIs = BooleanArray(layers.size)
         val position = java.util.IdentityHashMap<Layer, Int>(layers.size * 2)
 
+        /** The first index above each one with its parent id or the parent's own id (size = none). */
+        val above = IntArray(layers.size)
+
         init {
             val size = layers.size
             // Down from the top: the nearest layer above with each id ([parentOf]) and the nearest
             // above with each parent (the top of [isClipBase]'s sibling unit above).
             val nearestById = HashMap<Long, Int>(size * 2)
             val nearestByParent = HashMap<Long, Int>(size * 2)
-            val above = IntArray(size)
             for (i in size - 1 downTo 0) {
                 val l = layers[i]
                 val pid = l.parentId

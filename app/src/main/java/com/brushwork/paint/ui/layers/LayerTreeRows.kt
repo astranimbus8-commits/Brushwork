@@ -159,6 +159,50 @@ internal object LayerTreeRows {
     }
 
     /**
+     * v1.10 Gate 2 (O4): [clipInfo] of every flat index of [layers] (bottom first) in one pass over
+     * the tree's [index]: a clipped unit's base is the one below it, or that one's base when it is
+     * clipped too. The per-row [clipInfo] walks blocks and clip chains, O(n²) over 10,000 rows.
+     */
+    fun clipInfos(layers: List<Layer>, index: LayerTree.Index = LayerTree.index(layers)): Array<ClipInfo> {
+        val out = Array(layers.size) { ClipInfo.NONE }
+        for (i in layers.indices) {
+            val l = layers[i]
+            if (!index.isClipped(i)) {
+                val noBase = l.clipping && !l.isAdjustmentLayer && l.parentId != Layer.ROOT_ID
+                if (noBase) out[i] = ClipInfo(clipped = false, baseIndex = -1, continuesAbove = false, lowestInGroup = false, noBase = true)
+                continue
+            }
+            // The sibling unit below (a clipped unit has one), already passed.
+            val below = index.block(i).first - 1
+            val belowClipped = index.isClipped(below)
+            val above = index.siblingAbove(i)
+            val continuesAbove = above >= 0 && index.isClipped(above) && (above == i + 1 || !layers[above].folderOpen)
+            val ownRows = l.isFolder && l.folderOpen && index.descendantCount(i) > 0
+            out[i] = ClipInfo(
+                clipped = true,
+                baseIndex = if (belowClipped) out[below].baseIndex else below,
+                continuesAbove = continuesAbove,
+                lowestInGroup = !ownRows && !belowClipped,
+            )
+        }
+        return out
+    }
+
+    /**
+     * v1.10 Gate 2 (O4): [Tree.shown] of every flat index of [layers] in one pass from the top
+     * (a folder lies above its children): no closed folder above the row, and not inside the
+     * folder being dragged ([draggedId]).
+     */
+    fun listed(layers: List<Layer>, index: LayerTree.Index, draggedId: Long? = null): BooleanArray {
+        val out = BooleanArray(layers.size)
+        for (i in layers.indices.reversed()) {
+            val p = index.parentOf(i)
+            out[i] = p < 0 || (out[p] && layers[p].folderOpen && layers[p].id != draggedId)
+        }
+        return out
+    }
+
+    /**
      * No unit below the row at [i] at its level (the blend row's clipping toggle: nothing to clip
      * to). Without folders this is v1.6's `i == 0`.
      */

@@ -203,18 +203,21 @@ internal data class LayerRowModel(
             val docOrder = topFirst.asReversed()
             val folders = doc.hasFolders
             val layers = doc.layers
-            val clips = if (folders) {
-                val flat = java.util.IdentityHashMap<Layer, Int>(layers.size * 2)
-                layers.forEachIndexed { i, l -> flat[l] = i }
-                topFirst.map { l -> flat[l]?.let { LayerTreeRows.clipInfo(layers, it) } ?: ClipInfo.NONE }
+            // v1.10 Gate 2 (O4): one index and one clip pass for every row (10,000 rows stay O(n)).
+            val index = if (folders) LayerTree.index(layers) else null
+            val clips = if (index != null) {
+                val all = LayerTreeRows.clipInfos(layers, index)
+                topFirst.map { l -> index.indexOf(l).let { i -> if (i >= 0) all[i] else ClipInfo.NONE } }
             } else {
                 LayerListMath.clipStructureForDisplay(docOrder.map { it.clipping })
             }
-            val tree = if (folders) LayerTreeRows.Tree(layers, draggedId) else null
+            // The rows listed (no closed or dragged folder above them), by flat index.
+            val listed = index?.let { LayerTreeRows.listed(layers, it, draggedId) }
             val badges = frames.badges(topFirst)
             val active = doc.activeLayer
             return topFirst.mapIndexed { i, l ->
                 val clip = clips[i]
+                val at = index?.indexOf(l) ?: -1
                 val adjustment = l.adjustment
                 val base = if (!clip.clipped) null else if (folders) layers.getOrNull(clip.baseIndex) else docOrder.getOrNull(clip.baseIndex)
                 LayerRowModel(
@@ -246,14 +249,14 @@ internal data class LayerRowModel(
                     effectName = adjustment?.let { AdjustmentEffects.displayName(it) },
                     hasArray = l.array != null,
                     arrayEditingSource = l.array?.spec?.editingSource == true,
-                    depth = tree?.depth(l) ?: 0,
+                    depth = index?.depth(at) ?: 0,
                     isFolder = l.isFolder,
                     folderOpen = l.isFolder && l.folderOpen,
                     passThrough = l.folder?.passThrough == true,
-                    descendants = if (l.isFolder) LayerTree.descendantCount(layers, doc.indexOf(l)) else 0,
-                    hiddenByFolder = tree?.hiddenByFolder(l) == true,
-                    lockedByFolder = tree?.lockedByFolder(l) == true,
-                    shownInList = tree?.shown(l) ?: true,
+                    descendants = index?.descendantCount(at) ?: 0,
+                    hiddenByFolder = index != null && !index.shownByAncestors(at),
+                    lockedByFolder = index?.lockedByAncestor(at) == true,
+                    shownInList = listed == null || at < 0 || listed[at],
                     shapesOnly = l.isVectorLayer && l.vector?.objects?.let { o -> o.isNotEmpty() && o.all { it is VShape } } == true,
                 )
             }
