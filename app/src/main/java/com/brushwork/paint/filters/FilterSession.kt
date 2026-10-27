@@ -41,6 +41,7 @@ import com.brushwork.paint.ui.common.StabilityLabels19
 import com.brushwork.paint.vector.render.RenderCache
 import com.brushwork.paint.vector.render.VectorLayerRenderer
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -50,6 +51,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.ceil
 import kotlin.math.hypot
 import kotlin.math.min
@@ -218,14 +220,24 @@ class FilterSession(
      * the filter itself, blended by [weights]: no render, whatever the layer holds.
      */
     private class QuickSource(val owner: ObjectSource, val pixels: PixelBuffer) {
-        /** Set once, under [scratchLock]. */
-        @Volatile var weights: ByteArray? = null
+        /** Taken by the first frame, whose worker renders [weights]; the frames after it await them. */
+        val claimed = AtomicBoolean(false)
+
+        /** Completed once: the weights, or null when they stopped (this source went) or failed. */
+        val weights = CompletableDeferred<ByteArray?>()
     }
 
-    private var quickSource: QuickSource? = null
+    /** Read by the worker rendering its weights: they stop once it is replaced (or the session closes). */
+    @Volatile private var quickSource: QuickSource? = null
 
     /** Test hook (V7): called on the main thread right after a quick frame is shown. */
     internal var onQuickFrame: (() -> Unit)? = null
+
+    /** Test hook (V7 review): called on the worker as a quick source's weights start to render ([quickWeights]). */
+    internal var onQuickWeights: (() -> Unit)? = null
+
+    /** Test hook (V7 review): a value change stops a computing preview once a render took this long ([SLOW_RENDER_MS]). */
+    internal var slowRenderMs: Long = SLOW_RENDER_MS
 
     /** Test hook (V7): quick frames come once an exact render took this long ([QUICK_AFTER_MS]). */
     internal var quickAfterMs: Long = QUICK_AFTER_MS
@@ -398,6 +410,8 @@ class FilterSession(
 
     private fun close() {
         isClosed = true
+        // v1.10 G2 (V7 review): first, so quick weights still rendering stop at their next object.
+        quickSource = null
         previewJob?.cancel(); previewJob = null
         analysisJob?.cancel(); analysisJob = null
         documentWatch?.cancel(); documentWatch = null
@@ -427,7 +441,6 @@ class FilterSession(
             if (objectCacheLazy.isInitialized()) objectCache.clear()
         }
         objectSource = null
-        quickSource = null
     }
 
     // ------------------------------------------------------------------ parameters
@@ -693,7 +706,7 @@ class FilterSession(
             // Still debouncing: the render reads the latest values when it starts.
             if (computingJob !== running) return
             val elapsedMs = (System.nanoTime() - computeStartNs) / 1_000_000
-            if (lastRenderMs < SLOW_RENDER_MS && elapsedMs < SLOW_RENDER_MS) { rerunRequested = true; return }
+            if (lastRenderMs < slowRenderMs && elapsedMs < slowRenderMs) { rerunRequested = true; return }
             running.cancel()
         }
         launchPreview(delayMs)
@@ -988,7 +1001,10 @@ class FilterSession(
      * layer until the exact render replaces it. Where the targets alone paint it is within 2 per
      * premultiplied channel of the exact render (the affine map commutes with antialiasing and
      * source-over, C12); where a target and another object overlap it is an estimate. Nothing is
-     * shown when it fails (the exact render reports that) or stops.
+     * shown when it fails (the exact render reports that) or stops. The weights are [q]'s, not
+     * this frame's: a value change that stops the frame ([requestPreview], each one during a drag
+     * once renders are slow) lets them finish for the next frame, which awaits them without
+     * holding a worker; they stop when [q] goes ([buildObjectSource], [close]).
      */
     private suspend fun quickFrame(q: QuickSource, vals: FilterValues, colorMode: ColorMode, scale: Float, doc: Rect) {
         val dpi = controller.doc.dpi
@@ -996,9 +1012,16 @@ class FilterSession(
         val out = try {
             withContext(Dispatchers.Default) {
                 val job = currentCoroutineContext().job
-                val weights = q.weights ?: synchronized(scratchLock) {
-                    q.weights ?: quickWeights(q, scale, doc) { job.isActive }?.also { q.weights = it }
-                } ?: return@withContext null
+                if (q.claimed.compareAndSet(false, true)) {
+                    var w: ByteArray? = null
+                    try {
+                        w = synchronized(scratchLock) { quickWeights(q, scale, doc) { quickSource === q } }
+                    } finally {
+                        q.weights.complete(w)
+                    }
+                }
+                val weights = q.weights.await() ?: return@withContext null
+                if (!job.isActive) return@withContext null
                 val ctx = FilterContext(scale = scale, dpi = dpi, services = svc, cancelled = { !job.isActive })
                 runFilter(q.pixels, vals, ctx, weights, alphaLocked = false, mask = false, colorMode, region = null, findChanges = false).out
             }
@@ -1036,6 +1059,7 @@ class FilterSession(
         val ids = q.owner.targets.vectorIds ?: return null
         val targetsFewer = ids.size * 2 <= content.objects.size
         val exclude = if (targetsFewer) content.objects.mapNotNullTo(HashSet()) { o -> o.id.takeIf { it !in ids } } else ids
+        onQuickWeights?.invoke()
         scratchOwner = null
         out.eraseColor(0)
         val cv = Canvas(out)

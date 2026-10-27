@@ -64,7 +64,7 @@ class G2VectorColorsEndInSameCallTest {
         c.color = RED
         val id = A6Paths.add(
             kit, c,
-            VShape(0, shape = ShapeObject(ShapeType.RECTANGLE, cx = 100f, cy = 100f, w = 80f, h = 60f, style = ShapeStyle.STROKE_FILL, strokeWidth = 4f, strokeColor = BLUE, fillColor = YELLOW)),
+            VShape(0, shape = ShapeObject(ShapeType.RECTANGLE, cx = 100f, cy = 100f, w = 80f, h = 60f, style = ShapeStyle.STROKE_FILL, strokeWidth = 4f, strokeColor = PURPLE, fillColor = YELLOW)),
         ).single()
         c.selectTool(ToolId.SHAPE)
         val shape = c.tools.getValue(ToolId.SHAPE) as ShapeTool
@@ -90,7 +90,7 @@ class G2VectorColorsEndInSameCallTest {
         assertColor("the placed shape keeps its stroke", BLUE, placed.shape.strokeColor)
         assertColor("and its fill", GREEN, placed.shape.fillColor)
         frame()
-        assertColor("the opened shape's color is the main color", BLUE, c.color)
+        assertColor("the opened shape's color is the main color", PURPLE, c.color)
 
         // ✓ on the opened shape (unchanged: no step): the user's red and options come back.
         shape.commit()
@@ -117,7 +117,7 @@ class G2VectorColorsEndInSameCallTest {
             subpaths = listOf(VSubpath(listOf(VAnchor(40f, 40f, true), VAnchor(120f, 40f, true), VAnchor(80f, 110f, true)), closed = true)),
             polyline = true,
             fill = VPaint.Solid(YELLOW),
-            stroke = VStrokeStyle(color = BLUE, width = 4f),
+            stroke = VStrokeStyle(color = PURPLE, width = 4f),
         )
         val id = A6Paths.add(kit, c, other).single()
         c.selectTool(ToolId.POLYLINE)
@@ -142,7 +142,7 @@ class G2VectorColorsEndInSameCallTest {
         assertColor("the placed path keeps its line", BLUE, placed.stroke!!.color)
         assertEquals("and its fill", VPaint.Solid(GREEN), placed.fill)
         frame()
-        assertColor("the opened path's line color is the main color", BLUE, c.color)
+        assertColor("the opened path's line color is the main color", PURPLE, c.color)
 
         // ✓ on the opened path (unchanged: no step): the user's red and options come back.
         line.commit()
@@ -166,5 +166,8 @@ class G2VectorColorsEndInSameCallTest {
         const val BLUE = 0xFF0000FF.toInt()
         const val GREEN = 0xFF00FF00.toInt()
         const val YELLOW = 0xFFF0C040.toInt()
+
+        /** The opened object's own line color: not the new object's previewed BLUE, so the check tells them apart. */
+        const val PURPLE = 0xFF8020C0.toInt()
     }
 }

@@ -23,6 +23,9 @@ import org.junit.Assert.fail
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.abs
 import kotlin.math.max
 
@@ -90,6 +93,35 @@ class G2VectorCdcQuickFrameTest {
 
     private fun only(content: VectorContent, keep: (Long) -> Boolean) = kit.render(content.copy(objects = content.objects.filter { keep(it.id) }))
 
+    /**
+     * The quick frame [q] of the targets [sel]: within 2 of [expected] where the targets alone
+     * paint, [original] (the layer as it was) where no target paints (where a target and another
+     * object overlap it is an estimate).
+     */
+    private fun assertQuick(what: String, content: VectorContent, sel: Set<Long>, original: IntArray, expected: IntArray, q: IntArray) {
+        val targetInk = only(content) { it in sel }
+        val otherInk = only(content) { it !in sel }
+        var targetPixels = 0
+        var recolored = 0
+        var overlap = 0
+        for (i in q.indices) {
+            val t = targetInk[i] ushr 24
+            val o = otherInk[i] ushr 24
+            when {
+                t != 0 && o != 0 -> overlap++
+                t == 0 -> if (q[i] != original[i]) fail("$what: changed where no target paints, pixel (${i % kit.w}, ${i / kit.w}): %08X for %08X".format(q[i], original[i]))
+                else -> {
+                    targetPixels++
+                    if (premultipliedDiff(expected[i], q[i]) > 2) fail("$what: quick pixel (${i % kit.w}, ${i / kit.w}): %08X, exact %08X".format(q[i], expected[i]))
+                    if (q[i] != original[i]) recolored++
+                }
+            }
+        }
+        assertTrue("$what: target ink ($targetPixels)", targetPixels > 2000)
+        assertTrue("$what: recolored ($recolored of $targetPixels)", recolored > targetPixels / 2)
+        assertTrue("$what: the fixture overlaps ($overlap)", overlap > 0)
+    }
+
     /** Selects [targets] of the layer, then previews two colors and applies the second. */
     private fun quickThenExact(what: String, targets: (List<Long>) -> Set<Long>) {
         val c = layer()
@@ -117,30 +149,7 @@ class G2VectorCdcQuickFrameTest {
         val exact = shown(c)
         for (i in expected.indices) if (premultipliedDiff(expected[i], exact[i]) > 2) fail("$what: the exact render replaced it, pixel (${i % kit.w}, ${i / kit.w})")
 
-        // The quick frame: within 2 where the targets alone paint, the layer as it was elsewhere
-        // (where a target and another object overlap it is an estimate).
-        val q = quick!!
-        val targetInk = only(content) { it in sel }
-        val otherInk = only(content) { it !in sel }
-        var targetPixels = 0
-        var recolored = 0
-        var overlap = 0
-        for (i in q.indices) {
-            val t = targetInk[i] ushr 24
-            val o = otherInk[i] ushr 24
-            when {
-                t != 0 && o != 0 -> overlap++
-                t == 0 -> if (q[i] != original[i]) fail("$what: changed where no target paints, pixel (${i % kit.w}, ${i / kit.w}): %08X for %08X".format(q[i], original[i]))
-                else -> {
-                    targetPixels++
-                    if (premultipliedDiff(expected[i], q[i]) > 2) fail("$what: quick pixel (${i % kit.w}, ${i / kit.w}): %08X, exact %08X".format(q[i], expected[i]))
-                    if (q[i] != original[i]) recolored++
-                }
-            }
-        }
-        assertTrue("$what: target ink ($targetPixels)", targetPixels > 2000)
-        assertTrue("$what: recolored ($recolored of $targetPixels)", recolored > targetPixels / 2)
-        assertTrue("$what: the fixture overlaps ($overlap)", overlap > 0)
+        assertQuick(what, content, sel, original, expected, quick!!)
 
         // A second color: its quick frame reuses the targets' ink.
         s.update("color", 0xFFC03080.toInt())
@@ -172,6 +181,59 @@ class G2VectorCdcQuickFrameTest {
         // three others are).
         quickThenExact("4 of 13") { ids -> ids.take(4).toHashSet() }
         quickThenExact("10 of 13") { ids -> ids.drop(3).toHashSet() }
+    }
+
+    /**
+     * V7 review: once renders are slow every value change stops the computing preview (a drag
+     * sends one per frame, `FilterSession.requestPreview`). The first quick frame's weights belong
+     * to the quick source, not to that frame: stopped mid-render they finish, and the next frame
+     * awaits and reuses them (100 of 200 strokes take about 170 ms on the PC, about a second on the
+     * T606, so a drag that stopped them on every change never showed a quick frame).
+     */
+    @Test
+    fun aValueChangeThatStopsTheFirstQuickFrameLetsItsWeightsFinish() {
+        val c = layer()
+        val content = c.vec.vector!!
+        val sel = content.objects.map { it.id }.take(4).toHashSet()
+        c.vectors.setSelection(c.vec, sel)
+        kit.idle()
+        val original = kit.pixels(c.vec.bitmap)
+        val steps = c.undoManager.undoCount
+        val s = start(c)
+        s.quickAfterMs = 0L
+        // Every value change stops a computing preview, as once a render took SLOW_RENDER_MS.
+        s.slowRenderMs = 0L
+        val renders = AtomicInteger()
+        val started = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        s.onQuickWeights = {
+            renders.incrementAndGet()
+            started.countDown()
+            release.await(10, TimeUnit.SECONDS)
+        }
+        var frames = 0
+        var quick: IntArray? = null
+        s.onQuickFrame = { frames++; quick = shown(c) }
+
+        s.update("color", 0xFF20A060.toInt())
+        assertTrue("the weights are rendering", kit.idleUntil { started.count == 0L })
+        // The next value while they render: that preview stops, a new one starts.
+        s.update("color", 0xFFC03080.toInt())
+        release.countDown()
+        assertTrue(kit.idleUntil { !s.isRendering && !s.previewStale })
+        assertEquals("the weights were rendered once", 1, renders.get())
+        assertEquals("one quick frame, of the second value", 1, frames)
+        assertTrue(s.holdsQuickSource)
+        val expected = kit.render(ObjectColorSlots.map(content, sel, cdc.colorMapper(s.values)!!))
+        assertQuick("after a stop", content, sel, original, expected, quick!!)
+        val exact = shown(c)
+        for (i in expected.indices) if (premultipliedDiff(expected[i], exact[i]) > 2) fail("the exact render replaced it, pixel (${i % kit.w}, ${i / kit.w})")
+
+        s.cancel()
+        assertTrue(kit.idleUntil { s.isClosed })
+        assertEquals("nothing recorded", steps, c.undoManager.undoCount)
+        assertSame(content, c.vec.vector)
+        assertArrayEquals(original, kit.pixels(c.vec.bitmap))
     }
 
     @Test

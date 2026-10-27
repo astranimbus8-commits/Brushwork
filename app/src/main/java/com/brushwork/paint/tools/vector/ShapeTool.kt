@@ -4029,13 +4029,16 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         return true
     }
 
-    /** Topmost visible, unlocked shape layer whose shape is at [p] (the active layer first), or null. */
+    /**
+     * Topmost visible, unlocked shape layer whose shape is at [p] (the active layer first), or null.
+     * v1.10 G2 (V6): a copies-only layer ("Array behind") hides its shape and is never found.
+     */
     fun shapeLayerAt(p: Vec2, skip: Layer? = null): Layer? {
         val doc = controller.doc
         val tol = controller.docLength(HIT_TOLERANCE_DP)
         val active = doc.activeLayer
         fun hits(l: Layer): Boolean {
-            if (l === skip || !l.isShapeLayer || !doc.effectiveVisible(l) || doc.effectiveLocked(l)) return false
+            if (l === skip || !l.isShapeLayer || !doc.effectiveVisible(l) || doc.effectiveLocked(l) || controller.vectors.hidesObjects(l)) return false
             val o = decoded(l) ?: return false
             return ObjectCopies.hits(o, p, tol)
         }
