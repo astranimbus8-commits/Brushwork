@@ -4,7 +4,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.CompositionLocalProvider
@@ -32,11 +31,11 @@ import com.brushwork.paint.ui.common.SheetHost
 import com.brushwork.paint.ui.common.V110Tags
 import com.brushwork.paint.ui.common.rememberSheetHostState
 import com.brushwork.paint.ui.editor.chrome.ChromeHarness
+import com.brushwork.paint.ui.editor.chrome.OptionsStripPanel
 import com.brushwork.paint.ui.theme.BrushworkTheme
 import com.brushwork.paint.ui.vector.ObjectColorsSheet
 import com.brushwork.paint.ui.vector.PaintModeTags
 import com.brushwork.paint.ui.vector.ShapeStripItems
-import com.brushwork.paint.ui.vector.ShapeToolOptions
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -51,8 +50,9 @@ import org.robolectric.shadows.ShadowLog
 /**
  * v1.10 (R3 (e); design 4.4 A2 step 2): no paint-mode selector shows a word. On the editor at the
  * user's phone width the Shape tool's strip, its style menu and its settings sheet, and the Curve
- * tool's strip, its Stroke kind menu and its settings sheet; then the `ShapeToolOptions` strip
- * (still rendered by tests) with its menu, and the Object colors sheet: none shows "Fill",
+ * tool's strip, its Stroke kind menu and its settings sheet; then the Shape strip with its menu
+ * beside the Object colors sheet (v1.10 G2 V4: in place of the v1.5 strip function tests rendered,
+ * now gone; the sheet's modes are the segments with their refusal): none shows "Fill",
  * "Stroke", "Both", "Stroke only", "Fill only" or "Stroke and fill" as the visible text of a
  * control that acts on a tap. Each place shows the icon segments instead (found by their tags),
  * and a tap on one sets the mode.
@@ -148,10 +148,11 @@ class R3NoTextModeSelectorsTest {
         s.activity.onBackPressedDispatcher.onBackPressed()
         SmokeUi.settle()
 
-        // ShapeToolOptions (the strip function tests still render) and the Object colors sheet.
+        // The Shape strip beside the Object colors sheet.
         SmokeUi.markBaseline()
         val activity = Robolectric.buildActivity(ComponentActivity::class.java).setup().get()
         val c = Smoke.controller(activity, Smoke.document(400, 300, layers = 1))
+        c.selectTool(ToolId.SHAPE)
         val tool = c.tools.getValue(ToolId.SHAPE) as ShapeTool
         tool.update { it.copy(type = ShapeType.ELLIPSE, style = ShapeStyle.STROKE) }
         val editor = A2FakeColorEditor(fill = 0xFF2266AA.toInt(), stroke = 0xFF000000.toInt())
@@ -160,7 +161,7 @@ class R3NoTextModeSelectorsTest {
                 val host = rememberSheetHostState()
                 CompositionLocalProvider(LocalSheetHost provides host) {
                     Box(Modifier.fillMaxSize()) {
-                        Column(Modifier.fillMaxWidth()) { FlowRow(Modifier.fillMaxWidth()) { ShapeToolOptions(tool) } }
+                        Column(Modifier.fillMaxWidth()) { OptionsStripPanel(c, Modifier.fillMaxWidth()) }
                         SheetHost(host, bottomInset = 0.dp)
                     }
                     ObjectColorsSheet(editor, onClose = {})
@@ -169,10 +170,10 @@ class R3NoTextModeSelectorsTest {
         }
         SmokeUi.settle()
         for (m in PaintMode.entries) assertNotNull("the Object colors sheet: ${m.name}", StripTestKit.tagged("${V110Tags.COLORS_SHEET_MODE}.${m.name}"))
-        assertNoWords("ShapeToolOptions and the Object colors sheet")
+        assertNoWords("the Shape strip and the Object colors sheet")
         SmokeUi.click(ShapeStripItems.STYLE_LABEL, exact = true)
-        assertSegments(PaintModeTags.SHAPE_STRIP, "ShapeToolOptions' style menu")
-        assertNoWords("ShapeToolOptions' style menu")
+        assertSegments(PaintModeTags.SHAPE_STRIP, "the Shape style menu beside the sheet")
+        assertNoWords("the Shape style menu beside the sheet")
         clickTag("${PaintModeTags.SHAPE_STRIP}.${PaintMode.BOTH.name}")
         assertEquals(ShapeStyle.STROKE_FILL, tool.settings.style)
         dog.interrupt()

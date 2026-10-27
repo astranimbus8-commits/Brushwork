@@ -2,7 +2,8 @@ package com.brushwork.paint.ui.vector
 
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
@@ -11,6 +12,7 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.SmokeUi
+import com.brushwork.paint.testing.StripTestKit
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.vector.CornerStyle
 import com.brushwork.paint.tools.vector.ShapeStroke
@@ -19,6 +21,7 @@ import com.brushwork.paint.tools.vector.ShapeTool
 import com.brushwork.paint.tools.vector.ShapeType
 import com.brushwork.paint.ui.color.RobolectricUi
 import com.brushwork.paint.ui.common.LocalIncrements
+import com.brushwork.paint.ui.editor.chrome.OptionsStripPanel
 import com.brushwork.paint.ui.theme.BrushworkTheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -35,7 +38,9 @@ import kotlin.math.round
  * v1.6 §3.4 (G): the shape tool's Settings sheet at the user's 392 dp. The stroke width is a Size
  * and the corner radius a Length: with increments off their logarithmic sliders move freely (as
  * v1.5); with increments on they land on the multiples of the Size / Length step, their ends
- * still reachable. Own sandbox, one test.
+ * still reachable. v1.10 G2 (V4): the sheet opens from the Shape strip's More row ("Shape
+ * settings"), as in the app (the v1.5 strip function this test rendered is gone). Own sandbox, one
+ * test.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = "w392dp-h873dp-xxhdpi", instrumentedPackages = ["com.brushwork.paint.ui.vector.steppededitorssandbox"])
@@ -72,11 +77,12 @@ class ShapeSteppedEditorsUiRobolectricTest {
         activity.setContent {
             BrushworkTheme {
                 CompositionLocalProvider(LocalIncrements provides c.increments) {
-                    FlowRow(Modifier.fillMaxWidth()) { ShapeToolOptions(tool) }
+                    Box(Modifier.fillMaxSize()) { OptionsStripPanel(c, Modifier.fillMaxWidth()) }
                 }
             }
         }
         SmokeUi.settle()
+        assertTrue("the Shape strip's More row", StripTestKit.openMoreRow())
         SmokeUi.click("Shape settings", exact = true)
         assertTrue("the settings sheet: ${SmokeUi.shown().take(40)}", SmokeUi.has("Stroke width slider") && SmokeUi.has("Corner radius slider"))
 
