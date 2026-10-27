@@ -8,6 +8,7 @@ import android.os.Process
 import android.util.Log
 import com.brushwork.paint.BrushworkApp
 import com.brushwork.paint.EditorSession
+import com.brushwork.paint.engine.EngineConfig
 import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.Future
@@ -39,6 +40,9 @@ data class CrashReport(val id: String, val timeMillis: Long, val kind: Kind, val
  *   ([recordFreeze]).
  * - What was seen: the "diagnostics" preferences ("seenAt", the newest report the gallery's card
  *   was dismissed for; "exitSeenAt", the newest exit read).
+ * - v1.10 (A10, design 2.12): every report's fields add the engine's line (`Engine`: the level,
+ *   R, the ledger's total, the step-down, the editor's layer count), and `ExitWatch` asks
+ *   [closedAppSince] whether a crash explains an editor marker found at start (API 26-29).
  *
  * Never crashes and never blocks the main thread itself (every step is guarded); the one
  * synchronous write is the fatal report, as the process is ending anyway.
@@ -257,7 +261,24 @@ object CrashLog {
             "Device" to deviceLine(),
             "Memory" to "Java heap ${(rt.totalMemory() - rt.freeMemory()) / mb} of ${rt.maxMemory() / mb} MB, native heap $native MB" +
                 (pss?.let { ", PSS $it MB" } ?: ""),
+            "Engine" to engineLine(),
         )
+    }
+
+    /**
+     * v1.10 (A10, design 2.12): the engine's line: the level, R (the native pixel budget), the
+     * ledger's total, the step-down when there is one, and the open editor's layer count.
+     */
+    private fun engineLine(): String = try {
+        val mb = 1024L * 1024L
+        val budget = EngineConfig.budget
+        val layers = ((app as? BrushworkApp)?.editorSession?.state as? EditorSession.State.Ready)?.controller?.doc?.layers?.size
+        val stepDown = budget.budgets.stepDown
+        "${EngineConfig.level.name}, R ${budget.nativeBudget / mb} MB, held ${budget.ledger.native / mb} MB" +
+            (if (stepDown > 0) ", step-down $stepDown" else "") +
+            (layers?.let { ", layers $it" } ?: "")
+    } catch (e: Throwable) {
+        "?"
     }
 
     private fun yes(b: Boolean) = if (b) "yes" else "no"
@@ -360,6 +381,18 @@ object CrashLog {
         }
     } catch (e: Throwable) {
         null
+    }
+
+    /**
+     * v1.10 (A10, design 2.12): true when a report that closed the app (one the gallery's card
+     * shows) was written at or after [sinceMillis]. Lists the folder only.
+     */
+    internal fun closedAppSince(context: Context, sinceMillis: Long): Boolean = try {
+        synchronized(lock) { reportFiles(dir(context)) }.any { f ->
+            parseId(f.name.removeSuffix(".txt"))?.let { showsCard(it) && it.time >= sinceMillis } == true
+        }
+    } catch (e: Throwable) {
+        false
     }
 
     /** Every report kept, newest first (reads up to [MAX_REPORTS] files: call it off the main thread). */

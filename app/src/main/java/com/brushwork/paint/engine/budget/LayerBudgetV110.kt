@@ -6,6 +6,7 @@ import com.brushwork.paint.engine.EngineConfig
 import com.brushwork.paint.engine.EngineLevel
 import com.brushwork.paint.engine.LayerBudget
 import com.brushwork.paint.engine.LayerBudgetV19
+import com.brushwork.paint.engine.NativeWatch
 import com.brushwork.paint.model.Document
 import com.brushwork.paint.storage.CanvasLimits
 import com.brushwork.paint.ui.common.EngineLabels110
@@ -321,10 +322,13 @@ class LayerBudgetV110(private val budget: MemoryBudget, private val level: Engin
          * Section 2.13: what a refused first write to a blank, parked or evicted layer says: at FULL
          * with the session's swap store [EngineLabels110.STORAGE_FULL], else
          * [EngineLabels110.PAINT_REFUSED]. `EditorController.checkEditable` and `updateLayerData`
-         * show it.
+         * show it. While [NativeWatch.refusingNewLayers] holds (section 2.12) the refusal is for
+         * memory, not storage: [EngineLabels110.PAINT_REFUSED] at every level.
          */
         fun firstWriteRefusal(): String =
-            if (EngineConfig.level == EngineLevel.FULL && EngineConfig.swapStore.capacityBytes > 0L) {
+            if (NativeWatch.refusingNewLayers) {
+                EngineLabels110.PAINT_REFUSED
+            } else if (EngineConfig.level == EngineLevel.FULL && EngineConfig.swapStore.capacityBytes > 0L) {
                 EngineLabels110.STORAGE_FULL
             } else {
                 EngineLabels110.PAINT_REFUSED

@@ -6,6 +6,9 @@ name: Soak tests
 # A workflow of its own, so its schedule neither changes the triggers of "Build APK" nor shares
 # its concurrency group (a nightly run never cancels a push build of main, nor the reverse).
 # v1.10 F1: the nightly chaos job (below) runs beside it.
+# v1.10 (design 6.5, the A10 merge): -PsoakOnly also runs Soak500LayersTest, whose NIGHTLY plan
+# (bw.testSet "soak") edits about 500 layers for 20 minutes at FULL, then replays them at CLASSIC;
+# the job's 60 minutes cover both classes. A red nightly blocks the release tag, not a merge.
 # v1.10 lead (CI fix at A8's merge): ubuntu-24.04, as in android.yml (/tmp quota on ubuntu-26.04).
 on:
   schedule:

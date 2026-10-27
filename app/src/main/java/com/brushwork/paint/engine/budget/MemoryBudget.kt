@@ -4,6 +4,7 @@ import android.os.Looper
 import com.brushwork.paint.engine.EngineConfig
 import com.brushwork.paint.engine.EngineLevel
 import com.brushwork.paint.engine.MemoryPressure
+import com.brushwork.paint.engine.NativeWatch
 import kotlin.math.max
 import kotlin.math.min
 
@@ -144,8 +145,15 @@ class MemoryBudget(val budgets: Budgets, val ledger: PixelLedger) : NativeAdmiss
      * eligible layer, drop the projections; `ResidencyHooks.pressure(CRITICAL)`, a no-op at
      * CLASSIC) and tries once more; off main it is the reservation alone. A caller whose
      * allocation then fails gives the bytes back with [release].
+     *
+     * Section 2.12 (the A10 merge): while [NativeWatch.refusingNewLayers] holds (from a CRITICAL
+     * watch tick until available memory is back above `threshold` + 512 MiB), [NativePurpose.LAYER]
+     * is refused before the ledger is asked, so no blank, parked or evicted layer becomes a new
+     * full-size painted layer (`Layer.admitWrite`, `Document.materialize`, the flat activation);
+     * the other purposes are unchanged.
      */
     override fun admitNative(bytes: Long, purpose: NativePurpose): Boolean {
+        if (purpose == NativePurpose.LAYER && NativeWatch.refusingNewLayers) return false
         if (ledger.limit != ledgerLimit) ledger.limit = ledgerLimit
         val c = categoryOf(purpose)
         if (ledger.tryReserve(c, bytes)) return true
