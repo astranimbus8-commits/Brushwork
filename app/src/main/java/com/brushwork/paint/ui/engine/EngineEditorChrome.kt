@@ -72,10 +72,11 @@ import kotlinx.coroutines.withContext
  * [EngineLabels110.LOW_STORAGE] once in the session when the store reads less than 1.5 GiB free (at
  * the start, then every 60 s).
  *
- * A10 step 8: the read-ahead. At FULL, while the editor shows, a [SwapReadAhead] reads ahead the
- * swapped tiles of the two layers next to the active one 300 ms after the active layer, the layer
- * list or the activation last changed, once the editor is idle (no gesture, busy job, filter,
- * pending tool work or activation); it stops with the editor.
+ * A10 step 8: the read-ahead. At FULL, while the editor shows and is started, a [SwapReadAhead]
+ * reads ahead the swapped tiles of the two layers next to the active one 300 ms after the active
+ * layer, the layer list or the activation last changed, once the editor is idle (no gesture, busy
+ * job, filter, pending tool work or activation). In the background (`ON_STOP`) it drops its copies
+ * and reads nothing until `ON_START`; it stops with the editor.
  *
  * A10: the activation ring (design 2.7). While a layer is made ready asynchronously, canvas input
  * is held without a toast; when that lasts [RING_DELAY_MS] (250 ms), the pill slot (under the
@@ -90,7 +91,8 @@ import kotlinx.coroutines.withContext
  * feed `EngineStats` (each UI frame's total duration, on a background thread). Each runs on a
  * phone and, under Robolectric, only when a test asks (`ExitWatch.markerRuns`,
  * `NativeWatch.watchRuns`, `EngineStats.keepUnderRobolectric`). The marker and the watch live
- * here and not in `EditorSession` (region `v110-A10 session`) until A11's merge.
+ * here, with the shown editor's lifecycle, and not in `EditorSession` (region `v110-A10 session`):
+ * the session is made before the editor shows and has no lifecycle of its own.
  */
 @Composable
 fun EngineEditorChrome(controller: EditorController) {
@@ -114,7 +116,7 @@ fun EngineEditorChrome(controller: EditorController) {
         }
     }
     if (EngineStats.keepUnderRobolectric || Build.FINGERPRINT != "robolectric") FrameTimes(context)
-    if (EngineConfig.level == EngineLevel.FULL) ReadAhead(controller)
+    if (EngineConfig.level == EngineLevel.FULL) ReadAhead(controller, lifecycle)
 
     val activating = controller.activating
     var ring by remember { mutableStateOf(false) }
@@ -164,18 +166,25 @@ private fun EditorMarker(controller: EditorController, lifecycle: Lifecycle) {
 }
 
 /**
- * The read-ahead of the swapped tiles next to the active layer ([SwapReadAhead], A10 step 8): a new
- * pass 300 ms after each change of the layer list or the active layer (`layersVersion`) or of the
- * activation; stopped (its copies dropped) when the editor goes.
+ * The read-ahead of the swapped tiles next to the active layer ([SwapReadAhead], A10 step 8): while
+ * started, a new pass 300 ms after each change of the layer list or the active layer
+ * (`layersVersion`) or of the activation, and one at each `ON_START`; paused (its copies dropped,
+ * nothing read) at `ON_STOP`; stopped when the editor goes.
  */
 @Composable
-private fun ReadAhead(controller: EditorController) {
+private fun ReadAhead(controller: EditorController, lifecycle: Lifecycle) {
     val readAhead = remember(controller) { SwapReadAhead(EditorReadAheadHost(controller)) }
     DisposableEffect(readAhead) {
         onDispose { readAhead.stop() }
     }
-    LaunchedEffect(readAhead) {
-        snapshotFlow { controller.layersVersion to controller.activating }.collect { readAhead.changed() }
+    LaunchedEffect(readAhead, lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            try {
+                snapshotFlow { controller.layersVersion to controller.activating }.collect { readAhead.changed() }
+            } finally {
+                readAhead.pause()
+            }
+        }
     }
 }
 

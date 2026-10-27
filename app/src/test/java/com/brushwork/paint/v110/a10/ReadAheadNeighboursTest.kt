@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.os.Looper
 import com.brushwork.paint.engine.EngineConfig
 import com.brushwork.paint.engine.EngineLevel
+import com.brushwork.paint.engine.GovernorPolicy
 import com.brushwork.paint.engine.MemoryGovernor
 import com.brushwork.paint.engine.MemoryPressure
 import com.brushwork.paint.engine.UndoManager
@@ -46,6 +47,7 @@ import java.time.Duration
 import java.util.Locale
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * v1.10 A10 step 8 (cut 1; design 2.7, 2.8 "reads ... ahead", Q5): [SwapReadAhead] reads ahead, on
@@ -53,10 +55,12 @@ import java.util.concurrent.TimeUnit
  * layer above and below, folders skipped; content and mask) once the editor has been idle for
  * 300 ms. Each copy is the slot's packed bytes kept beside the slot (the tile stays SWAPPED), in
  * the packed pool and at most its share of it; the activation then inflates the copies with no read
- * of the swap file. The copies of former neighbours, a memory trim and the stop drop them; a pass
- * waits while the editor is busy or the resident tiles are over budget; a tile read in or let go
- * of meanwhile, a failed read or another kind of swap store keeps nothing. Every test ends with the
- * TILES ledger and the packed pool where they started.
+ * of the swap file. The copies of former neighbours, a memory trim, the pause and the stop drop
+ * them, and a trim or a pause also ends the reads still queued (review: the first batch too); a
+ * copy the pool refuses ends the pass, so the heap is asked once, and quiets the read-ahead for
+ * 10 s; a pass waits while the editor is busy or the resident tiles are over budget; a tile read in
+ * or let go of meanwhile, a failed read or another kind of swap store keeps nothing. Every test
+ * ends with the TILES ledger and the packed pool where they started.
  *
  * The documents: 512 x 512 layers of the engine tests' mixed picture (a noise tile and a
  * translucent one painted, one transparent, one solid), parked as tiled stores whose painted tiles
@@ -401,6 +405,107 @@ class ReadAheadNeighboursTest {
         assertFalse("the bad slot is not copied", copied(bad))
         assertEquals("still SWAPPED", TileState.SWAPPED, bad.state)
         assertEquals("the others are", painted(below).size - 1 + painted(doc.layers[3]).size, ra.copiedTiles)
+    }
+
+    @Test
+    fun aTrimWhileTheFirstReadsAreQueuedEndsThem() {
+        val doc = fiveLayers()
+        val ra = readAhead(Host(doc))
+        val hold = CountDownLatch(1)
+        TileWorker.submit(TileWorker.Priority.READ_URGENT, { hold.await(10, TimeUnit.SECONDS) }) { }
+        ra.changed()
+        advance(SwapReadAhead.IDLE_MS)
+        assertTrue("the reads are queued", TileWorker.pendingJobs > 1)
+        assertEquals("nothing kept yet", 0, ra.copiedTiles)
+        // The entry is there before the first copy, so a trim now reaches the queued reads.
+        val entry = MemoryGovernor.entries().single { it.name == "read-ahead tiles" }
+        assertEquals(0L, entry.bytes())
+        entry.trimmable.trim(MemoryPressure.LOW)
+        hold.countDown()
+        drain()
+        assertEquals("the reads queued before the trim keep nothing", 0, ra.copiedTiles)
+        assertEquals(0L, ra.heldBytes)
+        assertEquals(poolBefore, PackedPool.heldBytes)
+        advance(SwapReadAhead.RECHECK_MS + SwapReadAhead.IDLE_MS)
+        drain()
+        assertEquals("quiet after the trim", 0, ra.copiedTiles)
+    }
+
+    @Test
+    fun aRefusedCopyEndsThePassAndNothingIsReadFor10s() {
+        val doc = fiveLayers()
+        val near = painted(doc.layers[1]) + painted(doc.layers[3])
+        assertTrue(near.size > 1)
+        val policy = Refusing()
+        val saved = MemoryGovernor.policy
+        MemoryGovernor.policy = policy
+        try {
+            val ra = readAhead(Host(doc))
+            ra.changed()
+            advance(SwapReadAhead.IDLE_MS)
+            drain()
+            assertEquals("the heap is asked once, not once per tile", 1, policy.asked.get())
+            assertEquals(0, ra.copiedTiles)
+            assertEquals(poolBefore, PackedPool.heldBytes)
+            advance(SwapReadAhead.RECHECK_MS + SwapReadAhead.IDLE_MS)
+            drain()
+            assertEquals("nothing is read for 10 s", 1, policy.asked.get())
+            policy.refuse = false
+            advance(SwapReadAhead.REFUSED_MS)
+            drain()
+            assertEquals("read again after 10 s", near.size, ra.copiedTiles)
+            assertEquals(poolBefore + ra.heldBytes, PackedPool.heldBytes)
+        } finally {
+            MemoryGovernor.policy = saved
+        }
+    }
+
+    @Test
+    fun pauseDropsEveryCopyEndsTheQueuedReadsAndNothingIsReadUntilTheNextChange() {
+        val doc = fiveLayers()
+        val near = painted(doc.layers[1]) + painted(doc.layers[3])
+        val ra = readAhead(Host(doc))
+        val hold = CountDownLatch(1)
+        TileWorker.submit(TileWorker.Priority.READ_URGENT, { hold.await(10, TimeUnit.SECONDS) }) { }
+        ra.changed()
+        advance(SwapReadAhead.IDLE_MS)
+        assertTrue("the reads are queued", TileWorker.pendingJobs > 1)
+        ra.pause()
+        hold.countDown()
+        drain()
+        assertEquals("the reads queued before the pause keep nothing", 0, ra.copiedTiles)
+        assertEquals(poolBefore, PackedPool.heldBytes)
+
+        ra.changed()
+        advance(SwapReadAhead.IDLE_MS)
+        drain()
+        assertEquals("the next change reads again", near.size, ra.copiedTiles)
+        ra.pause()
+        assertEquals("the pause drops every copy", 0, ra.copiedTiles)
+        assertEquals(0L, ra.heldBytes)
+        assertEquals(poolBefore, PackedPool.heldBytes)
+        assertTrue("the slots stay", near.all { it.state == TileState.SWAPPED })
+        assertTrue("no memory entry while paused", MemoryGovernor.entries().none { it.name == "read-ahead tiles" })
+        advance(SwapReadAhead.RECHECK_MS * 2)
+        drain()
+        assertEquals("nothing is read while paused", 0, ra.copiedTiles)
+        ra.changed()
+        advance(SwapReadAhead.IDLE_MS)
+        drain()
+        assertEquals(near.size, ra.copiedTiles)
+    }
+
+    /** A memory policy that counts the admits asked and refuses them while [refuse]. */
+    private class Refusing : GovernorPolicy {
+        @Volatile var refuse = true
+        val asked = AtomicInteger()
+
+        override fun onPressure(pressure: MemoryPressure, entries: List<MemoryGovernor.Entry>) = Unit
+
+        override fun admit(bytes: Long, purpose: String): Boolean {
+            asked.incrementAndGet()
+            return !refuse
+        }
     }
 
     @Test

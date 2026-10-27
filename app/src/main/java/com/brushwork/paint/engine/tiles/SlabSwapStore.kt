@@ -430,8 +430,13 @@ class SlabSwapStore internal constructor(
  * then swaps tiles out, and reads queued before its writes would delay that). While nothing changes
  * it looks again every [RECHECK_MS] (2 s), for tiles swapped out since. A pass drops the copies of
  * tiles no longer next to the active layer. LOW and CRITICAL memory pressure drop every copy (a
- * `MemoryGovernor` entry of priority 0, trimmed with the display caches) and nothing is read for
- * [QUIET_MS] (60 s), nor while `NativeWatch.refusingNewLayers` holds; [stop] drops every copy.
+ * `MemoryGovernor` entry of priority 0, trimmed with the display caches, registered before the
+ * first read is queued) and end the reads still queued, and nothing is read for [QUIET_MS] (60 s),
+ * nor while `NativeWatch.refusingNewLayers` holds. A copy the pool refuses ([PackedPool.tryAdmit]:
+ * the pool full, or the Java heap near its margin, which costs a collection on main) ends the
+ * pass's queued reads and nothing is read for [REFUSED_MS] (10 s), so a pass asks the heap once,
+ * not once per tile. [pause] (the editor in the background) and [stop] (the editor goes) drop every
+ * copy and end the queued reads; after [pause], [changed] starts again.
  *
  * Only with a [SlabSwapStore] installed (FULL); with any other store a pass reads nothing. Main
  * thread throughout, except the jobs' reads.
@@ -462,7 +467,10 @@ internal class SwapReadAhead(
     /** The neighbours' stores of the last pass; other ones start a new [generation]. */
     private var neighbours: List<TiledPixels> = emptyList()
 
-    /** Bumped when the neighbours change and by [stop]: a job of an older one reads and keeps nothing (the worker reads it). */
+    /**
+     * Bumped when the neighbours change, by a trim, a refused copy, [pause] and [stop]: a job of an
+     * older one reads and keeps nothing (the worker reads it).
+     */
     @Volatile private var generation = 0
 
     /** The copies kept, by tile. */
@@ -471,12 +479,16 @@ internal class SwapReadAhead(
     /** The tiles with a read in flight, and their slots' bytes. */
     private val pending = IdentityHashMap<Tile, Int>()
 
-    /** No pass before this uptime (after a trim). */
+    /** No pass before this uptime (after a trim or a refused copy). */
     private var quietUntil = 0L
 
+    /** The memory entry: made before the first read is queued, closed by [pause] and [stop]. */
     private var registration: MemoryGovernor.Registration? = null
 
-    /** The bytes of the copies kept, at the last count (any thread: the memory entry reads it). */
+    /**
+     * The bytes of the copies kept: counted again by each pass, added to by each copy kept since (a
+     * copy let go of meanwhile counts until the next pass). Any thread: the memory entry reads it.
+     */
     @Volatile var heldBytes = 0L
         private set
 
@@ -494,6 +506,14 @@ internal class SwapReadAhead(
     fun stop() {
         if (stopped) return
         stopped = true
+        pause()
+    }
+
+    /**
+     * Main: the editor is in the background; every copy is dropped, the queued reads end and no pass
+     * runs until the next [changed]. The memory entry goes too.
+     */
+    fun pause() {
         handler.removeCallbacks(tick)
         generation++
         dropAll()
@@ -562,6 +582,8 @@ internal class SwapReadAhead(
 
     /** Main: leases [t] and reads [slot] of [store] on the worker; the posted task keeps the bytes ([keep]) and releases the lease. */
     private fun read(t: Tile, slot: SwapSlot, store: SlabSwapStore, gen: Int) {
+        // Before any read is queued, so a trim meanwhile ends the queued reads too.
+        if (registration == null) registration = MemoryGovernor.register(MEMORY_NAME, MEMORY_PRIORITY, { heldBytes }) { p -> trim(p) }
         t.refs++
         pending[t] = slot.length
         TileWorker.submit(TileWorker.Priority.READ_AHEAD, { if (gen == generation) store.readPacked(slot) else null }) { r ->
@@ -574,14 +596,23 @@ internal class SwapReadAhead(
         }
     }
 
-    /** Main, in the job's posted task: [bytes] read from [slot] become [t]'s copy when nothing changed meanwhile and the pool admits them. */
+    /**
+     * Main, in the job's posted task: [bytes] read from [slot] become [t]'s copy when nothing changed
+     * meanwhile and the pool admits them. A refusal of the pool ends the pass's queued reads and
+     * quiets the read-ahead for [REFUSED_MS].
+     */
     private fun keep(t: Tile, slot: SwapSlot, store: SlabSwapStore, gen: Int, bytes: ByteArray) {
         if (stopped || gen != generation || EngineConfig.swapStore !== store) return
         // Held besides the lease, still SWAPPED in that slot, nothing read in or kept meanwhile.
         if (t.refs <= 1 || t.bitmap != null || t.packed != null || t.slot !== slot) return
-        count()
         val size = bytes.size.toLong()
-        if (heldBytes + size > shareCap() || !PackedPool.tryAdmit(size)) return
+        // heldBytes is at least what is kept (a copy let go of since the pass still counts): safe side.
+        if (heldBytes + size > shareCap()) return
+        if (!PackedPool.tryAdmit(size)) {
+            generation++
+            quietUntil = SystemClock.uptimeMillis() + REFUSED_MS
+            return
+        }
         val kept = synchronized(t.lock) {
             (t.bitmap == null && t.packed == null && t.slot === slot).also { if (it) t.packed = bytes }
         }
@@ -591,7 +622,6 @@ internal class SwapReadAhead(
         }
         copies[t] = Copy(WeakReference(bytes), bytes.size)
         heldBytes += size
-        if (registration == null) registration = MemoryGovernor.register(MEMORY_NAME, MEMORY_PRIORITY, { heldBytes }) { p -> trim(p) }
     }
 
     /** True while [c] is still [t]'s packed bytes beside its slot (not read in, freed or dropped). */
@@ -631,11 +661,12 @@ internal class SwapReadAhead(
         return n
     }
 
-    /** The memory entry: LOW and CRITICAL drop every copy and quiet the read-ahead for [QUIET_MS]. */
+    /** The memory entry: LOW and CRITICAL drop every copy, end the queued reads and quiet the read-ahead for [QUIET_MS]. */
     private fun trim(p: MemoryPressure): Long {
         if (p != MemoryPressure.LOW && p != MemoryPressure.CRITICAL) return 0L
         val run = {
             quietUntil = SystemClock.uptimeMillis() + QUIET_MS
+            generation++
             dropAll()
         }
         if (Looper.getMainLooper()?.isCurrentThread == true) return run()
@@ -652,6 +683,9 @@ internal class SwapReadAhead(
 
         /** After LOW or CRITICAL pressure, nothing is read ahead for this long. */
         const val QUIET_MS = 60_000L
+
+        /** After the packed pool refused a copy, nothing is read ahead for this long. */
+        const val REFUSED_MS = 10_000L
 
         /** Trimmed first, with the display caches: the copies are a cache of what the swap file holds. */
         private const val MEMORY_PRIORITY = 0

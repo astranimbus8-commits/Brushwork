@@ -4180,7 +4180,9 @@ asynchronous activation (`EditorController.activating`) holds the canvas for 250
   `threshold` + 256 MiB available it reports critical (the residency's and the governor's
   `pressure`) and `refusingNewLayers` holds until `threshold` + 512 MiB (the layer admission does
   not read it yet: LeadRequest); a ledger drift over 256 MiB from the native heap asks for one GC;
-  each tick records `EngineStat.LEDGER_PEAK`.
+  each tick records `EngineStat.LEDGER_PEAK`. The marker and the watch run in `EngineEditorChrome`,
+  with the shown editor's lifecycle, not in `EditorSession`'s region `v110-A10 session` as the
+  design's region table has them: the session is made before the editor shows and has no lifecycle.
 - `CrashLog` adds an Engine line to each crash report: the level, R, the native bytes the ledger
   holds, the step-down and the open artwork's layer count.
 
@@ -4191,7 +4193,7 @@ stroke, panel scroll or other. Under Robolectric nothing is kept unless a test s
 `keepUnderRobolectric`.
 
 **Read-ahead (step 8, cut 1; design 2.8, Q5).** `SwapReadAhead` (in `SlabSwapStore.kt`), run by
-the editor's chrome at FULL while the editor shows, reads ahead the SWAPPED tiles of the two layers
+the editor's chrome at FULL while the editor shows and is started, reads ahead the SWAPPED tiles of the two layers
 next to the active one (the nearest pixel layer above and the nearest below, folders skipped;
 content and mask) on A8's `TileWorker` at `READ_AHEAD` (after the urgent reads, before the writes
 and park cuts). No thread of its own.
@@ -4214,15 +4216,24 @@ and park cuts). No thread of its own.
   the read on demand meets the fault and restores the layer.
 - Drops: each pass drops the copies of tiles no longer next to the active layer. LOW and CRITICAL
   pressure (the `MemoryGovernor` entry "read-ahead tiles", priority 0, trimmed with the display
-  caches) drop every copy and quiet the read-ahead for 60 s (`QUIET_MS`). The editor's end stops
-  it and drops the rest. Its reads are not timed for the slow-read rule (only reads on demand are).
+  caches; registered before the first read is queued) drop every copy, end the reads still queued
+  (a generation bump: a queued job reads nothing, a posted one keeps nothing) and quiet the
+  read-ahead for 60 s (`QUIET_MS`). A copy `PackedPool.tryAdmit` refuses (the pool full, or the
+  Java heap near its margin, where each refusal costs a collection on main) ends the pass the same
+  way and quiets it for 10 s (`REFUSED_MS`): the heap is asked once per pass, not once per tile.
+  `ON_STOP` pauses it (`pause`: every copy dropped, the queued reads ended, the memory entry
+  closed, no pass; the system's background trims map to MODERATE and NORMAL, which keep copies)
+  and `ON_START` starts a pass again; the editor's end stops it and drops the rest. Its reads are
+  not timed for the slow-read rule (only reads on demand are). A pass counts the copies' bytes
+  again; a copy kept since adds to them, so the share check between passes errs high, not low.
 
 Tests: `test:v110/a10/` (the decision, the marker, the runner's triggers and resumes, the
 notices, the stored result and state, the sheet and its texts, swap round trip, slab reuse, CRC,
 I/O error, disk full, kill mid-write, janitor purge, slow reads, the session's install
 (`EditorSessionSwapStoreTest`), eviction, the ring, the exit
 watch and step-down, the pressure net, the stats rings, the low-storage message, the read-ahead's
-neighbours, waits, drops and faults in `ReadAheadNeighboursTest`) and `Soak500LayersTest`: random
+neighbours, waits, drops, trims, refusals, pause and faults in `ReadAheadNeighboursTest`, and in
+the real editor with its lifecycle in `ReadAheadEditorUiTest`) and `Soak500LayersTest`: random
 edits at FULL with park chaos and swap, replayed at CLASSIC and compared bit for bit at each
 checkpoint (a small plan in the suite; the 500-layer, 20-minute plan under `bw.testSet = soak`,
 once `-PsoakOnly` includes it: LeadRequest). After the close the tile ledger and the swap are back
