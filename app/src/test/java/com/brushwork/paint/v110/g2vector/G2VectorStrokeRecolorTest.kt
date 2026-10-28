@@ -18,6 +18,7 @@ import com.brushwork.paint.tools.ObjectColorEditor
 import com.brushwork.paint.tools.ObjectColorTarget
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
+import com.brushwork.paint.tools.vector.BrushStrokePreview
 import com.brushwork.paint.tools.vector.CurveStroke
 import com.brushwork.paint.tools.vector.CurveTool
 import com.brushwork.paint.tools.vector.ShapeStroke
@@ -31,7 +32,9 @@ import com.brushwork.paint.vector.VectorContent
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.After
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -48,6 +51,25 @@ import org.robolectric.RobolectricTestRunner
  */
 @RunWith(RobolectricTestRunner::class)
 class G2VectorStrokeRecolorTest {
+
+    /**
+     * The replay budget follows the measured speed ([BrushStrokePreview.nsPerUnit], shared by
+     * every test of the JVM): a class run after slow ones, or on a loaded machine, starts with a
+     * small budget, so the live stroke is a draft. Each test starts at the desktop speed and puts
+     * the measured one back.
+     */
+    private var savedSpeed = 1.0
+
+    @Before
+    fun pinSpeed() {
+        savedSpeed = BrushStrokePreview.nsPerUnit
+        BrushStrokePreview.nsPerUnit = 1.0
+    }
+
+    @After
+    fun restoreSpeed() {
+        BrushStrokePreview.nsPerUnit = savedSpeed
+    }
 
     /** A rig on a document whose active layer is an empty vector layer. */
     private fun rig(): VectorQaRig {
@@ -78,6 +100,21 @@ class G2VectorStrokeRecolorTest {
             else -> { p -> Color.blue(p) }
         }
         return px.count { p -> Color.alpha(p) > 32 && ch(p) > 3 * (Color.red(p) + Color.green(p) + Color.blue(p) - ch(p)) / 2 + 16 }
+    }
+
+    /**
+     * Lets the live brush stroke be refined until it is exact: refining a draft draws dabs, which
+     * is not a replay for a new color, so the previews start from an exact stroke.
+     */
+    private fun settle(c: EditorController, flush: () -> Unit) {
+        val brush = c.tools.getValue(ToolId.BRUSH) as BrushTool
+        var rounds = 0
+        while (brush.isDraft && rounds++ < 200) {
+            Smoke.pump(100)
+            flush()
+        }
+        assertTrue("the live stroke is there", brush.isStroking)
+        assertFalse("the live stroke is exact before the previews", brush.isDraft)
     }
 
     /** Previews each of [colors] as the open object's stroke color: no dab drawn, shown in that color. */
@@ -117,6 +154,7 @@ class G2VectorStrokeRecolorTest {
             assertTrue("in red", count(shown(c), RED) > 100)
 
             val ed = requireNotNull(t.objectColors) { "an open path has colors" }
+            settle(c, t::flushPreview)
             ed.begin()
             var builds = t.previewBuilds
             previewEach(c, ed, t::flushPreview, listOf(BLUE, GREEN)) {
@@ -160,6 +198,7 @@ class G2VectorStrokeRecolorTest {
             assertTrue("in red", count(shown(c), RED) > 100)
 
             val ed = requireNotNull(tool.objectColors) { "an open shape has colors" }
+            settle(c, tool::flushPreview)
             ed.begin()
             previewEach(c, ed, tool::flushPreview, listOf(BLUE, GREEN))
             ed.commit()
