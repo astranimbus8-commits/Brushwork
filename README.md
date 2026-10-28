@@ -35,11 +35,25 @@ Requires Android 8.0 or newer. Every release is signed with the same key, so a n
 - "Edit": the object bar's "Edit" opens the selected shape, curve, path, polyline or text in its own tool, and you stay in that tool after ✓. For a text or an old shape layer, "Edit" is the first button of the selection bar.
 - "Turn into shape": in the object bar's More row, with one path selected, it makes the path an editable shape in one undo step and opens it in the Shape tool; a message names anything that changed (for example "Gradient fill became its first color"), with "Undo". A path of several separate pieces, a very small one or one with too many points is refused with the reason.
 - Sharp and smooth on the pill: with points selected in Curve, Path or the Shape tool's "Points" mode, the corner button at the end of the pill's second row, under "Select several", switches them between sharp and smooth ("Sharp corner", "Smooth"); when they are mixed ("Mixed: tap for sharp corners"), it makes them all sharp. On a Polyline the button is greyed: its points are always sharp.
-- One paint-mode control: stroke only, fill only, or stroke and fill looks and works the same in every tool.
+- One paint-mode control: stroke only, fill only, or stroke and fill looks and works the same in every tool. The curve tools' settings no longer show a separate "No stroke" choice: pick fill only in the paint mode for a shape without a stroke.
 
 **Fixed in 2.0**
 - Snapping several points: moving a group of points, or the box around them, now snaps to guides, the grid and other points (before, only the grabbed point snapped and the box never did), and a curve no longer snaps to its own old outline.
 - Filters now warn before turning text, shape and array layers into pixels, as they did for vector layers.
+- "Turn into shape" keeps an open path's fill: a filled path without a line becomes a closed fill shape that looks the same ("The path was closed to keep its fill").
+- A new shape or path whose colors you previewed with "Object colors" gives your drawing color back the moment it is placed, also when you open another object right away.
+- The stroke color preview of brush-stroked paths and shapes with copies follows your finger without delay.
+- On a layer made with "Behind", the hidden original (of a vector, text or shape layer) can no longer be tapped, reopened or selected; a tap there edits the visible original or starts a new object.
+- "Array behind this layer…" on a large vector layer shows "Rendering vectors…" with its progress and Stop instead of freezing.
+- "Change Drawing Color" on some objects of a stroke-heavy vector layer shows the new color within a frame or two, also while you drag the color, and then the exact result.
+- Importing a PDF, SVG or Brushwork file of many layers uses far less memory: each layer is stored compactly as soon as the next one is made.
+- The layers panel stays quick with thousands of layers, clipping chains included.
+- With layer storage at Full, a change refused for lack of space now says so ("Not enough free storage for more layers"); with "Full, without storage swap", the oldest undo steps can now give their memory back when memory runs short.
+- Add, Delete, Apply and Invert mask right after Undo now act after the undo: no empty history step, no mask coming back, no crash.
+- An artwork that fails to open because the phone is short of memory no longer leaves decoding work and memory behind.
+- With the largest font sizes, on 360 and 392 dp phones, the layers panel's names, blend modes, opacities, effect names and badges, sheet titles, the color sheet's "Previous" and "Current", the X / Y pill's values beside "Select several" and the selection bar's words fit instead of being cut.
+- A long press's label bubble wraps onto two lines, so the reason on a Polyline's greyed corner button ("Polyline points are always sharp") shows whole.
+- On the Curve and Path More row the point thickness slider now comes before "All points 100 %", so the slider never moves while you drag it, and the row has no empty place.
 
 **New in 1.9**
 - Several points' thickness at once in Curve, Polyline and Path: with two or more points selected, the More row's "Point thickness" is the same blue slider as for one point. It reads "Mixed" when they differ ("×1.25" and so on while you drag, which keeps a taper's proportions); "Thinner point" / "Thicker point" step every point, and the typing box ("Type the point thickness") sets them all to a number or changes each with +10, -10, *2 or /2. Thickness rises again from 0 %, and at 0 % a drag that starts just beside the slider's start still moves its thumb. In Path, "Point weight" does the same for the selected points' weights.

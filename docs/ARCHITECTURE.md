@@ -2985,7 +2985,7 @@ has no trash). k ≥ 1 drops the map; k = 0 rebases (`src' = C_1 · src`, `C_j' 
 a Mirror of two maps becomes a plain object where the other side was. One step `DELETE_SIDE`;
 the object stays selected and the pick is forgotten (`VectorLift.sideDeleted`). The strip's More
 row Delete calls the same `deleteContent`, so it too deletes only the picked side; its label
-stays "Delete", as F0's rule in `LabelsV110Test` keeps it (renaming it is left to Gate 2).
+stays "Delete", as F0's rule in `LabelsV110Test` keeps it (renaming it is deferred past 2.0).
 
 **Undo (I2).** ✓ is one step `TRANSFORM_OBJECTS_LABEL` however many moves, turns and flips came
 before it (`TransformTool.applyPending` → `VectorObjectLift.commit` → one `VectorLayers.update`);
@@ -3005,7 +3005,7 @@ layer.)
 
 **Compatibility.** A moved side is another matrix in the stored list, a deleted side fewer maps;
 every map written is an isometry. v1.9 and older read and render the file as v1.10 draws it
-(`OneSideCompat19Test`, with the frozen v1.8 codec until `compat19` is on main).
+(`OneSideCompat19Test`, through the frozen `compat19` kit since Gate 2).
 
 **Performance.** `hitCopy` costs at most 255 3 x 3 inverses per tap. `SidePickTimingTest`: tap
 to box at 256 copies, PC 16 ms (2048 x 2048 locally, 512 x 512 on CI); `OneSideDragFrameTimingTest`:
@@ -3128,8 +3128,9 @@ state stays private.
   same one-frame watch, on `pointCount > 0` going false; known gap: a caller that commits the
   new path and opens another in the same call (`openPath`; A6's `openObject`, reached from the
   bars' Edit, which commits the current tool's path first) skips that frame, so `open()` takes
-  the new path's color, and the fill and paint mode the sheet showed, as the user's (untested;
-  the end-of-path hook in `CurveTool` is deferred to Gate 2).
+  the new path's color, and the fill and paint mode the sheet showed, as the user's. Fixed at
+  Gate 2 (lane vector, V2): the colors end in the placing call (`CurveTool.endLook`; `ShapeTool`
+  commit, `commitNewLayer` and discard), so this gap is closed.
 - `tools/text/TextColorsDelegate.kt` (Text; targets Text and Outline, no paint mode): previews
   are `updateSpec` changes of the open text (`color`, `strokeColor`); the drawing color is never
   touched. An outline color at width 0 brings `defaultOutlineWidth(sizePx)` = max(1, 6 % of the
@@ -3331,10 +3332,8 @@ The v1.9 decode checks are JVM tests and need no Robolectric:
   strength). A Tinted look is written byte for byte as v1.9 writes it. An unknown mode reads as
   Tinted.
 
-Both decode with `v110/a3/ArraySpecV19.kt`. It is a frozen copy of v1.9.0's `ArraySpec`,
-`ArrayLook` and spec JSON, in test sources only, standing in for the lead's `compat19` kit. Neither
-F0 nor F1 lands that kit. When it lands, the tests decode with it and the copy is deleted (lead
-request).
+Both decode with `compat19/ArraySpecV19.kt`, part of the frozen `compat19` kit since Gate 2 (lane
+compat, C1, which moved A3's copy of v1.9.0's `ArraySpec`, `ArrayLook` and spec JSON there).
 
 <!-- /v110-A3 -->
 
@@ -3481,20 +3480,19 @@ the one row).
 - The More rows lost their Sharp / Smooth items (regions `v110-A5 sharpItems` in
   `CurveStrips.kt` and `ShapeStrip.kt`). The code stays behind `CornerEditors.SHOW_IN_MORE`
   (false), which only the lead may flip; while it is false `ui/vector/CurveStripRulesTest` finds
-  none of the item's names on the Curve and Path More rows in any state. In Curve and Path the removed item's place stays:
-  `sharpSlotItem` (key `curve.sharpSlot`, 40 dp, `shown = false`, so the host reserves the width
-  and draws nothing) takes it under the same condition (`f.sharp != NONE`). The user sees it as
-  an empty 40 dp place where an item comes before it on its More line (Path: between Endpoint
-  and Select all, where the Sharp item was); first on a line it reads as the line's slack (More
-  lines are end-aligned). The host packs the
-  More lines greedily and "All points 100 %" comes and goes before the thickness slider with the
-  slider's own use: without the 40 dp, at 392 dp the slider ended line 1 while every point was at
-  100 % and jumped to line 2 at the drag's first change, away from the finger (and its
-  semantics, 10 dp past its layout, met the line's clip). `v110/a5/ThicknessKeepsItsLineTest`
-  (pure) and `ThicknessDragKeepsItsPlaceUiTest` (a drag in the editor) hold v1.9's place. The
-  slot goes when the thickness item comes before "All points 100 %" (Polyline's order, outside
-  the A5 regions: a LeadRequest). Shape's strip has no slot: no test showed a Shape control
-  that changes place without its Smooth item.
+  none of the item's names on the Curve and Path More rows in any state. Until Gate 2 a hidden
+  `sharpSlotItem` (40 dp, `shown = false`) kept the removed item's place, because "All points
+  100 %" came and went before the thickness slider and pushed it to the next line at the drag's
+  first change. Gate 2 (lane fonts, F7) removed the slot: the thickness slider now comes before
+  "All points 100 %", and the item that filled the slot's room comes before the slider (Curve
+  open: Handles, Auto tangent, Select all, Deselect, thickness, All points 100 %, Previous, Next,
+  shortcut, sheets, Remove copies; Path open: Endpoint, Select all, generator, weight, thickness,
+  All points 100 %, Deselect, To Bezier, Order while erasing, sheets, Remove copies). The slider
+  starts the second More line at 392 and 360 dp, at the same x whether or not "All points 100 %"
+  shows, and every state keeps three lines. `v110/a5/ThicknessKeepsItsLineTest` (pure: a
+  control's place on an end-aligned line is its line plus the width of the items after it) and
+  `ThicknessDragKeepsItsPlaceUiTest` (a drag in the editor) hold it. Shape's strip never had a
+  slot.
 - The point sheets list Sharp before Smooth (region `v110-A5 cornerChips` in
   `CurveToolOptions.kt`, and `ShapePointOptions.kt`), and Shape's Mixed chip makes the points
   sharp.
@@ -3505,7 +3503,7 @@ Tests: `v110/a5/` (`GroupGizmoSnapReproTest`, `GroupPointSnapOtherPointTest`,
 `SharpEndsOnlyTest`, `SharpOneStepPerTapTest`, `SharpNeverUnderTrashTest`,
 `PolylineSharpCellDisabledTest`, `PillSharpPlacementTest`, `GroupSnapAndSharpRoundTripTest`:
 undo and redo of a snapped group move, save and reopen, a v1.9 artwork unchanged;
-`ThicknessKeepsItsLineTest`, `ThicknessDragKeepsItsPlaceUiTest`: the slot above),
+`ThicknessKeepsItsLineTest`, `ThicknessDragKeepsItsPlaceUiTest`: the slider's place above),
 `tools/points/PointGroupSnapTest`
 and `qa110/` (`Qa110SharpCellUiTest`, `Qa110GroupSnapUiTest`).
 
@@ -3635,9 +3633,9 @@ budget for layer pixels.
   keeps v1.9's numbers exactly (I32; `LayerBudgetV19ParityTest` and the v1.9 limit tests run
   there).
 - `AndroidMemoryProbe` reads `ActivityManager.MemoryInfo`, `isLowRamDevice`, `Process.is64Bit`
-  and the heaps through the context `attach` gave (a lead request: `BrushworkApp.onCreate`
-  would call it; nothing calls it on main, so it reads through the process' current
-  application).
+  and the heaps through the context `attach` gave. Since Gate 2 (lane open, O6)
+  `EngineStartup.onAppCreate` calls `AndroidMemoryProbe.attach(app)`; before, it read through
+  the process' current application.
 - `MemoryBudget`: the ledger's limit is R (unlimited while unknown). `admitNative` is
   `PixelLedger.tryReserve`; refused on main, it asks the residency for room (CRITICAL) once and
   tries again. `tileRam()` is R less what the ledger holds outside TILES. `undoCap`: v1.9's
@@ -3678,9 +3676,9 @@ new, never-painted (`contentVersion` 0), fully transparent flat layer into `Blan
 goes in (after the tree took it, so a refused insert leaves the caller's layer alone), so a new
 layer, an adjustment layer and a vector layer cost 0 bytes until their first write; the insert
 stays one undo step and the layer counts in `used` like any other. The emptiness check is v1.9's
-full scan on main, about the cost of the allocation the caller already made (a lead request asks
-`EditorController.addLayerWith` and its siblings to build blank layers directly). Masks stay flat
-until A8's solid tiles (a lead request). Since A9 step 4 the panel's row thumbnails read the
+full scan on main, about the cost of the allocation the caller already made; since Gate 2 (lane
+open, O5) `EditorController.addLayerWith` and its siblings build blank layers directly, so the
+scan no longer runs for them. Masks stay flat (the zero-cost white mask is deferred past 2.0). Since A9 step 4 the panel's row thumbnails read the
 store (`LayerThumbnails`): a blank layer shows its transparent placeholder and nothing
 materializes.
 
@@ -3700,7 +3698,8 @@ its own 16 sp line height: Android 14's non-linear font scale keeps the theme's 
 twice the 12 sp font, 48 dp in the 46 dp header at font scale 2.0. The list was
 already a `LazyColumn` keyed by layer id: a scroll frame composes only the rows coming into view,
 the same at 40 layers and at 500 (`PanelScroll500TimingTest`). The rows' model
-(`LayerTreeRows.kt`, not A7's) still asks `LayerTree` per row (a lead request).
+(`LayerTreeRows.kt`, not A7's) is built in one pass over one `LayerTree.Index` since Gate 2 (lane
+open, O4).
 
 Tests: `test:v110/a7/` (`MemoryBudgetFormulaTest`, `LayerBudgetV110Test`, `CanvasCeilingTest`,
 `TrimUndoOnRTest`, `FirstWriteRefusedAtTilesTest`, `FirstWriteRefusedSwapFullTest`,
@@ -3949,12 +3948,14 @@ The layers panel is A9's.
 - A tool's `onActivate` (`ColorSelectTool`, `MagneticLassoTool`, the lift of `TransformTool`) may
   read `activeLayer.bitmap` while an activation holds input. The facade then makes the layer FLAT
   synchronously and reads its SWAPPED tiles on main. Running `onActivate` when the activation ends
-  needs `EditorController` outside the A8 region and the tools' lifecycle (a LeadRequest, left to
-  Gate 2: the pixels are right, only main reads).
-- An entry point outside `editScope` and `withToolPaused` that applies a step deferring itself
-  (`addMask`: `MaskChangeAction.redo`, then `pushUndo`) while an undo waits queues that first
-  apply behind the undo. The order holds, but until the undo applies the step is in the history
-  and not yet in the layer.
+  (A8 LR4, G2-O-b) is deferred past 2.0: Gate 2 did not build it, for want of a test proving one
+  `onActivate` per activation on each path ("Deferred past 2.0" under "Gate 2" below). The pixels
+  are right; only main reads.
+- Fixed at Gate 2 (lane open, G2-O-a): an entry point outside `editScope` and `withToolPaused`
+  that applied a step deferring itself (`addMask`: `MaskChangeAction.redo`, then `pushUndo`)
+  while an undo waited queued that first apply behind the undo, so the step was in the history
+  before it was in the layer. Add, Delete, Apply and Invert mask (the controller's and the Layers
+  panel's) now read the mask and apply inside `editScope`, after the waiting undo settles.
 - A park does not reuse the last edit's tiles (design 2.6): a parked layer's tiles are cut anew.
 - Nothing calls `prepareLayer` at the press on a layer row, so the unpark starts at the
   release (`selectLayer`), not at the press (design 2.7; A8 LR5 for A7's
@@ -4249,8 +4250,8 @@ session is open, before the editor exists; the editor's chrome installs one when
 - Faults: a failed write returns its pages, turns writes off for the session and throws (the
   tile stays resident); a failed read or a CRC mismatch throws `IOException`. The design's
   caller that restores the layer from its last save (`EngineLabels110.SWAP_READ_FAILED`) is not
-  wired: the label has no caller on main and the readers let the exception through (an open gap
-  at Gate 2).
+  wired: the label has no caller on main and the readers let the exception through (an open bug,
+  deferred past 2.0; "Gate 2" below).
 - Slow reads: every read is timed; a p95 over 40 ms of the last 50 records `slowSwapReads`
   (`AutoCheckRunner.markSlowSwapReads`), so the next open runs at TILES until the next check.
 - `close` closes the slab files at once and deletes the directory on its own `swap-close` thread.
@@ -4312,8 +4313,8 @@ asynchronous activation (`EditorController.activating`) holds the canvas for 250
 **`EngineStats` (design 3.3 and 7).** Rings of the last 50 values per `EngineStat`, in memory only;
 `EngineStats.summary` gives each ring's p50 and p95 for Copy details and the Details list. The
 chrome feeds the UI frames from the window's frame metrics on a `frame-metrics` thread, tagged
-stroke, panel scroll or other. Nothing on main calls `EngineStats.panelScrolled()` (an open gap
-at Gate 2: the layers panel's scroll should call it), so the panel's scroll frames are tagged other
+stroke, panel scroll or other. Nothing on main calls `EngineStats.panelScrolled()` (an open bug,
+deferred past 2.0: the layers panel's scroll should call it), so the panel's scroll frames are tagged other
 and `FRAME_PANEL` stays empty; device check Q2 then reads `FRAME_OTHER`. Under Robolectric
 nothing is kept unless a test sets
 `keepUnderRobolectric`.
@@ -4495,16 +4496,15 @@ the last line. 1000 layers still write and read back.
   cuttable; the open decoded one layer after another on one IO thread). Gate 2 builds both (lane
   open, O1 and O2; no cut 5 or 6), so the open of a big artwork decodes several layers at a time
   and shows its progress.
-- `PayloadImport`, `VectorImport` and `PdfImport` still render every new layer's bitmap before
-  the insert; only the insert parks them. A share file of hundreds of phone-size layers
-  (`check-500`) therefore needs Gate 2's import peak fix (lane open, O3) to import on a phone.
+- `PayloadImport`, `VectorImport` and `PdfImport` rendered every new layer's bitmap before the
+  insert at the merge. Since Gate 2 (lane open, O3) each importer parks a pixel layer just before it
+  renders the next one (`ImportLayers.parkNewest`), so `check-500` imports on a phone.
 - An evicted store cannot be mapped: a canvas operation on one is refused with
   `CANVAS_OP_TOO_BIG` (nothing makes a layer EVICTED in 2.0). The thumbnail uses the compositor,
   which draws tiled stores itself (A9). A save or an autosave reads packed and swapped tiles off
   main through `Tile.bitmapForRead` (`TileOps.readRegion`). Per-layer loops here stay O(n).
-  `OtherTabs` (not A11's) reads `opaqueBounds` off main without a lease (deferred by the lead to
-  Gate 2, lane open O6: the fix is `CanvasSnapshot.take` on main and `release()` on main after
-  the read).
+  `OtherTabs` (not A11's) read `opaqueBounds` off main without a lease; since Gate 2 (lane open,
+  O6) it takes `CanvasSnapshot.take` on main, reads on `Dispatchers.Default` and releases on main.
 - Fixed since by their owners: `RemoveLayerAction.byteSize` (A8's `Undo.kt`) is the stores'
   `logicalBytes()`, fixed at construction, so a merge down or delete of a parked layer no longer
   materializes it in the history's trim; `AdjustmentStage` reads `maskPixels` (A9).
@@ -4519,6 +4519,198 @@ Tests (`v110/a11/`): `StreamedLoadParityTest`, `StreamedLoadNoScratchTest`, `Bla
 
 <!-- /v110-A11 -->
 
+### Gate 2 (the lead: cross tests, deferred fixes and docs)
+
+The lead's Gate 2 (design 3.4) ran as six lanes, each built and reviewed on a branch of its own
+from `main` at `70e5c5ed` (the eleven areas merged), then merged into `v110-gate2` with `--no-ff`
+in this order, each merge clean: compat (C1-C6), open (O1-O7), vector (V1-V9), cross (X1-X8),
+fonts (F1-F9) and docs (D1-D4). The lead's own `v110G2` commits followed (README, this section,
+the closing counts), then the merge into `main`. Gate 2 added two Robolectric UI classes:
+`v110/cross/CrossPillAllCellsTest` and `qa110/Qa110FontScaleG2UiTest`.
+
+**Cross tests** (`app/src/test/java/com/brushwork/paint/v110/cross/`; each in Classic and Full,
+parameterized `[CLASSIC, FULL]` through `EngineRule` unless named):
+
+| Design 3.4 item | Class (tests) | What it pins |
+|---|---|---|
+| R1 with the layer parked between taps | `CrossSideOnParkedLayerTest` (2) | X1: the side cycle goes on across parks and swaps; a side edit is one exact step whose undo and redo give the pixels back. A park between a pick and its check is not reachable in the app (I29: the active layer is never parked), so the test parks only between steps |
+| R2 steps after a park and a swap | `CrossObjectColorsUndoTilesTest` (2) | X2: the Object colors step undoes and redoes exactly on a parked, swapped layer; the reopening and the colors record no step of their own; the tiles are swapped out again before Redo |
+| CDC on a vector array made behind | `CrossCdcArrayBehindTest` (2) | X3: Change Drawing Color on a copies-only layer keeps copy 0 hidden and the tint, in one step; at FULL the source layer is parked once inactive |
+| R5 copies in SVG and PDF export | `CrossRecolorExportTest` (2) | X4: Recolored copies export in their colors and Tinted ones as before, with a self-check that the bound tells the two modes apart for every copy color |
+| R11 then R12 on the shape | `CrossConvertThenSharpTest` (2) | X5: Turn into shape, then Sharp points, one step each, surviving save and reopen |
+| R10 on a parked layer | `CrossEditOpensParkedTest` (2) | X6: Edit opens the selected object of a parked, swapped layer and its check is one exact step; Edit during the activation hold ends the activation at once (`selectTool`'s settle), and no frame before or after reads a tile on main |
+| R4 refusal at the limit | `CrossBehindBudgetClassicTest` (1), `CrossBehindBudgetFullTest` (1) | C3: Behind at Classic's layer limit is refused with v1.9's "Layer limit reached (n)"; at FULL it is made, and undo and redo are exact pixel for pixel. R counts from what the shared ledger holds when the rule is made |
+| A format-4 save and the frozen `compat19` loader | `CrossFormat4CompatClassicTest` (3), `CrossFormat4CompatFullTest` (3) | C2: at v1.9's cap a folder, a mask and plain layers save as v1.9 writes them (formats 1-3) and render; over the cap the save is format 4, which `compat19`'s loader refuses with v1.9's newer-version message |
+| COLOR and SHARP with Select several at 392 and 360 | `CrossPillAllCellsTest` (2, UI) | X8: every pill cell is reachable and acts once (each typed value, Sharp / Smooth tap and trash tap one Undo), unfolded with Select several off and on, folded, and with a dialog or the sheet open; no text cut at font scale 1.0 |
+| R8 guides with projections on | `CrossGroupSnapProjectionTest` (2) | X7: a group snaps to the guide under projections as without them; every frame equals a fresh render of the compositor |
+| A CLASSIC result applies at the next open | `CrossCheckFallbackTest` (1; it opens at FULL, then at CLASSIC) | C4: an automatic check whose CLASSIC result arrives while an artwork is open changes nothing in that session (level, budgets, limit, swap store, residency, stroke switch, document; I31); the next open is CLASSIC with v1.9's limits and refusal text |
+
+Beside them: `compat19/Compat19KitTest` (11; the frozen v1.9 kit), the lanes' tests under
+`v110/g2open/`, `v110/g2vector/` and `qa110/` (`Qa110FontScaleG2UiTest`,
+`DeviceCheckArtworksTest`), and `Soak500LayersTest.theUndoCapPropertyIsTheCapAtEveryLevel`.
+
+**Decisions of the lanes** (rules since Gate 2):
+- **The frozen `compat19` kit (C1).** `app/src/test/java/com/brushwork/paint/compat19/` holds
+  v1.9.0's codecs, DTOs, models and Json settings (`ProjectFileDtoV19`, `LayerCodecV19`,
+  `VectorCodecV19`, `VectorModelV19`, `ShapeCodecV19`, `PackedPointsV19`, `CopyMapsV19`,
+  `BrushPresetV19`, `TwinsV19`, `ArraySpecV19`), checked against tag `v1.9.0`. It is frozen
+  (ownership rule `$FrozenTests`). The v1.9 compatibility tests read and write through it
+  (`OneSideCompat19Test`, `ArrayBehindCompat19Test`, `ArrayColorModeCompat19Test`,
+  `TurnIntoShapeCompat19Test`, the cross tests).
+- **The nightly soak (C6).** `Soak500LayersTest` checks that a FULL run with park chaos and swap
+  paints what a Classic replay of the same edits paints; the undo cap and memory are not under
+  test there. Both runs set `MemoryBudget.UNDO_CAP_PROPERTY` (`brushwork.undoCapBytes`, tests
+  only, read by `MemoryBudget.undoCap` at every level) to no byte cap and keep only the newest
+  `Plan.undoSteps` steps after every edit (NIGHTLY 32, SUITE 150): Classic's 128 MiB cap dropped
+  rotations only at Classic, and FULL's uncapped undo tiles filled R. The NIGHTLY run took
+  1851 s on the PC, so the soak job's timeout is 75 minutes.
+- **The pixel ledger in tests (C3).** `EngineConfig.budget.ledger` is one per test JVM and is not
+  reset between tests. A test with a small known R counts from what the ledger holds when its
+  rule is made (`CrossBehindBudgetTest`, `FirstWriteRefusedAtTilesTest`), and ledger assertions
+  are relative to a reading taken just before.
+- **Parallel decode at open (O1, A11 step 6).** `LayerEntries.readLayers` decodes on up to
+  `DECODERS` = 4 threads at TILES and FULL (never more than the budget admits, R >= 2·d·L; one at
+  Classic). Each decoder has its own `StreamedLoad`; main still makes the layers in entry order
+  with the one-band load's parking rules, a window of d decoded entries ahead. A damaged entry, a
+  cancel or a decoder that cannot start (`Thread.start` throwing) stops and joins the decoders and
+  releases every store and band they built (test seam `LayerEntries.startDecoder`). Measured on
+  the PC (`G2OpenPhoneOpenTimingTest`, 20 painted 1080 x 2408 layers at FULL, median of 15 after
+  3 warm-ups, same run): 1 decoder 155.6 ms (7.78 ms a layer), 4 decoders 50.9 ms (2.55 ms a
+  layer); x6: 200 layers 9.3 s -> 3.1 s (Q4 6 s), 500 layers 23.3 s -> 7.6 s (Q2 15 s), 50 of
+  4000 x 5000 17.9 s -> 5.9 s (Q6 15 s). Its budget, 100 ms PC, fails the one-decoder open.
+  `Open200TimingTest` went from 331 ms to about 58 ms. The x6 factor does not model the T606's
+  little cores: Q2, Q4 and Q6 need the device.
+- **The opening line (O2, A11 step 7).** `EditorSession.opening` (`OpenProgress(made, total)`) is
+  fed by `ProjectRepository.load`'s per-layer callback; `OpeningScreen` shows
+  `EngineLabels110.OPENING_LAYERS` under the spinner once the open has run `OpeningLine.delayMs`
+  (1 s), and drops it when the open ends or fails.
+- **Imports park as they go (O3).** `PdfImport`, `VectorImport` and `PayloadImport` park each pixel
+  layer just before they render the next one (`ImportLayers.parkNewest`, off main in prepare);
+  the insert stays one undo step. Painted, non-uniform tiles stay resident until the insert;
+  masks stay FLAT until the insert parks them; at Classic layers stay FLAT as in v1.9.
+- **Rows in one pass (O4).** `LayerTree.Index.siblingAbove`; `LayerTreeRows.clipInfos` and
+  `listed` give every row in one pass and `LayerRowModel.build` builds one index: 10,000 layers in
+  a clip chain went from 227 ms to about 2 ms a build (`G2OpenLayerRowsTimingTest`).
+- **Blank adds, leases and refusals (O5, O6).** `EditorController.addLayerWith` and its siblings
+  build `BlankPixels` directly. The Trim tab's painted bounds read through a
+  `CanvasSnapshot.take` lease released on main (I29). `EngineStartup.onAppCreate` attaches
+  `AndroidMemoryProbe`. First-write refusals use `LayerBudgetV110.firstWriteRefusal()`, so at
+  FULL with a swap store they say `STORAGE_FULL`. At TILES `GovernorPolicyV110.tiledOver`
+  subtracts `undoOnlyBytes(history)`, so memory pressure drops the oldest steps that hold tiles
+  (the lead's ruling G2-O-c); at FULL `swapUndoTiles` stays first.
+- **Masks after a waiting undo (G2-O-a, widened by the review).** Every mask entry point reads the
+  layer's mask (`hasMask`, `mask`, `maskPixels`, `maskSpec`) only inside `editScope`, after a
+  waiting undo settled: `EditorController.addMask`, `deleteMask`, `applyMask`, `invertMask` and
+  `LayerOps`' Add mask and Invert mask.
+- **R11, an open path with a fill (V1, the lead's ruling).** Turn into shape of an open path with
+  a fill and no line gives a closed FILL shape (open handles kept, a straight closing segment, no
+  stroke) that renders as the path did, with `ObjectBarLabels110.NOTE_CLOSED_FILL`; with a line
+  it stays a line shape with `NOTE_OPEN_FILL`. A "closed" path of 2 anchors converts as the open
+  path it draws.
+- **Colors end in the placing call (V2).** Object colors of a new shape or path end in the call
+  that places it (`ShapeTool` commit, `commitNewLayer`, discard; `CurveTool.endLook`), after the
+  object's pixels are painted, not a frame later through the delegates' watch; an object opened in
+  the same call takes the user's color as the one to give back.
+- **Previews without a replay (V3, V7).** `BrushTool.recolorPath()` swaps the color of the path
+  stroke in progress, so the brush preview keeps its live stroke when only its key's color
+  changed (smudge, blur, watercolor and clone strokes still start again); the Path tool's observer
+  skips a change its own preview made. A brush path with 8 copies: 30.4 ms -> 0.6 ms PC.
+  `ColorPreviewFrameTimingTest`'s stroke budget is now the design's absolute 5.5 ms PC.
+  `FilterSession`'s quick frame: on a vector layer with no text, shape or array, with some objects
+  not targets, once an exact render took `QUICK_AFTER_MS` (50 ms), the session keeps the cached
+  render at the preview's size and each pixel's targets' share of the ink, and recolors that share
+  each frame until the exact render replaces it; the weights belong to the `QuickSource` and stop
+  only when it is replaced or the session closes, so a slow layer shows quick frames while the
+  color is dragged. The apply stays the exact re-render (I1).
+- **One paint-mode control with a refusal (V4).** `PaintModeSegments` takes `refusal` and
+  `onRefused` (a refused mode is dimmed, disabled for accessibility, reads its reason, and a tap
+  hands the reason on); `PaintModeSheetRow`, `PaintModeChoices` and the Object colors sheet use
+  it. The dead `ShapeToolOptions()` is deleted; `ShapePointsStrip` and `ShapeEditableChip`
+  (`ShapePointOptions.kt`) are now unused definitions.
+- **Copies-only layers hide their source (V6).** `VectorLayers.hidesObjects(layer)` guards
+  `VectorLayers.hitTest`, `ShapeTool.openShapeObjectAt`, `ShapeTool.shapeLayerAt`,
+  `TextTool.textAt` and `VectorObjectSelection`, so no tool hits the hidden source of an "Array
+  behind" layer (while the source is edited, `ArraySpec.editingSource`, they hit it as before).
+  Array behind of a whole vector layer renders on a worker under `VectorLayers.BUSY_LABEL` with
+  progress and Stop when `VectorLayers.rendersInBackground` says so, landing as the same one step.
+- **Large fonts, fixed-size chrome (F1-F6).** A text inside a fixed-size badge (`LayerRow`'s 16 dp
+  letter and frame badges, the number line's MASK and alpha badges) keeps its font scale 1 size
+  (`scale1Size`); elsewhere `FitText` shrinks from the design size down to the font scale 1 size.
+  The layer window's rows, `SheetTitle` in every hosted sheet, `CompareSwatch`, the pill's row 1
+  beside Select several (above font scale 1 only: 4 dp axis padding, a fitted prefix, scale-1
+  spans in the # cell) and the raster selection bar fit at 1.3 and 2.0 on 392 and 360 dp. The
+  long-press bubble wraps onto at most two lines (`BUBBLE_LINES`). A silent text the I27 checks
+  must read carries `clearAndSetSemantics` on a wrapping `Box`, not on the `Text`. `FitText` is
+  plain `Text` at font scale 1, so nothing changes at the default size.
+- **The Curve and Path More rows (F7; the lead accepts the order).** The thickness slider comes
+  before "All points 100 %" and `sharpSlotItem` is gone (the A5 block). The curve settings
+  sheet's "No stroke" chip is gone (`STROKE_KINDS` = Brush, Plain); the Fill segment is the
+  stroke-less mode.
+
+**Open bugs (known at the release).**
+- A swap read failure is not restored from the last save (design 2.12): `SlabSwapStore.read`
+  throws `IOException` through `Tile.bitmapForRead`, the readers let it through, and
+  `EngineLabels110.SWAP_READ_FAILED` has no caller (the A10 block).
+- `EngineStats.panelScrolled()` has no caller, so `FRAME_PANEL` stays empty and device check Q2
+  reads `FRAME_OTHER` (the A10 block).
+- Suspected, not driven by a test: the vector eraser (`vector/draw/ToolErase.kt`,
+  `EraseRouting.kt`, `EraseTargets.kt`, `EraseLanding.kt`) knows no array or `hideSource`, so on a
+  copies-only layer it may erase the invisible source objects, and so the copies. It needs a
+  ruling (erase the copies through the source, or refuse).
+- At 360 dp and font scale 1.0, with the MM unit beside Select several, `CoordinatePill` cuts
+  "101.6 mm" in X and Y (pre-existing; `PillBudgetTest` and `PillColorPlacementTest` pin the font
+  scale 1 layout; the latter's KDoc records it).
+- Test infrastructure: the per-JVM `PixelLedger` outlives the test that filled it, and
+  `EngineRule`'s leak check does not watch it; which tests leave bytes behind was not traced. A
+  follow-up: an `EngineRule` check, per category, that the ledger is back where it started.
+
+**Deferred past 2.0** (nobody built these at Gate 2; the remaining work):
+- A8 LR4 / G2-O-b: run a tool's `onActivate` (`ColorSelectTool`, `MagneticLassoTool`,
+  `TransformTool`'s lift) after an asynchronous activation ends. Defer it in `EditorController`'s
+  `selectLayer`, `withToolPaused` and `selectTool` until the activation finishes, with a test
+  proving exactly one `onActivate` per activation on each path and no main-thread frame reading a
+  missing tile. Only performance is at stake.
+- A8 LR5: call `prepareLayer` when a layer row is pressed (`ui/layers/LayersPanel.kt`); it needs a
+  design decision for a press that starts a scroll, and UI tests.
+- A7 / G2-O-e: a zero-cost white mask for `addMask` and `MaskActions.addSpecMask`. It needs a
+  `SolidPixels` store on A8's `Tile.solid` plus a residency exemption for a solid mask on the
+  active layer (`MaskChangeAction` activates the layer). Masks stay FLAT.
+- A9: `testing/FakeSwapStore.swapOut` should give a dropped tile's TILES bytes back and recycle its
+  bitmap (test kit only; 13 callers).
+- A9: a park observer (`ResidencyHooks`, frozen) so the thumbnail is made at park.
+- A10 LR1: `EngineConfig.openSession` closes the previous session's swap store while that session
+  may still save (unreachable in the app). Remaining: keep the old store and close it at the old
+  session's scope completion; proving test `SessionSwitchWhileSavingTest`.
+- A10 LR2: eviction to the saved file. `ResidencyPolicy` P3 order 1 calls
+  `NativeWatch.evictColdest`; a `SavedFileRef` per layer from the last save; `TileOps` reloads an
+  EVICTED store; every reader handles EVICTED; proving tests `EvictToSavedFileTest` (extended),
+  `EvictedActivationTest`, `FirstCompositeEvictedTimingTest`. At FULL the swap store moves cold
+  tiles out of memory meanwhile.
+- A4 / cut item P4: commit the mapped pixels of Change Drawing Color on objects without the exact
+  re-render (a new frozen `VectorLayers` entry and a rounding ruling under I1); only if the device
+  check "apply on a 500-stroke layer" misses 1.5 s.
+- V6 follow-up: a background render for "Array behind" of selected objects (`objectsBelow`), which
+  still renders on main.
+- V5: `ObjectColorSlots`' single-slot text setter (frozen API, no user-visible gain) and
+  `TextTool`'s text-session counter in the item setter; the current paths are correct and tested.
+- A1: the Transform More row's "Delete" while a side is picked could read "Delete one side"
+  (`TransformStripItems.deleteLabel`); the behaviour is already right and `LabelsV110Test` keeps
+  "Delete".
+- A11: the payload refusal happens when the payload is written, not before the export starts
+  (`ExportJob`); `payloadLayer` reads `layer.mask`.
+- The two open bugs above that are product code (the swap read restore, `panelScrolled`).
+- Known limits the A8, A9 and A10 reviews left (accepted for 2.0): a settle reads a waiting step's
+  SWAPPED tiles on main; a duplicated parked layer's copy becomes FLAT at activation; smart guides
+  of big parked layers arrive from the background; `LayerSwitchBigTimingTest` and
+  `ReadAheadSwitchTimingTest` run near their PC budgets off CI; `UndoManager`'s waiting list is
+  JVM-static; the lift after a stroke through the above projection renders every touched part in
+  one update (a cap would go in `DisplayTiles.exactAfterGesture`); the above projection is built
+  only from resident tiles; the first update after a lift checks every layer; an invalidation
+  restarts a waiting projection job; `FolderThumbnails` reads at most 16 MiB per folder picture;
+  `LayerThumbnails.pumpOne` would leak a pin on a rejecting executor; the read-ahead's
+  `heldBytes` errs high, a pool refusal quiets it for 10 s and its share is half of min(64 MiB,
+  J/8); `SlabSwapStore.installIfFull` does one `mkdirs` and one `statfs` on main per session; the
+  gallery's check waits at most 10 s for the closings count.
 ## Core model (`model/`)
 - `Document` — size, dpi, color mode, `layers` (index 0 = bottom), `activeLayerIndex`, grid + ruler settings.
 - `Layer` — `bitmap` (ARGB_8888, document-sized), optional grayscale `mask` (white = visible),
@@ -6539,7 +6731,11 @@ once in the v1.10 merges and passed when rerun alone:
   exact failed 5 tries; alone, live 2.39 ms against exact 5.19 ms).
 - `qa17/Qa17CompatSessionUiTest` in a local `unit-full` run and
   `segmentation/SegmentationPipelineTest` on CI (the A8 merge).
-- `qa16/LayerWindowFingerWalkTest` (lane fonts, item F9, reports what it found).
+- `qa16/LayerWindowFingerWalkTest`: a harness race, fixed at Gate 2 (lane fonts, F9). The
+  `BusyOverlay` takes every touch until the first frame after `busyMessage` clears, so the walk's
+  Undo tap right after `pumpUntil` was swallowed under load; `LayerWalk.oneStepAndUndo` now runs
+  `settle()` after the `pumpUntil` (the rule: after waiting on `busyMessage`, settle before the
+  next finger tap).
 
 A failure is rerun once. A second failure is a real one, recorded with the runner's CPU line. A
 budget is never loosened.
