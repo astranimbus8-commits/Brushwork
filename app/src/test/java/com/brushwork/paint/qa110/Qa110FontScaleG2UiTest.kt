@@ -51,6 +51,8 @@ import com.brushwork.paint.tools.vector.CurveTool
 import com.brushwork.paint.tools.vector.ShapeStyle
 import com.brushwork.paint.tools.vector.ShapeTool
 import com.brushwork.paint.tools.vector.ShapeType
+import com.brushwork.paint.ui.common.ArrayLabels
+import com.brushwork.paint.ui.common.ArrayLabels110
 import com.brushwork.paint.ui.common.LocalIncrements
 import com.brushwork.paint.ui.common.ObjectColorLabels110
 import com.brushwork.paint.ui.common.PaintMode
@@ -370,8 +372,11 @@ class Qa110FontScaleG2UiTest {
         c.setSelection(ArrayLookKit.rectSelection(c, 20f, 30f, 60f, 70f), recordUndo = false)
         Qa19Ui.settle()
         onScreen(s, "$at: the selection bar", s.tagged(ChromeTags.SELECTION_BAR))
-        val words = s.placed().count { e -> StripTestKit.under(e.node, ChromeTags.SELECTION_BAR) && e.node.config.getOrNull(SemanticsProperties.Text) != null }
-        assertTrue("$at: the bar's words show ($words)", words >= 4)
+        val words = s.placed().filter { e -> StripTestKit.under(e.node, ChromeTags.SELECTION_BAR) }
+            .mapNotNull { e -> e.node.config.getOrNull(SemanticsProperties.Text)?.joinToString("") { it.text } }
+        // The words F6 names (cut at 2.0, Deselect and Content aware at 1.3 too), all in the bar
+        // (it scrolls sideways: its items are all placed), so the check below reads each of them.
+        for (word in BAR_WORDS) assertTrue("$at: \"$word\" in the selection bar: $words", word in words)
         Qa19Ui.assertNoTextOverflow("$at, the raster selection bar")
     }
 
@@ -517,5 +522,7 @@ class Qa110FontScaleG2UiTest {
         const val VECTOR_LAYER = "Lines"
         /** An effect whose name takes the thumbnail's two lines at font scale 1 ("Gradation" over "Map"). */
         const val GRADATION_MAP = "adjust.gradation_map"
+        /** The raster selection bar's words F6 names ("Content aware" is two lines by design). */
+        val BAR_WORDS = listOf("Copy", "Paste", "Deselect", "Content\naware", ArrayLabels.BUTTON, ArrayLabels110.BEHIND)
     }
 }
