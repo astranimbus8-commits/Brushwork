@@ -41,6 +41,12 @@ internal object LayerWalk {
         val before = steps(s)
         Finger.tap(s, label)
         assertTrue("$label finishes", Smoke.pumpUntil { settle(1); s.c.busyMessage == null && steps(s) > before })
+        // v1.10 Gate 2 (F9): the busy overlay (EditorChrome's BusyOverlay, which takes every touch
+        // while it is composed) leaves with the first frame after busyMessage clears. Under load the
+        // work ends after the tap's own settle, inside the wait above, and its main-thread end could
+        // land after that wait's last frame: the Undo tap below then went to the overlay. As a phone
+        // draws a frame before a finger can tap again, the frames run first.
+        settle()
         assertEquals("$label: one step", before + 1, steps(s))
         check()
         assertNotNull("$label: the window stays open", s.tagged(ChromeTags.LAYER_WINDOW))

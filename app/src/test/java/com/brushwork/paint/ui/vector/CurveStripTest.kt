@@ -6,6 +6,7 @@ import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.vector.CurveStroke
 import com.brushwork.paint.tools.vector.CurveTool
 import com.brushwork.paint.ui.common.CurveGenLabels18
+import com.brushwork.paint.ui.common.PaintMode
 import com.brushwork.paint.ui.common.PointLabels
 import com.brushwork.paint.ui.tools.strip.StripHandlesV17
 import com.brushwork.paint.ui.tools.strip.StripInventory
@@ -54,6 +55,12 @@ import org.robolectric.shadows.ShadowLog
 class CurveStripTest {
 
     private val gone = StripHandlesV17.REMOVED + PointLabels.SELECT_SEVERAL
+
+    /**
+     * A curve tool's settings sheet shows: its paint mode's Fill segment, the stroke-less mode
+     * (v1.10 Gate 2: the sheet's stroke kinds no longer offer "No stroke", the probe until then).
+     */
+    private fun settingsSheetShown() = StripTestKit.tagged("${PaintModeTags.CURVE}.${PaintMode.FILL.name}") != null
 
     /** Row 1 on the screen is the split's row 1 ([CurveKeys.LINE_WIDTH] shows its value, not a label). */
     private fun assertRow1(rig: StripRig, dp: Int, vector: Boolean, what: String) {
@@ -165,9 +172,10 @@ class CurveStripTest {
             // The overlays (§3.9): sheets and dialogs opened from the More row outlive it.
             rig.select(ToolId.CURVE)
             val curve = rig.c.tools.getValue(ToolId.CURVE) as CurveTool
-            staysOpen(rig, "Curve settings", "$dp dp, the Curve settings sheet") { SmokeUi.has(CurveStroke.NONE.label, exact = true) }
+            staysOpen(rig, "Curve settings", "$dp dp, the Curve settings sheet") { settingsSheetShown() }
+            assertFalse("$dp dp, the Curve settings sheet: no \"${CurveStroke.NONE.label}\" chip", SmokeUi.has(CurveStroke.NONE.label, exact = true))
             back(rig)
-            assertFalse(SmokeUi.has(CurveStroke.NONE.label, exact = true))
+            assertFalse(settingsSheetShown())
             staysOpen(rig, "Numbers", "$dp dp, the Numbers sheet") { SmokeUi.has("No points yet") }
             back(rig)
             assertFalse(SmokeUi.has("No points yet"))
@@ -207,9 +215,9 @@ class CurveStripTest {
 
             // Polyline: its settings sheet.
             rig.select(ToolId.POLYLINE)
-            staysOpen(rig, "${ToolId.POLYLINE.label} settings", "$dp dp, the Polyline settings sheet") { SmokeUi.has(CurveStroke.NONE.label, exact = true) }
+            staysOpen(rig, "${ToolId.POLYLINE.label} settings", "$dp dp, the Polyline settings sheet") { settingsSheetShown() }
             back(rig)
-            assertFalse(SmokeUi.has(CurveStroke.NONE.label, exact = true))
+            assertFalse(settingsSheetShown())
 
             // Path, nothing open: the line width (known by its value) opens the settings sheet; the
             // Order popup keeps the row; the settings sheet.
@@ -222,9 +230,9 @@ class CurveStripTest {
             assertFalse(SmokeUi.has("Use brush size", exact = true))
             popupKeepsTheRow(rig, "Order ${path.pathOrder}", "$dp dp, the Order popup") { SmokeUi.has("Lower order", exact = true) }
             StripTestKit.closeMoreRow()
-            staysOpen(rig, "${ToolId.PATH.label} settings", "$dp dp, the Path settings sheet") { SmokeUi.has(CurveStroke.NONE.label, exact = true) }
+            staysOpen(rig, "${ToolId.PATH.label} settings", "$dp dp, the Path settings sheet") { settingsSheetShown() }
             back(rig)
-            assertFalse(SmokeUi.has(CurveStroke.NONE.label, exact = true))
+            assertFalse(settingsSheetShown())
             // Open: the Point weight popup keeps the row; its typing dialog outlives both.
             tap(rig, 100f, 100f)
             tap(rig, 200f, 150f)

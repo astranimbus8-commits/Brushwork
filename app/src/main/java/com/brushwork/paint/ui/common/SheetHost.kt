@@ -343,14 +343,7 @@ private fun BoxScope.HostedPanel(entry: SheetEntry, shown: Boolean, screenHeight
                     .padding(start = 16.dp, end = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    title,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                )
+                SheetTitle(title, Modifier.weight(1f))
                 actions()
                 IconButton(onClick = onMinimize, modifier = Modifier.size(40.dp)) {
                     Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "Minimize")

@@ -46,6 +46,7 @@ import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.CustomAccessibilityAction
@@ -71,6 +72,7 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.brushwork.paint.EditorController
@@ -100,6 +102,7 @@ import com.brushwork.paint.ui.editor.endCanvasGesture
 import com.brushwork.paint.ui.theme.IbisColors
 import com.brushwork.paint.ui.theme.IbisDims
 import com.brushwork.paint.ui.common.FitText
+import com.brushwork.paint.ui.common.scale1Size
 import kotlinx.serialization.builtins.serializer
 
 /**
@@ -692,10 +695,13 @@ private const val SCALE_SLIDER_MAX = 400f
 // ------------------------------------------------------------------ v1.7 (§3.9): the "# step" cells
 
 /** The step a "#" cell shows after the sign: "# 10" (the step in [IbisDims.PillStepText], no unit). */
-internal fun stepCellText(step: Float): AnnotatedString = buildAnnotatedString {
-    withStyle(SpanStyle(fontSize = 14.sp, fontWeight = FontWeight.Bold)) { append("#") }
+internal fun stepCellText(step: Float): AnnotatedString = sizedStepCellText(step, STEP_TEXT, IbisDims.PillStepText)
+
+/** [stepCellText] with the sizes of its "#" ([hash]) and its step ([number]); v1.10 Gate 2 passes their font scale 1 sizes above font scale 1. */
+private fun sizedStepCellText(step: Float, hash: TextUnit, number: TextUnit): AnnotatedString = buildAnnotatedString {
+    withStyle(SpanStyle(fontSize = hash, fontWeight = FontWeight.Bold)) { append("#") }
     append(" ")
-    withStyle(SpanStyle(fontSize = IbisDims.PillStepText, fontFeatureSettings = "tnum")) { append(IncrementStepping.format(step)) }
+    withStyle(SpanStyle(fontSize = number, fontFeatureSettings = "tnum")) { append(IncrementStepping.format(step)) }
 }
 
 /** The ✥ cell: 40 × 40 touch, the glyph on the pill; a long press shows its [label] (v1.8). */
@@ -903,19 +909,26 @@ private fun AxisCell(
             },
         contentAlignment = Alignment.Center,
     ) {
+        // v1.10 Gate 2 (I27): above font scale 1 the cell is tighter (4 dp inside its bevel, 3 dp
+        // after the prefix) and the prefix keeps its font scale 1 size, so a worst-case value
+        // ("101.6 mm", "−1,329.5", "−12.75 in") stays whole beside "Select several" at font scale
+        // 2.0 on a 360 dp phone (with the "#" cell at its font scale 1 width). Font scale 1 lays
+        // out as before.
+        val large = LocalDensity.current.fontScale > 1f
+        val prefixFloor = scale1Size(IbisDims.PillPrefixText)
         Row(
             Modifier
                 .widthIn(min = IbisDims.PillCellMinWidth, max = IbisDims.PillCellMaxWidth)
                 .height(IbisDims.PillCellHeight)
                 .bevel(IbisColors.PillCell)
-                .padding(horizontal = 8.dp),
+                .padding(horizontal = if (large) LARGE_FONT_CELL_PAD else 8.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.Center,
         ) {
             // v1.9 Gate 2 (I27): the texts shrink at a large font scale to stay in the cell, never below
             // their size at font scale 1 ([FitText]): a far-off value is cut at the cap, as in v1.7.
-            FitText(axis, fontSize = IbisDims.PillPrefixText, style = PrefixStyle, maxLines = 1)
-            Spacer(Modifier.width(5.dp))
+            FitText(axis, fontSize = if (large) prefixFloor else IbisDims.PillPrefixText, style = PrefixStyle, maxLines = 1, floor = prefixFloor)
+            Spacer(Modifier.width(if (large) LARGE_FONT_PREFIX_GAP else 5.dp))
             FitText(
                 if (unit == LengthUnit.PX) shown else "$shown ${unit.short}",
                 fontSize = IbisDims.PillValueText,
@@ -997,11 +1010,26 @@ private fun StepCell(controller: EditorController, kind: IncrementKind, label: S
                 .padding(horizontal = 4.dp),
             contentAlignment = Alignment.Center,
         ) {
-            // (Drawn only: the step is the state above, not one more label.)
-            Text(stepCellText(step), Modifier.clearAndSetSemantics {}, style = TextStyle(color = Color.White), maxLines = 1, softWrap = false, overflow = TextOverflow.Clip)
+            // (Drawn only: the step is the state above, not one more label.) v1.10 Gate 2 (I27):
+            // above font scale 1 at its font scale 1 sizes, so the cell keeps its font scale 1 width
+            // and row 1's X and Y keep their room.
+            val text = if (LocalDensity.current.fontScale > 1f) {
+                sizedStepCellText(step, scale1Size(STEP_TEXT), scale1Size(IbisDims.PillStepText))
+            } else {
+                stepCellText(step)
+            }
+            val stepStyle = if (LocalDensity.current.fontScale > 1f) TextStyle(color = Color.White, fontSize = scale1Size(STEP_TEXT)) else TextStyle(color = Color.White)
+            Text(text, Modifier.clearAndSetSemantics {}, style = stepStyle, maxLines = 1, softWrap = false, overflow = TextOverflow.Clip)
         }
     }
 }
 
 /** The "#" cell's label (I10). */
 const val INCREMENTS_LABEL = "Increments"
+
+/** The "#" cell's "#" (and, v1.10 Gate 2, its text's default size, Compose's: its size at font scale 1). */
+private val STEP_TEXT = 14.sp
+
+/** v1.10 Gate 2: an X / Y cell's padding inside its bevel, and the gap after its prefix, above font scale 1. */
+private val LARGE_FONT_CELL_PAD = 4.dp
+private val LARGE_FONT_PREFIX_GAP = 3.dp

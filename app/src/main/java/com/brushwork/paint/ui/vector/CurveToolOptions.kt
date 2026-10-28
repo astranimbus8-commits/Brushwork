@@ -655,11 +655,9 @@ internal fun CurveSettingsSheet(tool: CurveTool, onDismiss: () -> Unit) {
             onRefused = { why -> controller.toast(why) },
         ) { m -> tool.setPaintMode(m.curvePaint()) }
         SectionHeader("Stroke")
-        // (The stroke kinds still offer "No stroke", the Fill segment's stroke: LeadRequest.)
-        ChoiceChips(CurveStroke.entries.map { it.label }, s.stroke.ordinal, { i ->
-            val e = CurveStroke.entries[i]
-            set { it.copy(stroke = e, lastStroke = if (e != CurveStroke.NONE) e else it.lastStroke) }
-        })
+        // v1.10 Gate 2: the stroke kinds without "No stroke": the Fill segment above is the
+        // stroke-less mode (no chip is on while it is); a kind's chip brings the stroke back.
+        ChoiceChips(STROKE_KINDS.map { it.label }, STROKE_KINDS.indexOf(s.stroke), { i -> tool.setStrokeKind(STROKE_KINDS[i]) })
         when (s.stroke) {
             CurveStroke.BRUSH -> {
                 val paintTool = controller.lastPaintTool

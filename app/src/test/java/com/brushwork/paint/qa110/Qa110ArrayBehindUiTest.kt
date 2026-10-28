@@ -50,10 +50,9 @@ import org.robolectric.annotation.Config
  *   boxes. Another tool picked in the tool menu leaves: the vector layer is selected again.
  * - The layer window's ⋮ [ArrayLabels110.LAYER_MENU] on a text layer: the text's copies directly
  *   below, ONE step, the Array tool and its sheet open; "Close" selects the text again.
- * Each screen's texts stay inside their boxes ([Qa19Ui.textOverflows]), but for the lead's
- * raster selection bar and layer window, whose own words are cut at 1.3 and 2.0 already; the
- * bar's Behind is cut only where its v1.7 neighbor "Array" is cut too. Copy 0 is not
- * drawn on a copies-only layer (`CopiesOnlyDrawTest`); its look and costs are other tests'.
+ * Each screen's texts stay inside their boxes ([Qa19Ui.textOverflows]), the raster selection
+ * bar's (Behind among them) and the layer window's too (v1.10 Gate 2 fonts F6, F1). Copy 0 is
+ * not drawn on a copies-only layer (`CopiesOnlyDrawTest`); its look and costs are other tests'.
  * One test, own sandbox (Compose's frame clock serves the first test of a sandbox only).
  */
 @RunWith(RobolectricTestRunner::class)
@@ -135,8 +134,7 @@ class Qa110ArrayBehindUiTest {
         val before = IntArray(400 * 300).also { src.bitmap.getPixels(it, 0, 400, 0, 0, 400, 300) }
         Qa16Ui(s).reach(ArrayLabels110.BEHIND)
         assertNotNull("$where: the item carries its tag", s.tagged(V110Tags.SEL_ARRAY_BEHIND))
-        noOverflow("$where, the selection bar", ChromeTags.SELECTION_BAR)
-        behindNoWorseThanArray(where)
+        noOverflow("$where, the selection bar")
         val made = behindStep(c, "$where, the selection bar's Behind") { Qa19Ui.click(ArrayLabels110.BEHIND, exact = true) }
         assertEquals("$where: directly below the source", c.doc.indexOf(src) - 1, c.doc.indexOf(made))
         assertNotNull("$where: the selection stays", c.selection)
@@ -144,7 +142,7 @@ class Qa110ArrayBehindUiTest {
         assertTrue("$where: the source keeps its pixels", before.contentEquals(after))
         assertTrue("$where: the copies are drawn", hasInk(made))
         copiesOnlySheet(s, where)
-        noOverflow("$where, the sheet after the selection bar's Behind", ChromeTags.SELECTION_BAR)
+        noOverflow("$where, the sheet after the selection bar's Behind")
         closeSelects(s, src, "$where, the selection bar")
         Smoke.assertQuiet(c, "$where, the selection bar")
         ArrayDraw.clearCaches()
@@ -191,37 +189,26 @@ class Qa110ArrayBehindUiTest {
         LayerWalk.open(s)
         Qa19Ui.click(LayerLabels.MORE, exact = true)
         assertTrue("$where: ⋮ shows \"${ArrayLabels110.LAYER_MENU}\": ${Qa19Ui.shown().take(60)}", Qa19Ui.has(ArrayLabels110.LAYER_MENU, exact = true))
-        noOverflow("$where, the layer menu", ChromeTags.LAYER_WINDOW)
+        noOverflow("$where, the layer menu")
         val made = behindStep(c, "$where, the layer menu's item") { Qa19Ui.click(ArrayLabels110.LAYER_MENU, exact = true) }
         assertEquals("$where: directly below the text", c.doc.indexOf(text) - 1, c.doc.indexOf(made))
         assertEquals("$where: the text's copies", text.textData, made.textData)
         copiesOnlySheet(s, where)
-        noOverflow("$where, the sheet after the layer menu's item", ChromeTags.LAYER_WINDOW)
+        noOverflow("$where, the sheet after the layer menu's item")
         closeSelects(s, text, "$where, the layer menu")
         Smoke.assertQuiet(c, "$where, the layer menu")
         ArrayDraw.clearCaches()
     }
 
     /**
-     * I27 for what this test shows: no text on screen overflows its box, except inside the lead's
-     * [foreign] chrome (the raster selection bar, the layer window), whose own items are cut at
-     * font scale 1.3 and 2.0 already ("Deselect", "Content aware"; the window's layer names) and
-     * are checked by their own tests. The Behind item in that bar: [behindNoWorseThanArray].
+     * I27 for what this test shows: no text on screen overflows its box, the raster selection
+     * bar's words (its Behind and v1.7's "Array" beside it, "Deselect", "Content aware") and the
+     * layer window's included: they shrink into their cells at font scale 1.3 and 2.0 (v1.10
+     * Gate 2 fonts F6, F1).
      */
-    private fun noOverflow(where: String, vararg foreign: String) {
-        val bad = Qa19Ui.textOverflows { e -> foreign.none { StripTestKit.under(e.node, it) } }
+    private fun noOverflow(where: String) {
+        val bad = Qa19Ui.textOverflows()
         assertTrue("texts overflow their box $where:\n" + bad.joinToString("\n"), bad.isEmpty())
-    }
-
-    /**
-     * The raster selection bar's [ArrayLabels110.BEHIND] is a cell of the lead's bar like v1.7's
-     * [ArrayLabels.BUTTON] next to it: its word is never cut where that one's is whole (at font
-     * scale 2.0 the bar cuts every cell's word, its own included).
-     */
-    private fun behindNoWorseThanArray(where: String) {
-        val bar = Qa19Ui.textOverflows { e -> StripTestKit.under(e.node, ChromeTags.SELECTION_BAR) }
-        fun cut(label: String) = bar.any { it.startsWith("\"$label\" ") }
-        assertTrue("$where: \"${ArrayLabels110.BEHIND}\" cut while \"${ArrayLabels.BUTTON}\" is whole:\n" + bar.joinToString("\n"), !cut(ArrayLabels110.BEHIND) || cut(ArrayLabels.BUTTON))
     }
 
     /** Whether [layer] shows any ink (alpha above 8) on its bitmap. */

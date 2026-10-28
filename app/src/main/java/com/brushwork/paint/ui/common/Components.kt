@@ -195,14 +195,7 @@ private fun ModalBwSheet(
                     .padding(start = 16.dp, end = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    title,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                )
+                SheetTitle(title, Modifier.weight(1f))
                 actions()
                 if (showClose) IconButton(onClick = onDismiss) { Icon(Icons.Filled.Close, contentDescription = "Close") }
             }
@@ -222,6 +215,27 @@ private fun ModalBwSheet(
             }
         }
     }
+}
+
+/**
+ * A sheet's title in its header, before the header's actions (a picker's Cancel and OK, the
+ * hosted panel's Minimize and ✕): one line. v1.10 Gate 2 (I27): at a large font scale it shrinks
+ * to the room the actions leave, never under its font scale 1 size ([FitText]), so "Object
+ * colors" stays whole beside Cancel and OK at font scale 2.0 on a 360 dp phone; a title too long
+ * even then ellipsizes as it does at font scale 1.
+ */
+@Composable
+internal fun SheetTitle(title: String, modifier: Modifier = Modifier) {
+    val style = MaterialTheme.typography.titleMedium
+    FitText(
+        title,
+        fontSize = style.fontSize,
+        modifier = modifier,
+        fontWeight = FontWeight.SemiBold,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        style = style,
+    )
 }
 
 /**

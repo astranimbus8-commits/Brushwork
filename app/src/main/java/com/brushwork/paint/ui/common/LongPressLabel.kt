@@ -28,6 +28,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -38,6 +39,9 @@ import kotlin.math.roundToInt
 
 /** How long the bubble of [longPressLabel] stays (design §3.9: 1.5 s). */
 const val LONG_PRESS_BUBBLE_MS = 1500L
+
+/** v1.10 Gate 2: the most lines a bubble's label wraps onto. */
+private const val BUBBLE_LINES = 2
 
 /**
  * The one bubble of [longPressLabel] at a time: its [label] and the element it belongs to
@@ -70,6 +74,10 @@ val LocalLongPressBubbles = staticCompositionLocalOf<LongPressBubbles?> { null }
  * v1.8 (item 9, design §3.9 and §4.6): [content] with the bubbles of its [longPressLabel]
  * elements drawn over it, under the element, for [LONG_PRESS_BUBBLE_MS]. The bubble takes no
  * touches. `EditorScreen` puts one around the whole editor.
+ *
+ * v1.10 Gate 2 (I27, UQ18): a label wider than the screen (less the bubble's padding) wraps onto
+ * a second line, centred, so the Polyline's sharp cell's reason (UQ18) is whole at font scale 2.0
+ * on a 360 dp phone; a label that fits keeps its one line, as before.
  */
 @Composable
 fun LongPressLabelHost(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
@@ -94,7 +102,7 @@ fun LongPressLabelHost(modifier: Modifier = Modifier, content: @Composable () ->
                             .padding(horizontal = 8.dp, vertical = 4.dp)
                             .testTag(V18Tags.LONG_PRESS_BUBBLE),
                     ) {
-                        Text(label, color = Color.White, fontSize = 12.sp, maxLines = 1)
+                        Text(label, color = Color.White, fontSize = 12.sp, textAlign = TextAlign.Center, maxLines = BUBBLE_LINES)
                     }
                 },
                 modifier = Modifier.matchParentSize(),

@@ -28,10 +28,10 @@ import java.time.Duration
 /**
  * v1.10 (A5, R12) in the editor on the user's 392 dp phone: one Curve or Path point at 100 %, its
  * thickness slider dragged up on the More row with a frame after each move, as a phone runs them.
- * The drag's first change brings "All points 100 %" in, before the slider; the slider stays where
- * it is (under the finger), the rest of the drag counts and one Undo gives 100 % back. Without the kept
- * place of the More row's removed "Sharp corner" item the slider went to the next line at that
- * change and the rest of the drag was lost ([ThicknessKeepsItsLineTest] is the pure rule).
+ * The drag's first change brings "All points 100 %" in (v1.10 Gate 2: after the slider, on its
+ * line); the slider stays where it is (under the finger), the rest of the drag counts and one Undo
+ * gives 100 % back. Had the slider moved to another line or along its line at that change, the
+ * rest of the drag was lost ([ThicknessKeepsItsLineTest] is the pure rule).
  */
 // One test per class (the test recomposer policy is global): Curve and Path are its sections.
 @RunWith(RobolectricTestRunner::class)

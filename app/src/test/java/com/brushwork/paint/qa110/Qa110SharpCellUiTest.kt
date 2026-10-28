@@ -195,13 +195,14 @@ class Qa110SharpCellUiTest {
         select(s, tool, 1)
         assertEquals(PointLabels110.POLYLINE_ALWAYS_SHARP, PillTestKit.sharpName())
         assertEquals("greyed", true, PillTestKit.sharpGreyed())
-        // Before the tap: the tap's long-press bubble (ui/common/LongPressLabel.kt, one 12 sp line)
-        // cannot hold this name at 360 dp and font scale 2.0; a LeadRequest asks for two lines.
         Qa19Ui.assertNoTextOverflow("Polyline")
         val anchors = tool.anchors
         tapCell(s)
         assertTrue("a finger's tap changes nothing", tool.anchors === anchors)
         assertTrue("the bubble says why", Qa19Ui.tagged(V18Tags.LONG_PRESS_BUBBLE) != null)
+        // v1.10 Gate 2 fonts F5: the bubble (ui/common/LongPressLabel.kt) wraps a name wider than
+        // the screen onto two lines, so it holds this one whole at 360 dp and font scale 2.0 too.
+        Qa19Ui.assertNoTextOverflow("Polyline, the bubble")
         tool.discard()
         Qa19Ui.settle()
         Smoke.assertQuiet(s.c, "Polyline at $width dp, font $scale")
