@@ -36,7 +36,7 @@ import org.robolectric.RuntimeEnvironment
  * frozen "Layer limit reached (N) for this canvas size" and changes nothing (no step, no layer,
  * every pixel, the active layer, the selection and the tool as they were); at FULL with a swap
  * store (no fixed limit) the same "Behind" is one step, and undo puts the document back exactly,
- * redo brings the layer back.
+ * redo brings the document back as "Behind" left it, pixel for pixel.
  *
  * R is the phone's J x 0.55 over what the engine's ledger already holds when the test starts
  * (`heldBefore`): the ledger (`EngineConfig.budget.ledger`) is shared by every session of a
@@ -133,6 +133,8 @@ abstract class CrossBehindBudgetBase(private val level: EngineLevel) {
         assertEquals("redo brings the same layer back", made.id, c.activeLayer.id)
         assertEquals("redo: the layers", after.ids, c.doc.layers.map { it.id })
         assertTrue(ArrayBehind.isCopiesOnly(c.activeLayer))
+        // The document as "Behind" left it: every layer, name, folder and pixel, the active layer and the selection.
+        after.assertSame("$level: redo", c, withTool = false)
     }
 
     private companion object {
