@@ -6742,7 +6742,9 @@ budget is never loosened.
 
 **Device checks.** `docs/device-checks-2.0.md` is what the user runs on the T606 with the
 release (design 7): engine checks Q1-Q13, each with its budget and the ring to read from
-Settings, Layer storage, Copy details, and feel checks FC1-FC8. Q2 reads `FRAME_OTHER` when
+Settings, Layer storage, Copy details, and feel checks FC1-FC8 (design 7) plus FC9-FC13 for the Gate 2
+fixes (large fonts, the More row's slider, the opening line, Behind and its hidden source, the pill
+at 360 dp). Q2 reads `FRAME_OTHER` when
 `FRAME_PANEL` is empty (nothing calls `EngineStats.panelScrolled()`, the A10 block). FC8 brings
 the artworks to the 1.9 phone through the backup folder ("Back up now", then 1.9's "Restore
 artworks…"), so 1.9 opens the 2.0 project files themselves (a share file would be imported,
