@@ -15,6 +15,7 @@ import com.brushwork.paint.engine.EngineLevel
 import com.brushwork.paint.engine.LayerBudget
 import com.brushwork.paint.engine.LayerBudgetV19
 import com.brushwork.paint.engine.budget.LedgerCategory
+import com.brushwork.paint.engine.budget.MemoryBudget
 import com.brushwork.paint.engine.tiles.BlankPixels
 import com.brushwork.paint.engine.tiles.ChaosResidency
 import com.brushwork.paint.engine.tiles.FlatPixels
@@ -69,6 +70,18 @@ import kotlin.random.Random
  * job (`bw.testSet` soak) runs [Plan.NIGHTLY]: about 500 layers on 256 px canvases for 20 minutes;
  * the FULL run sets the length and the replay follows it step for step. The layer budget is not
  * under test, so both runs use one with room for every layer ([Roomy]; v1.9's cap is 100).
+ * Nor is the undo history's byte cap: the levels' caps and step weights differ by design
+ * (section 2.6: Classic keeps v1.9's `max(48 MiB, J/4)`, 128 MiB on the T606, and counts every
+ * painted layer at its full size, so a canvas rotation of about 500 painted 256 px layers weighs
+ * about 125 MiB and a second one drops the first at Classic only, while FULL keeps both and its
+ * undo of the older one then has nothing to replay against). Both runs therefore set
+ * `MemoryBudget.UNDO_CAP_PROPERTY` to no byte cap ([NO_UNDO_BYTE_CAP]), and after every edit both
+ * keep the newest [Plan.undoSteps] steps alone ([keepNewestSteps]): the same history at both
+ * levels. The nightly plan keeps 32: with 150 the FULL run's history (its tiles in the ledger)
+ * grew to about 1.1 GiB within 150 steps of 2 % rotations, and the FULL run refused a rotation
+ * with "Not enough memory to change the canvas with this many layers" that the Classic replay
+ * (whose ledger holds no layer) made. 32 steps hold about 4 rotations at most, well under R; an
+ * undo chain never comes near 32 steps (8 % of the edits undo).
  *
  * Leaks of tiled stores. A8 (undo on tiles, step 4) and A11 (canvas operations on stores, with
  * pins, step 4) are merged, so [PRE_A8_A11_DROPS] is false: the soak takes no pins of its own, and
@@ -102,6 +115,7 @@ class Soak500LayersTest {
         projects.forEach { id -> runCatching { runBlocking { app.repository.delete(id) } } }
         SwapKit.cleanUp()
         Smoke.scopeErrors.clear()
+        System.clearProperty(MemoryBudget.UNDO_CAP_PROPERTY)
     }
 
     @Test
@@ -119,6 +133,44 @@ class Soak500LayersTest {
         )
     }
 
+    /**
+     * v1.10 G2: the soak's undo rule. On the T606 Classic's own cap (v1.9's `max(48 MiB, J/4)`)
+     * is 128 MiB, so a second step of a rotation's weight (about 125 MiB) drops the first;
+     * with `MemoryBudget.UNDO_CAP_PROPERTY` set to [NO_UNDO_BYTE_CAP] the cap is that at every
+     * level and both are kept; unset, empty or not positive, the formula holds again.
+     */
+    @Test
+    fun theUndoCapPropertyIsTheCapAtEveryLevel() {
+        val budget = EngineConfig.budget
+        val formula = EngineLevel.entries.associateWith { budget.undoCap(it) }
+        assertEquals("Classic's own cap on the T606", 128L shl 20, formula[EngineLevel.CLASSIC])
+        val rotation = 125L shl 20
+        fun keeps(cap: Long): Int {
+            val um = com.brushwork.paint.engine.UndoManager(maxBytes = cap)
+            repeat(2) { i -> um.push(Weighed("Rotate $i", rotation)) }
+            return um.undoCount
+        }
+        assertEquals("Classic's own cap keeps one rotation", 1, keeps(budget.undoCap(EngineLevel.CLASSIC)))
+        try {
+            System.setProperty(MemoryBudget.UNDO_CAP_PROPERTY, NO_UNDO_BYTE_CAP.toString())
+            for (lv in EngineLevel.entries) assertEquals("$lv: the property's cap", NO_UNDO_BYTE_CAP, budget.undoCap(lv))
+            assertEquals("both rotations kept", 2, keeps(budget.undoCap(EngineLevel.CLASSIC)))
+            for (v in listOf("", "0", "-1", "lots")) {
+                System.setProperty(MemoryBudget.UNDO_CAP_PROPERTY, v)
+                for (lv in EngineLevel.entries) assertEquals("$lv, \"$v\": the formula", formula[lv], budget.undoCap(lv))
+            }
+        } finally {
+            System.clearProperty(MemoryBudget.UNDO_CAP_PROPERTY)
+        }
+        for (lv in EngineLevel.entries) assertEquals("$lv, unset: the formula", formula[lv], budget.undoCap(lv))
+    }
+
+    /** An undo step that only weighs [byteSize]. */
+    private class Weighed(override val label: String, override val byteSize: Long) : com.brushwork.paint.engine.UndoAction {
+        override fun undo(c: EditorController) = Unit
+        override fun redo(c: EditorController) = Unit
+    }
+
     // ------------------------------------------------------------------ one run
 
     /** What one run did. */
@@ -133,6 +185,8 @@ class Soak500LayersTest {
      */
     private fun run(level: EngineLevel, plan: Plan, steps: Int?, expected: List<Checkpoint>?): Outcome {
         System.setProperty(EngineRule.MODE, level.name.lowercase())
+        // Read by each editor this run makes (the reopens too): no byte cap, at both levels (the class KDoc).
+        System.setProperty(MemoryBudget.UNDO_CAP_PROPERTY, NO_UNDO_BYTE_CAP.toString())
         EngineConfig.openSession(level, engine.sessionBudgets(), null)
         LayerBudget.current = Roomy
         val ledger = EngineConfig.budget.ledger
@@ -173,6 +227,7 @@ class Soak500LayersTest {
                 val where = "$level, step $step"
                 edit(editor.c, rnd, plan, step)
                 settle(editor.c, where)
+                keepNewestSteps(editor.c, plan, where)
                 unpin()
                 drops.landed(editor.c.doc)
                 if (step % plan.reopenEvery == 0) editor = reopen(editor, drops)
@@ -386,6 +441,17 @@ class Soak500LayersTest {
     }
 
     /**
+     * v1.10 G2: the history both runs keep (the class KDoc): the newest [Plan.undoSteps] steps, the
+     * older ones dropped as the memory governor drops them (`UndoManager.trimOldest`, which
+     * disposes them). After the edit landed no grouping holds the trim, so a trim skipped at one
+     * level fails here, at its step.
+     */
+    private fun keepNewestSteps(c: EditorController, plan: Plan, where: String) {
+        c.undoManager.trimOldest(plan.undoSteps) { false }
+        assertTrue("$where: the undo history keeps the newest ${plan.undoSteps} steps", c.undoManager.undoCount <= plan.undoSteps)
+    }
+
+    /**
      * The main queue going idle: its idle handlers run once, as `MessageQueue.next` runs them (the
      * paused looper of Robolectric does not run them itself); one that answers false is removed.
      */
@@ -448,8 +514,9 @@ class Soak500LayersTest {
 
     /**
      * How long and how large: the canvas side, the layers at the start and at most, the steps at
-     * most and the minutes at most (0: no time limit), a checkpoint every [checkEvery] steps and a
-     * save with a reopen every [reopenEvery].
+     * most and the minutes at most (0: no time limit), a checkpoint every [checkEvery] steps, a
+     * save with a reopen every [reopenEvery], and the undo steps both runs keep ([undoSteps]; 150
+     * is the history's own limit, so the suite keeps every step it may).
      */
     private enum class Plan(
         val size: Int,
@@ -460,9 +527,10 @@ class Soak500LayersTest {
         val checkEvery: Int,
         val reopenEvery: Int,
         val seed: Long,
+        val undoSteps: Int,
     ) {
-        SUITE(64, 8, 24, 160, 0, 20, 80, 1_105L),
-        NIGHTLY(256, 480, 500, 1_000_000, 20, 100, 1_000, 500L),
+        SUITE(64, 8, 24, 160, 0, 20, 80, 1_105L, 150),
+        NIGHTLY(256, 480, 500, 1_000_000, 20, 100, 1_000, 500L, 32),
     }
 
     /** A layer budget with room for every layer of the soak (the budget is not under test; v1.9's cap is 100). */
@@ -481,6 +549,9 @@ class Soak500LayersTest {
         const val PRE_A8_A11_DROPS = false
 
         const val ROOM = 10_000
+
+        /** The undo cap both runs set (`MemoryBudget.UNDO_CAP_PROPERTY`): none in bytes, so only steps bound the history ([Plan.undoSteps]). */
+        const val NO_UNDO_BYTE_CAP = Long.MAX_VALUE
 
         /** How long one edit may take to land (real ms; a rotation of 500 layers on the nightly run). */
         const val SETTLE_MS = 120_000L

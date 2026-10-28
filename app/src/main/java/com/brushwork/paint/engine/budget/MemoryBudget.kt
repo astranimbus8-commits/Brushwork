@@ -115,8 +115,11 @@ class MemoryBudget(val budgets: Budgets, val ledger: PixelLedger) : NativeAdmiss
      * `max(48 MiB, J/4)`; TILES: `max(128 MiB, R/8)`; FULL: `max(128 MiB, min(1 GiB, swapCap/8))`,
      * where swapCap is the session's swap store capacity (`EngineConfig.swapStore`; none yet
      * gives the 128 MiB floor).
+     *
+     * v1.10 G2: [UNDO_CAP_PROPERTY] (tests only, as `EngineConfig.testMode`), when set to a
+     * positive number of bytes, is the cap at every level instead.
      */
-    fun undoCap(level: EngineLevel): Long = undoCapFor(level, EngineConfig.swapStore.capacityBytes)
+    fun undoCap(level: EngineLevel): Long = testUndoCap() ?: undoCapFor(level, EngineConfig.swapStore.capacityBytes)
 
     /** [undoCap] with the swap capacity [swapCap] given. */
     internal fun undoCapFor(level: EngineLevel, swapCap: Long): Long = when {
@@ -178,6 +181,17 @@ class MemoryBudget(val budgets: Budgets, val ledger: PixelLedger) : NativeAdmiss
 
         /** The undo cap's ceiling at FULL (1 GiB). */
         private const val FULL_UNDO_CEILING = 1L shl 30
+
+        /**
+         * v1.10 G2 (tests only): the system property that, set to a positive number of bytes, gives
+         * [undoCap] one value at every level. The nightly soak (`Soak500LayersTest`) sets it so that
+         * its FULL run and its Classic replay keep the same undo history: the cap is not under test
+         * there, and the levels' own caps and step weights differ by design (section 2.6).
+         */
+        internal const val UNDO_CAP_PROPERTY = "brushwork.undoCapBytes"
+
+        /** [UNDO_CAP_PROPERTY] as a positive byte count, else null (unset, empty, not a number). */
+        internal fun testUndoCap(): Long? = System.getProperty(UNDO_CAP_PROPERTY)?.trim()?.toLongOrNull()?.takeIf { it > 0L }
 
         /** The ledger category an admission for [purpose] counts under. */
         internal fun categoryOf(purpose: NativePurpose): LedgerCategory = when (purpose) {

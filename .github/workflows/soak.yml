@@ -8,8 +8,10 @@ name: Soak tests
 # v1.10 F1: the nightly chaos job (below) runs beside it.
 # v1.10 (design 6.5, the A10 merge): -PsoakOnly also runs Soak500LayersTest, whose NIGHTLY plan
 # (bw.testSet "soak") edits about 500 layers for 20 minutes at FULL, then replays them at CLASSIC;
-# the job's 60 minutes cover both classes. A red nightly blocks the release tag, not a merge.
+# the job's minutes cover both classes. A red nightly blocks the release tag, not a merge.
 # v1.10 lead (CI fix at A8's merge): ubuntu-24.04, as in android.yml (/tmp quota on ubuntu-26.04).
+# v1.10 G2 (compat, C6): 75 minutes, not 60. The -PsoakOnly run took 1851 s (31 min) on the PC with
+# the NIGHTLY plan (20 min at FULL, about 10 min of Classic replay, 129,400 steps); twice that is 62.
 on:
   schedule:
     - cron: '30 2 * * *'
@@ -26,7 +28,7 @@ jobs:
   soak:
     name: Soak tests
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 75
     env:
       CI: 'true'
     steps:

@@ -4,6 +4,10 @@ import com.brushwork.paint.compat18.ShapeTypeV18
 import com.brushwork.paint.compat18.VShapeV18
 import com.brushwork.paint.compat18.VectorCodecV18
 import com.brushwork.paint.compat18.VectorContentV18
+import com.brushwork.paint.compat19.ShapeTypeV19
+import com.brushwork.paint.compat19.VShapeV19
+import com.brushwork.paint.compat19.VectorCodecV19
+import com.brushwork.paint.compat19.VectorContentV19
 import com.brushwork.paint.vector.CopyMaps
 import com.brushwork.paint.vector.VPaint
 import com.brushwork.paint.vector.VShape
@@ -26,9 +30,9 @@ import java.util.zip.Inflater
 
 /**
  * v1.10 A6 (R11 (b)): a path turned into a shape is an ordinary shape object with no new field.
- * The `.vec` data v1.10 writes for it uses only keys the frozen v1.8 reader ([VectorCodecV18])
- * knows, so v1.8 and v1.9 (which reads every v1.8 file; there is no frozen v1.9 codec in this
- * branch) read the same custom outline, style, id and copies; v1.10 reads it back unchanged.
+ * The `.vec` data v1.10 writes for it uses only keys the frozen v1.8 and v1.9 readers
+ * ([VectorCodecV18], [VectorCodecV19] of the G2 `compat19` kit) know, so both read the same custom
+ * outline, style, id and copies; v1.10 reads it back unchanged.
  */
 @RunWith(RobolectricTestRunner::class)
 class TurnIntoShapeCompat19Test {
@@ -92,6 +96,22 @@ class TurnIntoShapeCompat19Test {
         val written = shapeKeys(inflate(bytes), 0)
         val v18 = shapeKeys(VectorCodecV18.encodeJson(VectorContentV18(objects = listOf(o), nextId = old.nextId)), 0)
         assertTrue("keys v1.8 doesn't know: ${written - v18}", v18.containsAll(written))
+
+        // v1.9 (the frozen compat19 kit) reads the same outline, style, id and copies, and writes no key fewer.
+        val v19Read = VectorCodecV19.decode(bytes)
+        val n = v19Read.objects[0] as? VShapeV19 ?: throw AssertionError("v1.9 reads a shape: ${v19Read.objects[0]}")
+        assertEquals(shape.id, n.id)
+        assertEquals(ShapeTypeV19.RECTANGLE, n.shape.type)
+        assertEquals(shape.shape.points.map { it.x to it.y }, n.shape.points!!.map { it.x to it.y })
+        assertEquals(shape.shape.points.map { it.smooth }, n.shape.points.map { it.smooth })
+        assertEquals(shape.shape.style.name, n.shape.style.name)
+        assertEquals(shape.shape.strokeColor, n.shape.strokeColor)
+        assertEquals(shape.shape.fillColor, n.shape.fillColor)
+        assertEquals(shape.shape.strokeWidth, n.shape.strokeWidth)
+        assertEquals(shape.shape.corner.name, n.shape.corner.name)
+        assertEquals("the copies (v1.9)", copies.maps.size, n.shape.copies.maps.size)
+        val v19 = shapeKeys(VectorCodecV19.encodeJson(VectorContentV19(objects = listOf(n), nextId = v19Read.nextId)), 0)
+        assertTrue("keys v1.9 doesn't know: ${written - v19}", v19.containsAll(written))
     }
 
     private companion object {

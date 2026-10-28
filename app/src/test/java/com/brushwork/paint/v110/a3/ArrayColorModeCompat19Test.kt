@@ -1,5 +1,8 @@
 package com.brushwork.paint.v110.a3
 
+import com.brushwork.paint.compat19.ArrayCodecV19
+import com.brushwork.paint.compat19.ArraySpecV19
+import com.brushwork.paint.compat19.v19Twin
 import com.brushwork.paint.model.ArrayCodec
 import com.brushwork.paint.model.ArrayColorMode
 import com.brushwork.paint.model.ArrayEasing
@@ -13,8 +16,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * v1.10 (R5 (b), (e); I4): v1.9's own spec decoder ([ArrayCodecV19], the frozen copy of v1.9.0
- * standing in for the lead's `compat19` kit) reads a Recolored array's `array` JSON as its tint:
+ * v1.10 (R5 (b), (e); I4): v1.9's own spec decoder ([ArrayCodecV19] of the frozen `compat19`
+ * kit, v1.9.0's copy) reads a Recolored array's `array` JSON as its tint:
  * the same stops, strength and the rest of the look, so a v1.9 re-render draws Tint, and its save
  * drops the mode (what v1.10 writes for the Tinted look). v1.10 reads that save, and an unknown
  * future mode, as Tinted. A Tinted look never writes the mode and is byte for byte v1.9's JSON,

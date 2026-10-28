@@ -1,6 +1,6 @@
 package com.brushwork.paint.v110.a1
 
-import com.brushwork.paint.compat18.VectorCodecV18
+import com.brushwork.paint.compat19.VectorCodecV19
 import com.brushwork.paint.v110.a1.A1Kit.kinds
 import com.brushwork.paint.v110.a1.A1Kit.mul
 import com.brushwork.paint.v110.a1.A1Kit.translate
@@ -26,8 +26,8 @@ import org.robolectric.RobolectricTestRunner
  * decoder keeps every map bit for bit, and what it writes back decodes and renders exactly as
  * v1.10 drew it, for every map kind, on a path and a shape.
  *
- * The frozen `compat19` codec is not on `main` at gate-v110-0, so the newest frozen decoder, the
- * v1.8 one (`compat18.VectorCodecV18`), stands in; copy maps are stored the same way since v1.8.
+ * The frozen decoder is v1.9's (`compat19.VectorCodecV19`, the G2 kit; until it landed the v1.8
+ * one stood in, which stores copy maps the same way).
  */
 @RunWith(RobolectricTestRunner::class)
 class OneSideCompat19Test {
@@ -51,8 +51,8 @@ class OneSideCompat19Test {
                 val bytes = VectorCodec.encode(content)
                 val app = VectorCodec.decode(bytes)
 
-                val frozen = VectorCodecV18.decode(bytes)
-                val back = VectorCodec.decode(VectorCodecV18.encode(frozen))
+                val frozen = VectorCodecV19.decode(bytes)
+                val back = VectorCodec.decode(VectorCodecV19.encode(frozen))
                 assertEquals("$what: every object", app.objects.size, back.objects.size)
                 for ((a, b) in app.objects.zip(back.objects)) {
                     val am = ObjectCopies.of(a).maps
