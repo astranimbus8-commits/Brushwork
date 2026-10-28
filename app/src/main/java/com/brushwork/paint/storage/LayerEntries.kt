@@ -42,6 +42,12 @@ import java.io.BufferedInputStream
 import java.io.File
 import java.io.FileInputStream
 import java.nio.ByteBuffer
+import java.util.concurrent.Semaphore
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
+import kotlin.coroutines.cancellation.CancellationException
 import kotlin.math.max
 import kotlin.math.min
 
@@ -110,8 +116,22 @@ internal object LayerEntries {
      * [ClassicOpen.capacity] throws [ClassicCapacityException]: before anything is decoded when
      * its painted pixel files already say so, else once the array pixels are known (every store
      * released). One that fits admits its FLAT layers against `Rstable`, not the session's R.
+     *
+     * v1.10 Gate 2 (lane open, O1; design 4.4 A11 step 6): at TILES and FULL the pixel files are
+     * decoded by up to [decodersFor] threads ([ParallelDecode]), each with its own [StreamedLoad]
+     * (its own band, reserved before it is made), while this thread makes the layers in entry
+     * order exactly as the sequential load does (the order, the FLAT active entry, the editable
+     * data, the first error in entry order). At most one decoded but not yet made entry per
+     * decoder exists at a time, so the open holds no more than the sequential one plus one layer
+     * per extra decoder. Classic (whose FLAT room is counted in one sequence) and an artwork with
+     * fewer than 2 pixel entries keep the one-band load.
+     *
+     * Between entries (and while it waits for a decoder) the load asks [isActive] (the open's
+     * coroutine): false stops it with a [CancellationException], every store released as on any
+     * failure, the decoders stopped and joined first. [progress] hears (n, m) on this thread after
+     * the n-th of m entries became a layer ("Opening layer n of m", `EditorSession`).
      */
-    fun readLayers(dir: File, dto: ProjectFileDto, doc: Document) {
+    fun readLayers(dir: File, dto: ProjectFileDto, doc: Document, isActive: () -> Boolean = { true }, progress: ((Int, Int) -> Unit)? = null) {
         val active = dto.activeLayerIndex.coerceIn(0, dto.layers.lastIndex)
         val classic = EngineConfig.level == EngineLevel.CLASSIC
         val capacity = if (classic && dto.formatVersion >= ClassicOpen.BIG_FORMAT) ClassicOpen.capacity(doc.width, doc.height) else null
@@ -119,24 +139,36 @@ internal object LayerEntries {
             val painted = ClassicOpen.paintedFiles(dir, dto, doc.width, doc.height)
             if (painted > capacity.layers) throw ClassicCapacityException(painted, capacity.layers)
         }
-        val load = StreamedLoad(dir, doc.width, doc.height, tiled = !classic, classicRoom = capacity?.room ?: Long.MAX_VALUE)
+        val decoders = decodersFor(dto, doc.width, doc.height, tiled = !classic)
+        val loads = List(decoders) { StreamedLoad(dir, doc.width, doc.height, tiled = !classic, classicRoom = capacity?.room ?: Long.MAX_VALUE) }
         // The array source pixels (v1.7 containers) stay bitmaps.
         val allocated = ArrayList<Bitmap>()
+        var parallel: ParallelDecode? = null
         try {
+            // Gate 2 review: inside the try, so a decoder that cannot start (a phone out of threads
+            // throws OutOfMemoryError) releases what the started ones built, as any failure does.
+            if (decoders > 1) parallel = ParallelDecode(dto.layers, dto.formatVersion, active, loads)
             for ((i, entry) in dto.layers.withIndex()) {
-                doc.layers += readEntry(dir, entry, dto.formatVersion, doc, load, flat = i == active, allocated)
+                if (!isActive()) throw CancellationException(OPEN_CANCELLED)
+                val decoded = parallel?.take(i, isActive) ?: decode(entry, dto.formatVersion, loads[0], flat = i == active)
+                doc.layers += readEntry(dir, entry, dto.formatVersion, doc, decoded, allocated)
+                parallel?.made()
                 doc.ensureNextLayerIdAbove(entry.id)
+                progress?.invoke(i + 1, dto.layers.size)
             }
             if (capacity != null) {
-                val painted = load.painted + ClassicOpen.arrayLayers(doc)
+                val painted = loads.sumOf { it.painted } + ClassicOpen.arrayLayers(doc)
                 if (painted > capacity.layers) throw ClassicCapacityException(painted, capacity.layers)
             }
         } catch (e: Throwable) {
-            load.releaseAll()
+            // No decoder runs while the stores go (a load's stores are its decoder's until it is joined).
+            parallel?.stop()
+            for (load in loads) load.releaseAll()
             allocated.forEach { it.recycle() }
             throw e
         } finally {
-            load.close()
+            parallel?.stop()
+            for (load in loads) load.close()
         }
         if (doc.hasFolders) uniqueIds(doc)
         doc.loadWarnings += LayerTree.sanitize(doc.layers)
@@ -146,13 +178,69 @@ internal object LayerEntries {
         reserveWrapSourceIds(doc)
     }
 
+    /** The message of an open stopped by its coroutine's cancellation. */
+    private const val OPEN_CANCELLED = "The open was cancelled"
+
+    /**
+     * v1.10 Gate 2 (O1): the decoders of one open, at most 4 (design 4.4 A11 step 6: the T606 has
+     * 2 big and 6 little cores; 4 decoders take the 2 big ones and 2 little ones and leave the
+     * rest to the main and render threads). Measured with G2OpenPhoneOpenTimingTest (20 painted
+     * 1080 x 2408 layers, PC median x 6): 1 decoder 12.1 ms a layer (200 layers 14.5 s), 2
+     * decoders 7.0 ms (8.4 s), 3 decoders 4.8 ms (5.8 s), 4 decoders 4.1 ms (4.9 s, Q4 6 s), on
+     * a busy PC; on a quiet one, 1 and 4 decoders in the same run: 8.3 ms and 2.5 ms a layer
+     * (200 layers 9.9 s and 3.0 s).
+     */
+    const val DECODERS = 4
+
+    /** Test seam (O1): the decoders an open uses at most ([DECODERS]); 1 keeps the one-band load. */
+    @Volatile
+    internal var maxDecoders = DECODERS
+
+    /**
+     * Test seam (O1, Gate 2 review): starts one decoder thread; a test makes one start fail as a
+     * phone out of threads does (`Thread.start` throws OutOfMemoryError).
+     */
+    @Volatile
+    internal var startDecoder: (Thread) -> Unit = { it.start() }
+
+    /**
+     * How many threads decode [dto]'s pixel files on a [w] x [h] canvas: 1 at Classic (not
+     * [tiled]) or with fewer than 2 pixel entries; else up to [maxDecoders], never more than the
+     * budget admits. On known memory each decoder may hold one decoded layer not yet made plus
+     * the one it decodes, so d decoders need R >= 2·d·L (L = w·h·4; 2 decoders: R >= 4·L, one
+     * when R < 4·L, as the design says); each one's Java band is at most 1/16 of J.
+     */
+    internal fun decodersFor(dto: ProjectFileDto, w: Int, h: Int, tiled: Boolean): Int {
+        if (!tiled) return 1
+        var d = min(maxDecoders, dto.layers.count { it.folderSpec(dto.formatVersion) == null })
+        if (d < 2) return 1
+        val budget = EngineConfig.budget
+        if (budget.budgets.known) {
+            val layer = w.toLong() * h * 4
+            d = min(d.toLong(), budget.nativeBudget / (2 * layer)).toInt()
+            val band = LayerCodec.byteLength(w, min(BAND_ROWS, h)).toLong()
+            d = min(d.toLong(), budget.budgets.javaMax / (16 * band)).toInt()
+        }
+        return max(1, d)
+    }
+
+    /** The pixel stores of one entry ([content] null for a folder, [mask] null without one). */
+    private class Decoded(val content: PixelStore?, val mask: PixelStore?)
+
+    /** The pixels of [entry] read through [load]: the content, then the mask (FLAT when [flat]). */
+    private fun decode(entry: LayerEntryDto, formatVersion: Int, load: StreamedLoad, flat: Boolean): Decoded {
+        if (entry.folderSpec(formatVersion) != null) return Decoded(null, null)
+        val content = load.read(entry.contentFileName, "Layer \"${entry.props.name}\"", flat)
+        val mask = if (entry.hasMask) load.read(entry.maskFileName, "The mask of layer \"${entry.props.name}\"", flat, mask = true) else null
+        return Decoded(content, mask)
+    }
+
     private fun readEntry(
         dir: File,
         entry: LayerEntryDto,
         formatVersion: Int,
         doc: Document,
-        load: StreamedLoad,
-        flat: Boolean,
+        decoded: Decoded,
         allocated: MutableList<Bitmap>,
     ): Layer {
         val props = sanitized(entry.props)
@@ -164,17 +252,120 @@ internal object LayerEntries {
                 folderOpen = entry.folderOpen
             }
         }
-        val content = load.read(entry.contentFileName, "Layer \"${entry.props.name}\"", flat)
-        val layer = Layer(entry.id, entry.props.name, content)
+        val layer = Layer(entry.id, entry.props.name, checkNotNull(decoded.content))
         layer.copyPropsFrom(props)
         layer.parentId = entry.parentId
         layer.textData = entry.textData
         layer.shapeData = entry.shapeData
-        if (entry.hasMask) {
-            layer.maskPixels = load.read(entry.maskFileName, "The mask of layer \"${entry.props.name}\"", flat, mask = true)
-        }
+        decoded.mask?.let { layer.maskPixels = it }
         readEditableData(dir, entry, layer, doc, allocated)
         return layer
+    }
+
+    /**
+     * v1.10 Gate 2 (lane open, O1; design 4.4 A11 step 6): the decoder threads of one
+     * [readLayers], one per [StreamedLoad] of [loads] (thread k reads only through `loads[k]`, so
+     * a load's band, its built stores and its counts stay on one thread until [stop] joins it).
+     * They take the entries of [entries] in order; before each one a decoder takes a permit of a
+     * window as wide as the decoders, and the opener gives it back once the entry became a layer
+     * ([made]), so no decoder runs more than the window ahead of the opener. A decoder's failure
+     * is kept as the entry's result and thrown by [take] when the opener reaches that entry (the
+     * first error in entry order wins, as in the sequential load); that decoder stops there. The
+     * stores are unpublished until [readLayers] returns, as `StreamedLoad` says.
+     */
+    private class ParallelDecode(
+        private val entries: List<LayerEntryDto>,
+        private val formatVersion: Int,
+        private val active: Int,
+        loads: List<StreamedLoad>,
+    ) {
+        private val lock = ReentrantLock()
+        private val ready = lock.newCondition()
+
+        /** Per entry: its [Decoded], or the [Throwable] its decode threw; null until done (and once taken). */
+        private val results = arrayOfNulls<Any>(entries.size)
+        private val next = AtomicInteger(0)
+        private val window = Semaphore(loads.size)
+
+        @Volatile
+        private var stopped = false
+
+        /** The decoders started so far ([stop] joins exactly these). */
+        private val threads = ArrayList<Thread>(loads.size)
+
+        init {
+            // Gate 2 review: a decoder that cannot start stops and joins the ones already running
+            // before the failure leaves (the opener then releases every store they built).
+            try {
+                for ((k, load) in loads.withIndex()) {
+                    val t = Thread({ decodeAll(load) }, "Brushwork open decoder ${k + 1}").apply { isDaemon = true }
+                    startDecoder(t)
+                    threads += t
+                }
+            } catch (e: Throwable) {
+                stop()
+                throw e
+            }
+        }
+
+        private fun decodeAll(load: StreamedLoad) {
+            while (true) {
+                window.acquireUninterruptibly()
+                if (stopped) return
+                val i = next.getAndIncrement()
+                if (i >= entries.size) return
+                val result: Any = try {
+                    decode(entries[i], formatVersion, load, flat = i == active)
+                } catch (t: Throwable) {
+                    t
+                }
+                lock.withLock {
+                    results[i] = result
+                    ready.signalAll()
+                }
+                if (result is Throwable) return
+            }
+        }
+
+        /** Entry [i]'s stores once decoded (its decoder's failure is thrown here); [isActive] is asked while waiting. */
+        fun take(i: Int, isActive: () -> Boolean): Decoded {
+            val result = lock.withLock {
+                while (results[i] == null) {
+                    if (!isActive()) throw CancellationException(OPEN_CANCELLED)
+                    ready.await(WAIT_MS, TimeUnit.MILLISECONDS)
+                }
+                results[i].also { results[i] = null }
+            }
+            if (result is Throwable) throw result
+            return result as Decoded
+        }
+
+        /** The entry last taken is a layer now: a decoder may start one more. */
+        fun made() = window.release()
+
+        /** Stops the decoders after the entry each one is decoding and joins them. Idempotent. */
+        fun stop() {
+            if (!stopped) {
+                stopped = true
+                window.release(threads.size)
+            }
+            var interrupted = false
+            for (t in threads) {
+                while (t.isAlive) {
+                    try {
+                        t.join()
+                    } catch (e: InterruptedException) {
+                        interrupted = true
+                    }
+                }
+            }
+            if (interrupted) Thread.currentThread().interrupt()
+        }
+
+        private companion object {
+            /** How often the opener asks `isActive` while it waits for a decoder (ms). */
+            const val WAIT_MS = 50L
+        }
     }
 
     /**
@@ -335,6 +526,10 @@ internal object LayerEntries {
      * holder counts and the releases on failure ([releaseAll]) happen on this thread with no other
      * reader (the threading rules of `Tile` speak of published tiles).
      *
+     * v1.10 Gate 2 (O1): with parallel decoders each decoder thread has its own load (its own
+     * band and built stores), read and closed by that thread alone until the opener joined it;
+     * the opener then releases or closes it ([releaseAll], [close]).
+     *
      * At Classic (not [tiled]) the FLAT bitmaps are admitted against [classicRoom] instead (J16:
      * `Rstable` for a format-4 artwork that fits Classic's capacity, unlimited otherwise, as v1.9
      * loaded with no cap), so a session whose R is low (little free memory at this open) still
@@ -483,7 +678,7 @@ internal object LayerEntries {
             if (!budget.admitNative(bytes, NativePurpose.TRANSIENT)) throw OutOfMemoryError("No room for a ${w}x$rows band while opening")
             bandReserved = bytes
             val made = LayerCodec.Band(w, rows)
-            loadScratchBytes = max(loadScratchBytes, made.bytes.size)
+            synchronized(LayerEntries) { loadScratchBytes = max(loadScratchBytes, made.bytes.size) }
             band = made
             return made
         }

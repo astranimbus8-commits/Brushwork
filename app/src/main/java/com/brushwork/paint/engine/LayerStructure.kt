@@ -108,10 +108,13 @@ internal class LayerStructure(private val c: EditorController) {
      * succeeds (it reads the layer through `layer.bitmap`, which materializes a blank layer). The
      * emptiness check is v1.9's full scan (`TileOps.isTransparent`), on main: about the cost of
      * allocating the layer; it stops at the first painted pixel of a layer made with content.
+     * v1.10 Gate 2 (O5): `EditorController`'s add-layer paths (Add layer, a vector or adjustment
+     * layer) make `BlankPixels` themselves and never reach the scan ([blankScans] counts it).
      */
     private fun blankIfNew(layer: Layer) {
         val p = layer.pixels
         if (layer.isFolder || p !is com.brushwork.paint.engine.tiles.FlatPixels || layer.contentVersion != 0L) return
+        blankScans++
         if (!p.isEmpty()) return
         layer.rehouse(com.brushwork.paint.engine.tiles.BlankPixels(p.width, p.height), layer.maskPixels)
         com.brushwork.paint.engine.tiles.TileOps.dispose(p)
@@ -392,5 +395,8 @@ internal class LayerStructure(private val c: EditorController) {
         private const val TAG = "LayerStructure"
         const val LAST_LAYER = "A drawing needs at least one layer"
         const val SELECTION_LABEL = "Duplicate selection"
+
+        /** Test seam (v1.10 Gate 2, O5): the blank safety net's full scans of a new flat layer (main only). */
+        internal var blankScans = 0L
     }
 }

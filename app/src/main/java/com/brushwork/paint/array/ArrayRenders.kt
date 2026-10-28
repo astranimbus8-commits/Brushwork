@@ -18,12 +18,12 @@ import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.EditTarget
 import com.brushwork.paint.engine.LayerBudget
 import com.brushwork.paint.engine.LayerDataAction
+import com.brushwork.paint.engine.budget.LayerBudgetV110
 import com.brushwork.paint.model.ArrayInstances
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.LayerArray
 import com.brushwork.paint.model.LayerData
 import com.brushwork.paint.tools.array.ArrayTool
-import com.brushwork.paint.ui.common.EngineLabels110
 import com.brushwork.paint.vector.VectorLayers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -474,7 +474,7 @@ internal class ArrayRenders(private val c: EditorController) {
         // Committed while usable: a layer hidden since (a properties preview, no step) still takes it.
         if (c.doc.indexOf(layer) < 0 || !c.checkUsable(layer, allowHidden = true)) return@editScope false
         // v1.10 (A3 step 6, design 2.13): the first write to a layer parked meanwhile may be refused, as `updateLayerData`'s.
-        if (!layer.admitWrite()) { c.toast(EngineLabels110.PAINT_REFUSED); return@editScope false }
+        if (!layer.admitWrite()) { c.toast(LayerBudgetV110.firstWriteRefusal()); return@editScope false }
         val before = layer.dataSnapshot()
         val rec = c.beginEdit(layer, EditTarget.CONTENT).also { it.preserveData = true }
         try {

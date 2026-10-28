@@ -22,7 +22,6 @@ import com.brushwork.paint.exchange.svg.SvgToVector
 import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.LayerData
-import com.brushwork.paint.model.recycleUnlessShared
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.text.TextAlign
 import com.brushwork.paint.tools.text.TextCodec
@@ -186,6 +185,8 @@ object VectorImport {
                         }
                         val objects: List<VObject> = items.map { it.path }
                         val data = VectorContent.EMPTY.plus(objects).first
+                        // v1.10 Gate 2 (O3): the layer before is parked before this one renders.
+                        ImportLayers.parkNewest(layers)
                         layers += NewLayer(name, renderVector(data, target), data = LayerData(vector = data))
                         if (transformLayer < 0) transformLayer = layers.lastIndex
                         room--
@@ -194,7 +195,8 @@ object VectorImport {
             }
         } catch (e: Throwable) {
             // Out of memory or stopped: nothing half made stays allocated.
-            layers.forEach { it.bitmap.recycleUnlessShared() }
+            // Layers already parked release their tiles (fresh, this thread's alone until the insert).
+            layers.forEach { it.recycleBitmaps() }
             throw e
         }
         val texts = ArrayList<SvgText>()
@@ -304,6 +306,8 @@ object VectorImport {
         for (t in prepared.texts) {
             // One text that can't be laid out (odd font data, no memory left) is left out; the
             // rest of the file still comes in.
+            // v1.10 Gate 2 (O3): the layer before is parked before this text renders (main thread).
+            ImportLayers.parkNewest(layers)
             val nl = try {
                 textLayer(c, t)
             } catch (e: OutOfMemoryError) {

@@ -464,11 +464,15 @@ object LayerOps {
         if (layer.hasMask || !ensureUnlocked(c, layer)) return
         commitPendingWork(c)
         val useSelection = fromSelection && c.selection != null
-        guardMemory(c, "Add mask") {
-            if (layer.maskEnabled) {
-                c.addMask(layer, fromSelection = useSelection)
-            } else {
-                addEnabledMask(c, layer, useSelection)
+        // v1.10 Gate 2 (G2-O-a): one edit scope, so an undo still waiting for its tiles applies
+        // before `maskEnabled` is read and the mask lands after it.
+        c.editScope {
+            guardMemory(c, "Add mask") {
+                if (layer.maskEnabled) {
+                    c.addMask(layer, fromSelection = useSelection)
+                } else {
+                    addEnabledMask(c, layer, useSelection)
+                }
             }
         }
     }
@@ -476,10 +480,13 @@ object LayerOps {
     /**
      * Same as [EditorController.addMask] plus re-enabling the mask, as ONE undo step. v1.9 (A7b
      * step 6, the lead at A7b's merge): a mask counts in the layer cap, so at the cap nothing is
-     * added and the layer-limit message shows, as [EditorController.addMask] does.
+     * added and the layer-limit message shows, as [EditorController.addMask] does. v1.10 Gate 2
+     * (G2-O-a): in an edit scope, as [EditorController.addMask], so an undo still waiting for its
+     * tiles applies first and the step lands after it, mask and props together.
      */
-    private fun addEnabledMask(c: EditorController, layer: Layer, fromSelection: Boolean) {
-        if (!c.canAddLayer) { c.toast(c.layerLimitMessage()); return }
+    private fun addEnabledMask(c: EditorController, layer: Layer, fromSelection: Boolean) = c.editScope {
+        if (layer.hasMask) return@editScope
+        if (!c.canAddLayer) { c.toast(c.layerLimitMessage()); return@editScope }
         val sel = if (fromSelection) c.selection else null
         val mask = BitmapUtils.createMaskBitmap(c.doc.width, c.doc.height, if (sel != null) MASK_HIDDEN else MASK_VISIBLE)
         if (sel != null) Canvas(mask).drawBitmap(sel.mask, 0f, 0f, Paint().apply { color = MASK_VISIBLE })
@@ -511,13 +518,19 @@ object LayerOps {
     fun invertMask(c: EditorController, layer: Layer) {
         if (!layer.hasMask || !c.checkEditable(layer)) return
         commitPendingWork(c)
-        // An editable mask stays editable: its spec is inverted (v1.5), not its pixels.
-        val spec = layer.maskSpec
-        if (spec != null) {
-            guardMemory(c, "Invert mask") { MaskEdits.apply(c, layer, spec.copy(invert = !spec.invert), "Invert mask") }
-            return
+        // v1.10 Gate 2 review (G2-O-a): one edit scope, so an undo still waiting for its tiles,
+        // and the undos queued behind it, apply before the mask and its spec are read (an undone
+        // Add mask is not brought back as a new inverted mask).
+        c.editScope {
+            if (!layer.hasMask) return@editScope
+            // An editable mask stays editable: its spec is inverted (v1.5), not its pixels.
+            val spec = layer.maskSpec
+            if (spec != null) {
+                guardMemory(c, "Invert mask") { MaskEdits.apply(c, layer, spec.copy(invert = !spec.invert), "Invert mask") }
+                return@editScope
+            }
+            guardMemory(c, "Invert mask") { c.invertMask(layer) }
         }
-        guardMemory(c, "Invert mask") { c.invertMask(layer) }
     }
 
     fun setMaskEnabled(c: EditorController, layer: Layer, enabled: Boolean) {

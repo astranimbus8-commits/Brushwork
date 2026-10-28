@@ -18,6 +18,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
@@ -89,6 +92,47 @@ class EditorSession(private val app: BrushworkApp, val projectId: String) {
     var offersFullStorage by mutableStateOf(false)
         private set
 
+    /** v1.10 Gate 2 (lane open, O2): the layer the open has read ([layer], 1-based) of the artwork's [of] layer entries. */
+    data class OpenProgress(val layer: Int, val of: Int)
+
+    /**
+     * v1.10 Gate 2 (lane open, O2; design 4.4 A11 step 7): "Opening layer n of m"
+     * (`EngineLabels110.OPENING_LAYERS`) under the open spinner of a big artwork: null until the
+     * open has run [OpeningLine.delayMs] (1 s), then the last layer the load read, updated as layers
+     * decode (written from the load's thread; a newer layer only), and null again once the open
+     * ends or fails, before [state] changes. Never shown for an open that ends sooner.
+     */
+    val opening: StateFlow<OpenProgress?> get() = openingFlow
+    private val openingFlow = MutableStateFlow<OpenProgress?>(null)
+
+    @Volatile
+    private var openingShown = false
+
+    @Volatile
+    private var openingLast: OpenProgress? = null
+
+    /** Shows [p] when the line shows and [p] is newer than what it shows. Any thread. */
+    private fun showOpening(p: OpenProgress?) {
+        if (p == null || !openingShown) return
+        openingFlow.update { cur -> if (cur == null || p.layer > cur.layer) p else cur }
+    }
+
+    /** The load read layer [n] of [m] (its IO thread). */
+    private fun opened(n: Int, m: Int) {
+        val p = OpenProgress(n, m)
+        openingLast = p
+        showOpening(p)
+        OpeningLine.onLayer?.invoke(openingFlow.value)
+    }
+
+    /** The open ended or failed: the line goes (main; the load called [opened] for the last time before it returned or threw). */
+    private fun endOpening(line: Job) {
+        line.cancel()
+        openingShown = false
+        openingLast = null
+        openingFlow.value = null
+    }
+
     init {
         open()
     }
@@ -120,9 +164,22 @@ class EditorSession(private val app: BrushworkApp, val projectId: String) {
                 // v1.10 (A11, design 2.9): the load streams each layer into its store (LayerEntries);
                 // a refused admission is an OutOfMemoryError, caught below. The open's ms go to EngineStats.
                 val started = System.nanoTime()
-                val c = PerfTrace.span(PerfTrace.OPEN) {
-                    val doc = app.repository.load(projectId)
-                    EditorController(app, doc, scope, app.settings)
+                // v1.10 Gate 2 (O2): "Opening layer n of m" once the open has run 1 s, gone before [state] changes.
+                // Gate 2 review: no delay shows it from the first layer on (set before the load
+                // starts, so it never depends on when the line's coroutine first runs).
+                openingShown = OpeningLine.delayMs <= 0L
+                val line = launch {
+                    delay(OpeningLine.delayMs)
+                    openingShown = true
+                    showOpening(openingLast)
+                }
+                val c = try {
+                    PerfTrace.span(PerfTrace.OPEN) {
+                        val doc = app.repository.load(projectId, ::opened)
+                        EditorController(app, doc, scope, app.settings)
+                    }
+                } finally {
+                    endOpening(line)
                 }
                 com.brushwork.paint.engine.EngineStats.record(com.brushwork.paint.engine.EngineStat.OPEN, (System.nanoTime() - started) / 1_000_000f)
                 controller = c
@@ -311,4 +368,15 @@ class EditorSession(private val app: BrushworkApp, val projectId: String) {
         @Volatile
         var engineSessions = 0
     }
+}
+
+/** v1.10 Gate 2 (lane open, O2): when [EditorSession.opening] starts to show. */
+internal object OpeningLine {
+    /** Test seam: how long an open runs before "Opening layer n of m" shows (ms; design 4.4 A11 step 7: 1 s). */
+    @Volatile
+    var delayMs = 1000L
+
+    /** Test seam: hears what [EditorSession.opening] shows after each layer the load read (its IO thread). */
+    @Volatile
+    var onLayer: ((EditorSession.OpenProgress?) -> Unit)? = null
 }
