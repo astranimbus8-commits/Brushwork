@@ -6786,7 +6786,7 @@ never holds the release. It is fixed in a 2.0.x update:
 - A failure never changes an explicit answer (R13 Full with the automatic check, R1, R11) and
   never brings R9 back.
 
-The floor is <n> after Gate 2, unit-full <m>, Timing <t>.
+The floor is 6601 after Gate 2, unit-full 5675, Timing 404.
 
 ## UI (`ui/`)
 `MainActivity` → gallery or editor. `ui/common/Components.kt` holds shared controls (sheets,

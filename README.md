@@ -181,7 +181,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how the code is organized.
 
 ## Testing status
 
-The app is covered by 6500+ JVM/Robolectric tests, including real Skia rendering of the compositor, brushes, tools and filters, and whole-editor UI smoke tests. It has not yet been tried on a wide range of physical devices; please open an issue if something misbehaves on yours.
+The app is covered by 6600+ JVM/Robolectric tests, including real Skia rendering of the compositor, brushes, tools and filters, and whole-editor UI smoke tests. It has not yet been tried on a wide range of physical devices; please open an issue if something misbehaves on yours.
 
 ## Credits
 
