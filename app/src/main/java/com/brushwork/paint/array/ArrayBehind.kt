@@ -2,11 +2,13 @@ package com.brushwork.paint.array
 
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.Rect
 import android.graphics.RectF
 import com.brushwork.paint.ColorModeOps
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.LayerListEvent
 import com.brushwork.paint.LayerListKind
+import com.brushwork.paint.brush.TipCache
 import com.brushwork.paint.engine.ArrayDraw
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.LambdaAction
@@ -23,7 +25,18 @@ import com.brushwork.paint.tools.array.ArrayTool
 import com.brushwork.paint.ui.common.ArrayLabels
 import com.brushwork.paint.ui.common.ArrayLabels110
 import com.brushwork.paint.vector.VectorContent
+import com.brushwork.paint.vector.VectorLayers
 import com.brushwork.paint.vector.VectorOps
+import com.brushwork.paint.vector.render.RenderCache
+import com.brushwork.paint.vector.render.VectorLayerRenderer
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlin.math.max
 
 /**
  * v1.10 (R4, UQ4, design R4): "Array behind": the copies of a source go on a NEW layer directly
@@ -51,6 +64,10 @@ import com.brushwork.paint.vector.VectorOps
  * in the Array tool, as "Array…" does. On a copies-only layer ([isCopiesOnly]) "Remove array"
  * reads [ArrayLabels110.REMOVE_WITH_LAYER] and deletes the whole layer in one step
  * ([removeWithLayer], UQ11).
+ *
+ * v1.10 G2 (V6): the copies of a whole vector layer whose render would hold the main thread past
+ * `VectorLayers`' budget render on a worker under the busy overlay ([renderBelow]); the layer
+ * goes in, as the same one step, when that render is done.
  *
  * Main thread. Pixel work goes through `ArraySources` (this file reads no layer pixels itself).
  */
@@ -121,7 +138,14 @@ object ArrayBehind {
      * step). A raster layer takes the selection ([fromSelectionBelow]) or is refused with
      * `ArrayLabels.PLAIN_REFUSAL`; a layer with an array opens it in the Array tool.
      */
-    fun fromLayerBelow(c: EditorController, layer: Layer): Boolean {
+    fun fromLayerBelow(c: EditorController, layer: Layer): Boolean = wholeBelow(c, layer, background = true)
+
+    /**
+     * [fromLayerBelow]. With [background], the copies of a vector layer whose render would hold
+     * the main thread past `VectorLayers`' budget render on a worker ([renderBelow], v1.10 G2, V6):
+     * true then, and the layer goes in when the render is done.
+     */
+    private fun wholeBelow(c: EditorController, layer: Layer, background: Boolean): Boolean {
         if (c.doc.indexOf(layer) < 0) return false
         ArrayOps.refusal(layer)?.let { c.toast(it); return false }
         if (layer.array != null) { ArrayOps.openTool(c, layer); return true }
@@ -132,6 +156,7 @@ object ArrayBehind {
         }
         if (!c.checkUsable(layer)) return false
         if (!roomFor(c, 0L)) return false
+        var later: (() -> Unit)? = null
         val made = ArrayOps.paused(c) {
             c.vectors.flushPending()
             val before = layer.dataSnapshot()
@@ -141,6 +166,10 @@ object ArrayBehind {
             val data = LayerData(text = before.text, shape = before.shape, vector = content, array = LayerArray(behindSpec()))
             val bmp = if (content != null) {
                 val shown = ArrayDraw.effectiveVector(data) ?: content
+                if (background && c.vectors.rendersInBackground(shown, c.doc.bounds)) {
+                    later = { renderBelow(c, layer, before, data, shown) }
+                    return@paused null
+                }
                 drawn(c) { cv -> ArrayOps.renderTiles(cv, shown, c.doc.bounds, c.doc.bounds) }
             } else {
                 // A text or shape source drawn once per copy, as `updateLayerData` draws an array.
@@ -150,9 +179,78 @@ object ArrayBehind {
                 drawn(c) { cv -> ArrayDraw.drawWithArray(cv, data.array, bounds, one) }
             } ?: return@paused null
             placeBelow(c, layer, newLayer(c, layer, bmp, data))
-        } ?: return false
+        }
+        later?.let { it(); return true }
+        if (made == null) return false
         opened(c, made, layer)
         return true
+    }
+
+    /**
+     * v1.10 G2 (V6): the copies [shown] of the whole vector layer [src] (its data [before], the new
+     * layer's [data]) rendered on a worker, for a render that would hold the main thread past
+     * `VectorLayers`' budget (I3, `VectorLayers.rendersInBackground`; on the T606 proxy the
+     * render on the main thread of a phone-size layer of 200 paths and shapes takes about 22 ms, of
+     * 200 brush strokes about 83 ms, against a frame of 16.7 ms). It runs under the busy overlay
+     * [VectorLayers.BUSY_LABEL] with its progress and Stop, as a background vector render shows
+     * it, and the overlay takes every touch meanwhile. When the render is done the new layer goes in
+     * as the same ONE step [ArrayLabels110.ARRAY_BEHIND_STEP] a render on the main thread makes (the
+     * same pixels: `VectorLayerRenderer` over the whole document, the color mode applied). A source
+     * that changed meanwhile (its data no longer [before], the document resized) is made again from
+     * what it holds now, on the main thread; one that is gone makes nothing. Stopped, or the editor
+     * closing, records nothing; out of memory says so.
+     */
+    private fun renderBelow(c: EditorController, src: Layer, before: LayerData, data: LayerData, shown: VectorContent) {
+        val doc = Rect(c.doc.bounds)
+        val colorMode = c.doc.colorMode
+        val job = c.scope.async(Dispatchers.Default) {
+            val bmp = try { BitmapUtils.createLayerBitmap(doc.width(), doc.height()) } catch (e: OutOfMemoryError) { return@async null }
+            try {
+                val tips = TipCache(8L shl 20)
+                // Progress reaches the main thread at most once per percent.
+                var posted = -1
+                try {
+                    VectorLayerRenderer.renderWith(Canvas(bmp), shown, doc, emptySet(), tips, doc, RenderCache()) { done, n ->
+                        val pct = done * 100 / max(1, n)
+                        if (pct != posted) {
+                            posted = pct
+                            c.scope.launch { if (c.busyMessage == VectorLayers.BUSY_LABEL) c.busyProgress = pct / 100f }
+                        }
+                        isActive
+                    }
+                } finally {
+                    tips.clear()
+                }
+                ensureActive()
+                if (colorMode != ColorMode.RGB) ColorModeOps.constrain(bmp, doc, colorMode)
+                bmp
+            } catch (e: OutOfMemoryError) {
+                bmp.recycle()
+                null
+            } catch (t: Throwable) {
+                bmp.recycle()
+                throw t
+            }
+        }
+        c.runBusy(VectorLayers.BUSY_LABEL, onCancel = { job.cancel() }) {
+            val bmp = try {
+                job.await()
+            } catch (e: CancellationException) {
+                // Stopped: nothing is made. The editor closing cancels this wait too.
+                if (job.isCancelled && currentCoroutineContext().isActive) null else throw e
+            }
+            if (bmp == null) {
+                if (!job.isCancelled) c.toast(ArrayOps.MEMORY_REFUSAL)
+                return@runBusy
+            }
+            if (c.doc.indexOf(src) < 0 || c.doc.bounds != doc || c.doc.colorMode != colorMode || src.dataSnapshot() != before) {
+                bmp.recycle()
+                wholeBelow(c, src, background = false)
+                return@runBusy
+            }
+            val made = ArrayOps.paused(c) { placeBelow(c, src, newLayer(c, src, bmp, data)) } ?: return@runBusy
+            opened(c, made, src)
+        }
     }
 
     /** True on a layer whose array hides its source: the copies-only layer "Array behind" makes. */

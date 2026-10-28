@@ -277,7 +277,7 @@ class LabelsV110Test {
             "object bar messages",
             v110 = pick(
                 "ObjectBarLabels110", "NO_EDITOR_PARTS", "NO_EDITOR_SMALL", "NOTE_GRADIENT", "NOTE_WIDTH", "NOTE_GENERATED", "NOTE_OPEN_FILL",
-                "REFUSE_PIECES", "REFUSE_SMALL", "REFUSE_POINTS",
+                "NOTE_CLOSED_FILL", "REFUSE_PIECES", "REFUSE_SMALL", "REFUSE_POINTS",
             ),
             older = listOf(PointLabels.ARROW_REFUSAL, PointLabels.ROUND_REFUSAL, "Undo"),
         )

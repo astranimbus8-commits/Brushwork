@@ -2,9 +2,8 @@ package com.brushwork.paint.ui.layers
 
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -12,14 +11,16 @@ import androidx.compose.ui.Modifier
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.SmokeUi
+import com.brushwork.paint.testing.StripTestKit
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.text.TextCodec
 import com.brushwork.paint.tools.text.TextTool
 import com.brushwork.paint.tools.vector.ShapeBox
 import com.brushwork.paint.tools.vector.ShapeTool
 import com.brushwork.paint.ui.editor.HistoryLabels
+import com.brushwork.paint.ui.editor.chrome.OptionsStripPanel
 import com.brushwork.paint.ui.theme.BrushworkTheme
-import com.brushwork.paint.ui.vector.ShapeToolOptions
+import com.brushwork.paint.ui.tools.PillSharpCell
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -124,7 +125,10 @@ class TextLayerPanelRobolectricTest {
 
     /**
      * The shape strip's "Points" chip with the selected point's actions, then shape layers in the
-     * layers window: shape badge, "Edit shape" in the ⋮ menu, double-tap on the row.
+     * layers window: shape badge, "Edit shape" in the ⋮ menu, double-tap on the row. v1.10 G2 (V4):
+     * the Shape strip as the app shows it (the v1.5 strip function is gone): "Points" on row 1, the
+     * point actions on the More row, and Sharp / Smooth on the X / Y pill's cell (v1.10 R12),
+     * composed under the strip.
      */
     private fun shapeLayersAndPoints(activity: ComponentActivity, c: EditorController) {
         c.selectLayer(c.doc.layers[0])
@@ -136,13 +140,18 @@ class TextLayerPanelRobolectricTest {
         var panel by mutableStateOf(false)
         activity.setContent {
             BrushworkTheme {
-                if (strip) Row(Modifier.horizontalScroll(rememberScrollState())) { ShapeToolOptions(tool) }
+                if (strip) Column(Modifier.fillMaxWidth()) {
+                    OptionsStripPanel(c, Modifier.fillMaxWidth())
+                    tool.pointCorners?.let { PillSharpCell(it) }
+                }
                 if (panel) LayersPanel(c, { panel = false }, onImportPicture = {})
             }
         }
         SmokeUi.settle()
         assertFalse("no Points without a shape", SmokeUi.has("Points", exact = true))
+        assertTrue(StripTestKit.openMoreRow())
         assertTrue(SmokeUi.has("Editable", exact = true))
+        StripTestKit.closeMoreRow()
         assertTrue(tool.ensurePending())
         tool.place(ShapeBox(200f, 150f, 120f, 80f))
         SmokeUi.settle()
@@ -155,6 +164,7 @@ class TextLayerPanelRobolectricTest {
         assertTrue(tool.points!![1].smooth)
         SmokeUi.settle()
         assertTrue(SmokeUi.has("Sharp corner", exact = true))
+        assertTrue(StripTestKit.openMoreRow())
         SmokeUi.click("Delete point", exact = true)
         assertEquals(3, tool.points!!.size)
         SmokeUi.settle()
@@ -163,8 +173,10 @@ class TextLayerPanelRobolectricTest {
         SmokeUi.settle()
         assertEquals(4, tool.points!!.size)
         SmokeUi.settle()
+        if (!StripTestKit.moreRowShown()) assertTrue(StripTestKit.openMoreRow())
         SmokeUi.click("Reset shape", exact = true)
         assertNull(tool.points)
+        StripTestKit.closeMoreRow()
         tool.commit()
         val shapeLayer = c.activeLayer
         assertTrue(shapeLayer.isShapeLayer)

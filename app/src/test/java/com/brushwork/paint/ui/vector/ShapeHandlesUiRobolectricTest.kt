@@ -2,7 +2,8 @@ package com.brushwork.paint.ui.vector
 
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
@@ -11,6 +12,7 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.SmokeUi
+import com.brushwork.paint.testing.StripTestKit
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
 import com.brushwork.paint.tools.vector.ShapeHandleSide
@@ -20,6 +22,7 @@ import com.brushwork.paint.tools.vector.ShapeTool
 import com.brushwork.paint.tools.vector.ShapeType
 import com.brushwork.paint.ui.color.RobolectricUi
 import com.brushwork.paint.ui.common.LocalIncrements
+import com.brushwork.paint.ui.editor.chrome.OptionsStripPanel
 import com.brushwork.paint.ui.theme.BrushworkTheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -37,11 +40,21 @@ import org.robolectric.shadows.ShadowLog
  * scale", "Longer handles", the "Handle scale" slider, "In and out" / "In" / "Out", "All points");
  * ‹ › and the slider change the selected point's handles, each one in-tool step; the value reads
  * 100 % at rest; a typed value is exact; a long-press on the value opens the Scale step's popup.
- * Own sandbox, one test.
+ * v1.10 G2 (V4): the group as the app shows it, in the Shape strip's "Handles" popup on the More
+ * row (the v1.5 strip function this test rendered is gone); typing the scale closes the popup,
+ * so the popup is opened again where a step needs it. Own sandbox, one test.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = "w392dp-h873dp-xxhdpi", instrumentedPackages = ["com.brushwork.paint.ui.vector.handlessandbox"])
 class ShapeHandlesUiRobolectricTest {
+
+    /** The More row's "Handles" popup open (opened when it is not). */
+    private fun openHandles() {
+        if (SmokeUi.has("Shorter handles", exact = true)) return
+        if (!StripTestKit.moreRowShown()) assertTrue("the More row", StripTestKit.openMoreRow())
+        SmokeUi.click(ShapeStripItems.HANDLES_LABEL, exact = true)
+        assertTrue("the Handles popup: ${SmokeUi.shown().take(60)}", SmokeUi.has("Shorter handles", exact = true))
+    }
 
     @Test
     fun theHandlesGroup() {
@@ -58,21 +71,25 @@ class ShapeHandlesUiRobolectricTest {
         activity.setContent {
             BrushworkTheme {
                 CompositionLocalProvider(LocalIncrements provides c.increments) {
-                    // Wrapped (not scrolled) so every control is on screen for real taps.
-                    FlowRow(Modifier.fillMaxWidth()) { ShapeToolOptions(tool) }
+                    Box(Modifier.fillMaxSize()) { OptionsStripPanel(c, Modifier.fillMaxWidth()) }
                 }
             }
         }
         SmokeUi.settle()
         assertFalse("no group outside points mode", SmokeUi.has("Shorter handles", exact = true))
+        assertTrue(StripTestKit.openMoreRow())
+        assertFalse("no Handles outside points mode", SmokeUi.has(ShapeStripItems.HANDLES_LABEL, exact = true))
+        StripTestKit.closeMoreRow()
         SmokeUi.click("Points", exact = true)
         assertTrue(tool.pointsMode)
+        openHandles()
         for (label in listOf("Shorter handles", "Type handle scale", "Longer handles", "Handle scale", "In and out", "In", "Out", "All points")) {
             assertTrue("\"$label\" in the strip: ${SmokeUi.shown().take(80)}", SmokeUi.has(label, exact = true))
         }
         assertTrue(SmokeUi.has("100 %", exact = true))
         tool.selectPoint(0)
         SmokeUi.settle(4)
+        openHandles()
         fun out0() = ShapePoints.handles(tool.docAnchors()!!, 0, true).second.length
         val base = out0()
 
@@ -100,6 +117,7 @@ class ShapeHandlesUiRobolectricTest {
         SmokeUi.click("Type handle scale")
         SmokeUi.typeAndDone("Scale", "137")
         assertEquals(base * 1.37f, out0(), 1e-3f)
+        openHandles()
 
         // The side chips.
         SmokeUi.click("Out", exact = true)
@@ -116,6 +134,7 @@ class ShapeHandlesUiRobolectricTest {
         tool.setPointSmooth(0, false)
         tool.selectPoint(0)
         SmokeUi.settle(4)
+        openHandles()
         val before = tool.docAnchors()
         SmokeUi.tap("Longer handles", exact = true)
         SmokeUi.settle(4)
@@ -130,6 +149,7 @@ class ShapeHandlesUiRobolectricTest {
         assertTrue("undo takes back the sharp corner (no empty step)", tool.undoStep())
         assertTrue(tool.docAnchors()!![0].smooth)
         SmokeUi.settle(4)
+        openHandles()
         assertFalse("a smooth point again", valueNode().node.config.contains(SemanticsProperties.Disabled))
         SmokeUi.click("All points", exact = true)
         assertTrue(tool.handlesAllPoints)
@@ -140,6 +160,7 @@ class ShapeHandlesUiRobolectricTest {
         SmokeUi.settle()
         assertTrue("the Step popup: ${SmokeUi.shown().take(60)}", SmokeUi.has("Step for scales", exact = true))
         SmokeUi.click("Cancel", exact = true)
+        StripTestKit.closeMoreRow()
         c.dispose()
     }
 

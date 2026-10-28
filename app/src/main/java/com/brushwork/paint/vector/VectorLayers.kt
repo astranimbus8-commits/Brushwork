@@ -330,14 +330,23 @@ class VectorLayers internal constructor(private val c: EditorController) {
     /** Everything [obj] can paint (document px, including the brush radius). */
     fun paintBounds(obj: VObject): RectF = VectorOps.bounds(obj)
 
+    /**
+     * v1.10 G2 (V6): true on a copies-only layer (`ArrayBehind`, `ArraySpec.hideSource`): its
+     * objects are the hidden source of the copies, so no vector tool hits or selects them there
+     * ([hitTest], the Curve and Shape tools, the object selection).
+     */
+    fun hidesObjects(layer: Layer): Boolean = layer.array?.spec?.let(ArrayDraw::hidesSource) == true
+
     // region v110-A1 copies
     /**
      * The topmost object of [layer] under [p] within [tolDoc] px; [below] = only objects under
      * that id, and when none is, from the top again (repeated taps cycle through overlaps).
      * Only the objects the spatial index finds near [p] are tested.
+     * v1.10 G2 (V6): none on a copies-only layer ([hidesObjects]).
      */
     fun hitTest(layer: Layer, p: Vec2, tolDoc: Float, below: Long? = null): VObject? {
         val content = layer.vector ?: return null
+        if (hidesObjects(layer)) return null
         val objs = content.objects
         if (objs.isEmpty()) return null
         val index = ObjectIndex.of(content)
@@ -973,6 +982,15 @@ class VectorLayers internal constructor(private val c: EditorController) {
 
     /** True when [estimate] cost units should render in the background. */
     private fun goAsync(estimate: Double): Boolean = goAsyncUnits(estimate)
+
+    /**
+     * v1.10 G2 (V6): true when a render of [content] over [region] would go to the background by
+     * this service's rules (I3: [policy], the estimate at the measured speed against
+     * [syncBudgetMs], never inside another step or under another busy overlay). "Array behind"
+     * asks it for the copies of a whole vector layer (`ArrayBehind`).
+     */
+    internal fun rendersInBackground(content: VectorContent, region: Rect): Boolean =
+        goAsync(VectorLayerRenderer.estimateUnits(content, region))
 
     private fun goAsyncUnits(units: Double): Boolean {
         // Synchronous: while a render completes, inside another step (it must land in that

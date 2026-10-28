@@ -67,6 +67,7 @@ object ObjectBarLabels110 { // R10, R11
     const val NOTE_WIDTH = "Line thickness became even"
     const val NOTE_GENERATED = "The generator was removed; the outline is kept"
     const val NOTE_OPEN_FILL = "The fill was removed because the path is open"
+    const val NOTE_CLOSED_FILL = "The path was closed to keep its fill"
     const val REFUSE_PIECES = "Paths of several separate pieces cannot become a shape"
     const val REFUSE_SMALL = "This path is too small to become a shape"
     const val REFUSE_POINTS = "This path has too many points for the Shape tool"

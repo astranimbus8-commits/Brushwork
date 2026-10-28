@@ -3580,10 +3580,11 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
     /**
      * Opens the topmost shape object of the active vector layer at [p] (not [skip]) for
      * editing; false when there is none.
+     * v1.10 G2 (V6): none on a copies-only layer (`VectorLayers.hidesObjects`).
      */
     private fun openShapeObjectAt(p: Vec2, skip: Long?): Boolean {
         val layer = controller.doc.activeLayer
-        if (!isVectorTarget(layer) || !controller.doc.effectiveVisible(layer) || controller.doc.effectiveLocked(layer)) return false
+        if (!isVectorTarget(layer) || controller.vectors.hidesObjects(layer) || !controller.doc.effectiveVisible(layer) || controller.doc.effectiveLocked(layer)) return false
         val content = layer.vector ?: return false
         val tol = controller.docLength(HIT_TOLERANCE_DP)
         for (i in content.objects.indices.reversed()) {
@@ -4028,13 +4029,16 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         return true
     }
 
-    /** Topmost visible, unlocked shape layer whose shape is at [p] (the active layer first), or null. */
+    /**
+     * Topmost visible, unlocked shape layer whose shape is at [p] (the active layer first), or null.
+     * v1.10 G2 (V6): a copies-only layer ("Array behind") hides its shape and is never found.
+     */
     fun shapeLayerAt(p: Vec2, skip: Layer? = null): Layer? {
         val doc = controller.doc
         val tol = controller.docLength(HIT_TOLERANCE_DP)
         val active = doc.activeLayer
         fun hits(l: Layer): Boolean {
-            if (l === skip || !l.isShapeLayer || !doc.effectiveVisible(l) || doc.effectiveLocked(l)) return false
+            if (l === skip || !l.isShapeLayer || !doc.effectiveVisible(l) || doc.effectiveLocked(l) || controller.vectors.hidesObjects(l)) return false
             val o = decoded(l) ?: return false
             return ObjectCopies.hits(o, p, tol)
         }
@@ -4176,6 +4180,23 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
     }
 
     override fun commit() {
+        commitPending()
+        endColorsSession()
+    }
+
+    /**
+     * v1.10 G2 (V2): once the pending new shape is gone (placed or discarded) and its pixels are
+     * painted, the user's main color and options its Object colors edits replaced come back at
+     * once ([ShapeColorsDelegate.colorsSessionEnded]), so an object opened in the same call
+     * starts from the user's. Not in [resetPending]: the commits reset before they paint, and a
+     * brush outline is painted with the main color ([BrushStrokePreview.commit]). Nothing while a
+     * shape is still pending (a refused commit).
+     */
+    private fun endColorsSession() {
+        if (box == null) colors.colorsSessionEnded()
+    }
+
+    private fun commitPending() {
         val b = box ?: return
         if (eraseOn) {
             commitErase()
@@ -4294,6 +4315,8 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
             refreshPreview()
         }
         controller.invalidateOverlay()
+        // (Also placed by "Turn into path", which opens the Path tool right after.)
+        endColorsSession()
     }
 
     // ------------------------------------------------------------------ joining a shape layer (v1.9, R14 S1)
@@ -4598,6 +4621,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         if (vectorSession != null) endObjectEdit()
         releaseVectorPreview()
         controller.invalidateOverlay()
+        endColorsSession()
     }
 
     override fun onActivate() {

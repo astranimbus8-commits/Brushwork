@@ -77,10 +77,11 @@ class PaintModeConsistencyTest {
         assertTrue("ShapeStrip: tagged as the strip's", shapeStrip.contains("PaintModeTags.SHAPE_STRIP"))
         assertNoneGone("ShapeStrip's region", shapeStrip)
 
-        // Row 2 (and the strip function the tests still render, row 5): ShapeToolOptions.kt.
+        // Row 2: ShapeToolOptions.kt's Shape settings sheet. (Row 5, the v1.5 strip function the tests
+        // still rendered, is gone, v1.10 G2 V4: the strip's style cell of row 1 is the only one.)
         val shapeOptions = source("ui/vector/ShapeToolOptions.kt")
         assertTrue("Shape settings: PaintModeSheetRow", shapeOptions.contains("PaintModeSheetRow(s.style.paintMode(), PaintModeTags.SHAPE)"))
-        assertTrue("ShapeToolOptions(): PaintModeMenuCell", shapeOptions.contains("PaintModeMenuCell("))
+        assertTrue("ShapeToolOptions() is gone", !shapeOptions.contains("fun ShapeToolOptions("))
         assertTrue("ShapeToolOptions.kt: no ShapeStyle chips", !shapeOptions.contains("ShapeStyle.entries") && !shapeOptions.contains("StyleGlyph("))
 
         // Row 3: the curve strips' Stroke kind cell: the glyph as its face, the choices in its menu.
@@ -97,9 +98,11 @@ class PaintModeConsistencyTest {
         assertTrue("Curve settings: the strip's refusal", curveOptions.contains("refusal = curvePaintRefusal(tool.fillPossible)"))
         assertNoneGone("CurveToolOptions' region", curveOptions)
 
-        // The Object colors sheet's mode glyphs (drawn by PaintModeChoices, so a refused mode says why).
+        // The Object colors sheet's mode glyphs: the segments with their refusal (v1.10 G2 V4), so a
+        // refused mode says why.
         val sheet = source("ui/vector/ObjectColorsSheet.kt")
-        assertTrue("Object colors: the paint-mode glyphs", sheet.contains("PaintModeChoices("))
+        assertTrue("Object colors: the paint-mode glyphs", sheet.contains("PaintModeSegments(") && sheet.contains("refusal = "))
+        assertTrue("Object colors: no workaround around the segments", !sheet.contains("PaintModeChoices("))
         assertNoneGone("ObjectColorsSheet.kt", sheet)
 
         // The three VectorWidgets controls are built from the F0 controls; StyleGlyph moved to F0.

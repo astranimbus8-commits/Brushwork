@@ -1,6 +1,5 @@
 package com.brushwork.paint.ui.vector
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -13,7 +12,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowRightAlt
@@ -46,18 +44,13 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.disabled
-import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.brushwork.paint.core.Geometry
@@ -88,9 +81,7 @@ import com.brushwork.paint.ui.common.PaintModeSegments
 import com.brushwork.paint.ui.common.UnitSelector
 import com.brushwork.paint.ui.common.V110Tags
 import com.brushwork.paint.ui.common.closeOnSecondFinger
-import com.brushwork.paint.ui.common.iconLongPressLabel
 import com.brushwork.paint.ui.common.longPressLabel
-import com.brushwork.paint.ui.common.paintModeName
 import com.brushwork.paint.ui.theme.BrushworkColors
 import com.brushwork.paint.ui.theme.IbisColors
 import kotlin.math.cos
@@ -330,9 +321,9 @@ internal object PaintModeTags {
 /**
  * v1.10 (R3): the paint mode in a settings sheet: the three [PaintModeSegments] (icons only,
  * tagged "$tag.<MODE>") with their long-press names (the sheet host resets the scope, so the row
- * provides its own). With a [refusal] (the curve tools: [curvePaintRefusal]) they are drawn by
- * [PaintModeChoices], so a refused mode is greyed and a tap hands its reason to [onRefused], as
- * the strip's menu does.
+ * provides its own). With a [refusal] (the curve tools: [curvePaintRefusal]) a refused mode is
+ * greyed and a tap hands its reason to [onRefused], as the strip's menu does (v1.10 G2: the
+ * segments' own refusal).
  */
 @Composable
 internal fun PaintModeSheetRow(
@@ -344,11 +335,7 @@ internal fun PaintModeSheetRow(
 ) {
     IconLongPressScope {
         Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            if (refusal == null) {
-                PaintModeSegments(selected = selected, tagPrefix = tag, onSelect = onSelect)
-            } else {
-                PaintModeChoices(selected = selected, refusal = refusal, tag = tag, onSelect = onSelect, onRefused = onRefused)
-            }
+            PaintModeSegments(selected = selected, tagPrefix = tag, refusal = refusal ?: { null }, onRefused = onRefused, onSelect = onSelect)
         }
     }
 }
@@ -400,12 +387,11 @@ internal fun PaintModeMenuCell(label: String, mode: PaintMode, fill: Int, width:
 }
 
 /**
- * v1.10 (R3; the curve strips' Stroke kind menu): the three paint-mode segments as
- * [PaintModeSegments] draws them (48 x 40 dp, [PaintModeGlyph], tagged "$tag.<MODE>", known by
- * [paintModeName]), for a place where a mode can be refused: a mode with a [refusal] is greyed and
- * marked disabled, reads the refusal as its state, and a tap hands it to [onRefused] (v1.7: "Fill
- * and Both greyed with 1 or 2 points, a tap says why") instead of [onSelect].
- * (PaintModeSegments ignores a tap on a segment that is not enabled and says nothing; LeadRequest.)
+ * v1.10 (R3; the curve strips' Stroke kind menu): the three paint-mode segments for a place where a
+ * mode can be refused: a mode with a [refusal] is greyed and marked disabled, reads the refusal as
+ * its state, and a tap hands it to [onRefused] (v1.7: "Fill and Both greyed with 1 or 2 points, a
+ * tap says why") instead of [onSelect]. v1.10 G2 (V4): [PaintModeSegments] with its refusal (this
+ * stays for the curve strips' menu).
  */
 @Composable
 internal fun PaintModeChoices(
@@ -415,33 +401,7 @@ internal fun PaintModeChoices(
     onSelect: (PaintMode) -> Unit,
     onRefused: (String) -> Unit,
 ) {
-    val shape = RoundedCornerShape(8.dp)
-    Row(Modifier.selectableGroup(), verticalAlignment = Alignment.CenterVertically) {
-        for (mode in PaintMode.entries) {
-            val on = mode == selected
-            val refused = refusal(mode)
-            val name = paintModeName(mode)
-            Box(
-                Modifier
-                    .size(48.dp, 40.dp)
-                    .background(if (on) BrushworkColors.AccentDim else Color.Transparent, shape)
-                    .testTag("$tag.${mode.name}")
-                    .iconLongPressLabel(name)
-                    .clickable(role = Role.RadioButton) { if (refused != null) onRefused(refused) else onSelect(mode) }
-                    .semantics {
-                        contentDescription = name
-                        this.selected = on
-                        if (refused != null) {
-                            stateDescription = refused
-                            disabled()
-                        }
-                    },
-                contentAlignment = Alignment.Center,
-            ) {
-                PaintModeGlyph(mode, if (on) Color.White else BrushworkColors.OnChrome, Modifier.alpha(if (refused == null) 1f else 0.38f))
-            }
-        }
-    }
+    PaintModeSegments(selected = selected, tagPrefix = tag, refusal = refusal, onRefused = onRefused, onSelect = onSelect)
 }
 
 /**

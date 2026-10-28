@@ -2,6 +2,7 @@ package com.brushwork.paint.ui.common
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.size
@@ -20,7 +21,10 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import com.brushwork.paint.ui.theme.BrushworkColors
 
@@ -63,19 +67,26 @@ fun PaintModeGlyph(mode: PaintMode, tint: Color, modifier: Modifier = Modifier) 
  * everywhere: CurveLabels17.STROKE_ONLY, FILL_ONLY and BOTH. Each segment is tagged
  * "$tagPrefix.<MODE>" (the enum name). [selected] null selects none; a segment that is not
  * [enabled] is dimmed and ignores taps.
+ *
+ * v1.10 G2 (V4, R3): a mode with a [refusal] (e.g. Fill and Both of a curve of 1 or 2 points,
+ * CurveLabels17.FILL_NEEDS_3) is dimmed and marked disabled, reads the refusal as its state, and a
+ * tap hands it to [onRefused] instead of [onSelect] (v1.7: "a tap says why"); none by default.
  */
 @Composable
 fun PaintModeSegments(
     selected: PaintMode?,
     enabled: (PaintMode) -> Boolean = { true },
     tagPrefix: String,
+    refusal: (PaintMode) -> String? = { null },
+    onRefused: (String) -> Unit = {},
     onSelect: (PaintMode) -> Unit,
 ) {
     val shape = RoundedCornerShape(8.dp)
     Row(Modifier.selectableGroup(), verticalAlignment = Alignment.CenterVertically) {
         for (mode in PaintMode.entries) {
             val on = mode == selected
-            val active = enabled(mode)
+            val refused = refusal(mode)
+            val active = refused == null && enabled(mode)
             val name = paintModeName(mode)
             Box(
                 Modifier
@@ -83,8 +94,22 @@ fun PaintModeSegments(
                     .background(if (on) BrushworkColors.AccentDim else Color.Transparent, shape)
                     .testTag("$tagPrefix.${mode.name}")
                     .iconLongPressLabel(name)
-                    .selectable(selected = on, enabled = active, role = Role.RadioButton, onClick = { onSelect(mode) })
-                    .semantics { contentDescription = name },
+                    .then(
+                        if (refused == null) {
+                            Modifier.selectable(selected = on, enabled = active, role = Role.RadioButton, onClick = { onSelect(mode) })
+                        } else {
+                            // Still tappable: the tap says why.
+                            Modifier.clickable(role = Role.RadioButton) { onRefused(refused) }
+                        },
+                    )
+                    .semantics {
+                        contentDescription = name
+                        if (refused != null) {
+                            this.selected = on
+                            stateDescription = refused
+                            disabled()
+                        }
+                    },
                 contentAlignment = Alignment.Center,
             ) {
                 PaintModeGlyph(mode, if (on) Color.White else BrushworkColors.OnChrome, Modifier.alpha(if (active) 1f else 0.38f))

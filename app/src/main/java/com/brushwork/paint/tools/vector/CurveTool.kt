@@ -838,15 +838,21 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         settings = look.copy(unit = own.unit, nudgeStepPx = own.nudgeStepPx, ownLayer = own.ownLayer).sanitized(fallback = own)
     }
 
-    /** The pending path is gone: the tool's own settings come back (see [ownSettings], [userClosed]). */
+    /**
+     * The pending path is gone: the tool's own settings come back (see [ownSettings], [userClosed]).
+     * v1.10 G2 (V2): and the user's main color and options its Object colors edits replaced, at
+     * once ([CurveColorsDelegate.colorsSessionEnded]; every caller has painted the path by now).
+     */
     private fun endLook() {
         userClosed?.let { c ->
             userClosed = null
             settings = settings.copy(closed = c)
         }
-        val own = ownSettings ?: return
-        ownSettings = null
-        settings = own.sanitized()
+        ownSettings?.let { own ->
+            ownSettings = null
+            settings = own.sanitized()
+        }
+        colors.colorsSessionEnded()
     }
 
     /** Each tool keeps its own options (v1.6: Path's quick starts set fill and stroke without touching Curve's). */
@@ -3648,6 +3654,8 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
      * edit session (the brush stroke inside it).
      */
     private fun changed(brushDelayMs: Long = 0L) {
+        drawnWith = observed()
+        previewBuilds++
         if (anchors.isNotEmpty()) ensureObserving()
         // v1.8 (item 1a, §3.1): the copies' maps are taken once, at the path's first point.
         if (maps == null && reopened == null && pointCount > 0) pointAt(0).let { setMaps(ObjectCopies.mapsAt(controller, it.x, it.y)) }
@@ -3771,6 +3779,10 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
 
     /** True while the painting tool's unfinished stroke shows the pending path (tests). */
     internal val brushLive: Boolean get() = brushPreview.isLive
+
+    /** v1.10 G2 (V3): how many times the preview was rebuilt ([changed]; tests). */
+    internal var previewBuilds = 0L
+        private set
 
     // ------------------------------------------------------------------ the preview of an object that ignores the selection
 
@@ -4205,17 +4217,22 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
     private fun ensureObserving() {
         if (observeJob?.isActive == true) return
         observeJob = controller.scope.launch {
-            snapshotFlow {
-                // (v1.9: the Eraser's mode, which an erase on a vector or shape layer follows.)
-                listOf(
-                    controller.color, controller.selection, controller.layersVersion, controller.lastPaintTool, controller.presetFor(controller.lastPaintTool),
-                    VectorEraserModes.mode(controller),
-                )
-            }
+            snapshotFlow { observed() }
                 .drop(1)
-                .collect { if (anchors.size >= 2 && !inCommit) changed() }
+                // v1.10 G2 (V3): not again when [changed] drew with these values already (the
+                // Object colors editor redraws right after it sets the main color).
+                .collect { if (anchors.size >= 2 && !inCommit && it != drawnWith) changed() }
         }
     }
+
+    /** What the preview depends on ([ensureObserving]). (v1.9: the Eraser's mode, which an erase on a vector or shape layer follows.) */
+    private fun observed(): List<Any?> = listOf(
+        controller.color, controller.selection, controller.layersVersion, controller.lastPaintTool, controller.presetFor(controller.lastPaintTool),
+        VectorEraserModes.mode(controller),
+    )
+
+    /** v1.10 G2 (V3): what [observed] gave when [changed] last drew. */
+    private var drawnWith: List<Any?>? = null
 
     override fun onSelectionChanged() {
         // (A brush stroke of a vector object starts with the selection lifted for a moment.)

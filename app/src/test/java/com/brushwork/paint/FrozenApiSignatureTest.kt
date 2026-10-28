@@ -489,6 +489,8 @@ class FrozenApiSignatureTest {
                         selected: PaintMode?,
                         enabled: (PaintMode) -> Boolean = { true },
                         tagPrefix: String,
+                        refusal: (PaintMode) -> String? = { null },
+                        onRefused: (String) -> Unit = {},
                         onSelect: (PaintMode) -> Unit,
                     )
                     """,
