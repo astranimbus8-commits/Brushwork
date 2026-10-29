@@ -4706,7 +4706,10 @@ Beside them: `compat19/Compat19KitTest` (11; the frozen v1.9 kit), the lanes' te
 - Known limits the A8, A9 and A10 reviews left (accepted for 2.0): a settle reads a waiting step's
   SWAPPED tiles on main; a duplicated parked layer's copy becomes FLAT at activation; smart guides
   of big parked layers arrive from the background; `LayerSwitchBigTimingTest` and
-  `ReadAheadSwitchTimingTest` run near their PC budgets off CI; `UndoManager`'s waiting list is
+  `ReadAheadSwitchTimingTest` run near their PC budgets off CI, as does
+  `AutosaveMainThreadTimingTest` (its 512 x 512 proxy measured 2.13-2.82 ms against PC 2.7 ms at
+  the Gate 2 integration, x6 13-17 ms against the device's 16 ms; it fails on a loaded PC and
+  passes alone; Q-checks on the T606 decide); `UndoManager`'s waiting list is
   JVM-static; the lift after a stroke through the above projection renders every touched part in
   one update (a cap would go in `DisplayTiles.exactAfterGesture`); the above projection is built
   only from resident tiles; the first update after a lift checks every layer; an invalidation
