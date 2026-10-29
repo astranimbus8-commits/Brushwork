@@ -4579,7 +4579,11 @@ Beside them: `compat19/Compat19KitTest` (11; the frozen v1.9 kit), the lanes' te
   layer); x6: 200 layers 9.3 s -> 3.1 s (Q4 6 s), 500 layers 23.3 s -> 7.6 s (Q2 15 s), 50 of
   4000 x 5000 17.9 s -> 5.9 s (Q6 15 s). Its budget, 100 ms PC, fails the one-decoder open.
   `Open200TimingTest` went from 331 ms to about 58 ms. The x6 factor does not model the T606's
-  little cores: Q2, Q4 and Q6 need the device.
+  little cores: Q2, Q4 and Q6 need the device. A band's `LayerCodec.Band.load()` (its
+  `copyPixelsFromBuffer`) runs under one process-wide lock (`LOAD_LOCK`): Robolectric's native
+  runtime aborted the test JVM (exit 0xC0000409, "JniConstants: Class not found: java/nio/...Buffer")
+  in four unit-full runs of the integration when decoders copied buffers at once; the lock costs a
+  band's memcpy against its inflate, so the decoders still overlap.
 - **The opening line (O2, A11 step 7).** `EditorSession.opening` (`OpenProgress(made, total)`) is
   fed by `ProjectRepository.load`'s per-layer callback; `OpeningScreen` shows
   `EngineLabels110.OPENING_LAYERS` under the spinner once the open has run `OpeningLine.delayMs`

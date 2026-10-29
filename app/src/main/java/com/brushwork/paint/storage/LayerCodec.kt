@@ -349,9 +349,17 @@ internal object LayerCodec {
         private val src = Rect()
         private val dst = Rect()
 
-        /** Copies [bytes] into [native] (every row; a short last band copies stale rows it never draws). */
+        /**
+         * Copies [bytes] into [native] (every row; a short last band copies stale rows it never draws).
+         *
+         * v1.10 Gate 2: one copy at a time, process-wide. The parallel decoders of an open (O1)
+         * call this on up to 4 threads at once; Robolectric's native runtime (the JVM tests, not
+         * a phone) aborts the test JVM when two buffer copies run together ("JniConstants: Class
+         * not found: java/nio/ShortBuffer", exit 0xC0000409). The lock costs a band's memcpy
+         * (about 0.1 ms) against the band's inflate (milliseconds), so the decoders still overlap.
+         */
         fun load() {
-            native.copyPixelsFromBuffer(ByteBuffer.wrap(bytes))
+            synchronized(LOAD_LOCK) { native.copyPixelsFromBuffer(ByteBuffer.wrap(bytes)) }
         }
 
         /** Draws [w] x [n] pixels of [native] at ([x], 0) onto [c] at ([dx], [dy]) exactly. */
@@ -417,6 +425,9 @@ internal object LayerCodec {
 
             /** Anything else. */
             const val OTHER = 2
+
+            /** Serializes [load] across threads (see there). */
+            private val LOAD_LOCK = Any()
         }
     }
 
