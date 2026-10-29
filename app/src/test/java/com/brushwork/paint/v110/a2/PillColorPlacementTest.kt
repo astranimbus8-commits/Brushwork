@@ -73,10 +73,12 @@ import org.robolectric.annotation.Config
  *   "101.6 mm", "-12.75 in"), with and without "Select several": row 1 is the same with and
  *   without COLOR (v1.9's row, cell for cell, 0.5 dp), no value is cut at the default Length
  *   step without "Select several"; COLOR is the first cell of row 2, 40 dp, under the move icon
- *   (same left), whole inside the 8 dp margins, the Scale row right of it. At font scale 2.0
- *   v1.9's row 1 itself cuts a worst-case value beside "Select several" ("101.6 mm" at 392 dp,
- *   "-1,329.5" at 360 dp) and with a long Length step (1,234.5 px, the "#" cell at its widest);
- *   COLOR cuts no text more, in every case. Folded: `[fold][color][trash][sel]`, 40 dp each and
+ *   (same left), whole inside the 8 dp margins, the Scale row right of it. Beside "Select
+ *   several" or with a long Length step (1,234.5 px, the "#" cell at its widest) row 1 can leave
+ *   a worst-case value too little room (v1.10 Gate 2 fonts F4 keeps the default step's whole
+ *   beside "Select several" at font scale 1.3 and 2.0, `Qa110FontScaleG2UiTest`; at 360 dp and
+ *   font scale 1.0 "101.6 mm" is still cut there); COLOR cuts no text more, in every case.
+ *   Folded: `[fold][color][trash][sel]`, 40 dp each and
  *   4 dp apart, one row.
  * - The real editor with a shape open in the Shape tool: COLOR under the move icon, its name.
  *
@@ -190,9 +192,9 @@ class PillColorPlacementTest {
                 assertEquals("$what: Select several", several, tagged(V18Tags.PILL_SEVERAL) != null)
                 inOrder("$what: v1.9's row 1", v19)
                 assertEquals("$what: X and Y show the value", 2, texts(text))
-                // v1.9's row 1 cuts no value at the default step without "Select several". At font
-                // scale 2.0 "Select several" or a long step can leave too little room for a
-                // worst-case value (v1.9's pill then cuts it): COLOR cuts nothing more.
+                // v1.9's row 1 cuts no value at the default step without "Select several".
+                // "Select several" or a long step can leave too little room for a worst-case
+                // value (the pill then cuts it): COLOR cuts nothing more.
                 val cutBefore = Qa19Ui.textOverflows()
                 if (!longStep && !several) Qa19Ui.assertNoTextOverflow("$what, without COLOR")
 

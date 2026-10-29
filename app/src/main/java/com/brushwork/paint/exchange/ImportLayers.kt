@@ -11,22 +11,28 @@ import com.brushwork.paint.engine.UndoAction
 import com.brushwork.paint.engine.parkedStoreOf
 import com.brushwork.paint.engine.tiles.FlatPixels
 import com.brushwork.paint.engine.tiles.PixelStore
+import com.brushwork.paint.engine.tiles.TileOps
 import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.FolderSpec
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.LayerData
 import com.brushwork.paint.model.LayerProps
 import com.brushwork.paint.model.LayerTree
-import com.brushwork.paint.model.recycleUnlessShared
 import com.brushwork.paint.tools.text.TextCodec
 
 /**
  * A layer prepared for an import (pixels rendered and data set off the main thread, not yet in
- * the document): [bitmap] is document-sized and already equals the rendering of [data] (I1).
+ * the document): [pixels] are document-sized and already equal the rendering of [data] (I1).
  */
 class NewLayer(
     val name: String,
-    val bitmap: Bitmap,
+    /**
+     * The layer's pixels: FLAT as the importer rendered them, or, v1.10 Gate 2 (O3), parked
+     * ([parked]: tiled, or blank) once the importer goes on to the next layer, so an import holds
+     * about one layer's bitmap at a time and not the whole import. A folder's is
+     * `Layer.FOLDER_BITMAP`'s FLAT store (never recycled: rule B).
+     */
+    val pixels: PixelStore,
     /** Properties (name aside); null = a plain new layer's. */
     val props: LayerProps? = null,
     val data: LayerData = LayerData.NONE,
@@ -38,7 +44,7 @@ class NewLayer(
     val sourceId: Long = 0L,
     /**
      * v1.7 (I11, payload v2): a folder's settings; null for every other layer. A folder's
-     * [bitmap] is `Layer.FOLDER_BITMAP` (never recycled: rule B).
+     * pixels are `Layer.FOLDER_BITMAP` (never recycled: rule B).
      */
     val folder: FolderSpec? = null,
     /** v1.7: the [sourceId] of the folder this layer is in, in the same import (0 = top level). */
@@ -46,15 +52,50 @@ class NewLayer(
     /** v1.7: a folder's rows are shown in the layer window. */
     val folderOpen: Boolean = true,
 ) {
+    /** A layer whose pixels are the rendered [bitmap] (FLAT), which the import owns from here on. */
+    constructor(
+        name: String,
+        bitmap: Bitmap,
+        props: LayerProps? = null,
+        data: LayerData = LayerData.NONE,
+        mask: Bitmap? = null,
+        sourceId: Long = 0L,
+        folder: FolderSpec? = null,
+        parentSourceId: Long = 0L,
+        folderOpen: Boolean = true,
+    ) : this(name, FlatPixels(bitmap) as PixelStore, props, data, mask, sourceId, folder, parentSourceId, folderOpen)
+
+    /** The FLAT [pixels]' bitmap; a parked new layer has none (read [pixels]). */
+    val bitmap: Bitmap get() = (pixels as? FlatPixels)?.bitmap ?: error("$name is parked: its pixels are ${pixels::class.simpleName}")
+
     /** True when this import carries part of a layer tree (a folder, or a layer inside one). */
     internal val inTree: Boolean get() = folder != null || parentSourceId != 0L
 
     /**
-     * Recycles what an import that did not happen allocated: [bitmap] (never
-     * `Layer.FOLDER_BITMAP`, rule B), [mask] and, v1.7 (I14), a raster array's source pixels.
+     * v1.10 Gate 2 (O3): this layer with its FLAT pixels parked (cut into tiles counted under
+     * TILES and the bitmap recycled; blank when no tile is left), as [ImportLayers.insert] parks
+     * every layer but the one that becomes active. Itself at Classic, for a folder, for pixels
+     * already parked, or when the budget refuses the tiles (kept FLAT, as before). Off the main
+     * thread in an importer's `prepare`: the bitmap and the fresh tiles are the import's alone
+     * (no other thread sees them until the insert, as a load builds a parked layer's tiles).
+     * The mask stays FLAT (the insert parks it).
+     */
+    internal fun parked(): NewLayer {
+        val flat = pixels as? FlatPixels ?: return this
+        if (folder != null || EngineConfig.level == EngineLevel.CLASSIC || flat.bitmap === Layer.FOLDER_BITMAP) return this
+        val store = parkedStoreOf(flat.bitmap) ?: return this
+        return NewLayer(name, store, props, data, mask, sourceId, folder, parentSourceId, folderOpen)
+    }
+
+    /**
+     * Lets go of what an import that did not happen allocated: [pixels] (a FLAT bitmap
+     * recycled, never `Layer.FOLDER_BITMAP`, rule B; a parked layer's tiles released), [mask]
+     * and, v1.7 (I14), a raster array's source pixels. On the main thread, or (an importer's
+     * failure) on the thread that made them before anything else saw them, as a failed load
+     * releases its stores.
      */
     fun recycleBitmaps() {
-        bitmap.recycleUnlessShared()
+        TileOps.dispose(pixels)
         mask?.recycle()
         data.array?.pixels?.bitmap?.recycle()
     }
@@ -106,7 +147,7 @@ object ImportLayers {
                     // v1.10 (A11, design 2.5): every layer but the one that becomes active is parked as it goes in.
                     val parks = k < layers.lastIndex
                     val name = uniqueName(c, n.name, replace)
-                    val layer = parked(n.bitmap, parks)?.let { Layer(ids[k], name, it) } ?: Layer(ids[k], name, n.bitmap)
+                    val layer = layerOf(ids[k], name, n, parks)
                     n.props?.let { layer.copyPropsFrom(it.copy(name = layer.name)) }
                     layer.maskPixels = n.mask?.let { parked(it, parks) ?: FlatPixels(it) }
                     layer.restoreData(if (n.sourceId != 0L) relinked(n.data, links) { doc.newLayerId() } else n.data)
@@ -166,7 +207,7 @@ object ImportLayers {
             } else {
                 // v1.10 (A11, design 2.5): every layer but the topmost (the active one) is parked as it goes in.
                 val parks = k < layers.lastIndex
-                (parked(n.bitmap, parks)?.let { Layer(ids[k], name, it) } ?: Layer(ids[k], name, n.bitmap)).also { l ->
+                layerOf(ids[k], name, n, parks).also { l ->
                     l.maskPixels = n.mask?.let { parked(it, parks) ?: FlatPixels(it) }
                     l.restoreData(if (n.sourceId != 0L) relinked(n.data, links) { doc.newLayerId() } else n.data)
                 }
@@ -250,6 +291,27 @@ object ImportLayers {
      */
     private fun parked(b: Bitmap, parks: Boolean): PixelStore? =
         if (!parks || EngineConfig.level == EngineLevel.CLASSIC || b === Layer.FOLDER_BITMAP) null else parkedStoreOf(b)
+
+    /**
+     * The document layer [id] for [n]: its pixels as the importer left them when already parked
+     * (v1.10 Gate 2, O3: [parkNewest]), else its FLAT bitmap [parked] when [parks].
+     */
+    private fun layerOf(id: Long, name: String, n: NewLayer, parks: Boolean): Layer {
+        val flat = n.pixels as? FlatPixels ?: return Layer(id, name, n.pixels)
+        return parked(flat.bitmap, parks)?.let { Layer(id, name, it) } ?: Layer(id, name, flat.bitmap)
+    }
+
+    /**
+     * v1.10 Gate 2 (O3, the A11 deviation): parks the newest pixel layer of [layers] (an
+     * importer's list so far, bottom first) before the importer renders the next one, so an import
+     * peaks at about one FLAT layer plus the tiles the budget keeps, not at every layer's bitmap.
+     * The layer rendered last stays FLAT: it is the one [insert] makes active. Folders are skipped
+     * (they hold no pixels); nothing happens at Classic or when the budget refuses the tiles.
+     */
+    internal fun parkNewest(layers: MutableList<NewLayer>) {
+        val k = layers.indexOfLast { it.folder == null }
+        if (k >= 0) layers[k] = layers[k].parked()
+    }
 
     /** [base], or "[base] 2", "[base] 3"... so names stay unique (the layers in [leaving] don't count). */
     fun uniqueName(c: EditorController, base: String, leaving: List<Layer> = emptyList()): String {

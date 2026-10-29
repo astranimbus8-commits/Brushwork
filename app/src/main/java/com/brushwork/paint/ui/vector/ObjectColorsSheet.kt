@@ -77,8 +77,8 @@ import kotlinx.coroutines.launch
  *   [ObjectColorLabels110.NO_OUTLINE]; [ObjectColorEditor.setNone]: no fill is paint mode Stroke,
  *   no outline is width 0). It sits in the row, not above the body, so the body keeps its room;
  * - for a shape or a path, the three [PaintModeSegments] glyphs at the row's end (R3: the glyphs and
- *   names of every other paint-mode control; tags `V110Tags.COLORS_SHEET_MODE.<MODE>`), drawn by
- *   [PaintModeChoices] so that Fill and Both, refused with the fill, say why on a tap.
+ *   names of every other paint-mode control; tags `V110Tags.COLORS_SHEET_MODE.<MODE>`), with their
+ *   refusal so that Fill and Both, refused with the fill, say why on a tap.
  *
  * The selected tab drives the embedded [ColorDialogBody] (`extraAbove` = the row, so the wheel and
  * OK fit without scrolling), whose color goes to the object live ([ObjectColorEditor.preview], R7).
@@ -194,12 +194,12 @@ private fun ObjectColorsRow(
                 // The PaintModeSegments glyphs; Fill and Both are refused while the fill is (a curve
                 // with 1 or 2 points): greyed, and a tap says why (R2: the FILL_NEEDS_3 toast).
                 val fillRefused = editor.unavailable(ObjectColorTarget.FILL)
-                PaintModeChoices(
+                PaintModeSegments(
                     selected = editor.paintMode,
+                    tagPrefix = V110Tags.COLORS_SHEET_MODE,
                     refusal = { m -> if (m != PaintMode.STROKE) fillRefused else null },
-                    tag = V110Tags.COLORS_SHEET_MODE,
-                    onSelect = { m -> editor.setPaintMode(m) },
                     onRefused = { why -> (editor as? ObjectColorExtras)?.toast(why) },
+                    onSelect = { m -> editor.setPaintMode(m) },
                 )
             }
         }

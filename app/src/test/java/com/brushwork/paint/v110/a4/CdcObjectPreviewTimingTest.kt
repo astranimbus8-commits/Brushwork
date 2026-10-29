@@ -36,6 +36,10 @@ import java.util.Locale
  * - 199 of the 200 objects selected (rule 1; all 200 would map the whole layer, which keeps the
  *   pixel preview): the layer's data mapped and re-rendered. Budget 42 ms on the PC (the x6
  *   proxy of 250 ms on the device).
+ * - v1.10 G2 (V7, feel check FC4): 100 of 200 brush strokes selected, whose exact frame
+ *   re-renders every stroke (PC about 330 ms, x6 about 2 s): the quick frame shown before it,
+ *   from the color change to the frame on the canvas. Budget 10 ms on the PC (x6 60 ms; FC4 asks
+ *   about 0.25 s).
  */
 @Category(Timing::class)
 @RunWith(RobolectricTestRunner::class)
@@ -109,6 +113,44 @@ class CdcObjectPreviewTimingTest {
         val s = session(c)
         assertTrue("C12: the exact pixel preview", s.holdsPixelCopy)
         medianFrame(s, 5.5, "whole layer, 8 copies")
+        s.cancel()
+    }
+
+    @Test
+    fun aQuickFrameOf100Of200SelectedStrokesStaysWithinBudget() {
+        val c = kit.controller()
+        val strokes = ArrayList<VObject>(200)
+        for (k in 0 until 200) {
+            val x = 30f + (k % 20) * 60f
+            val y = 30f + (k / 20) * 120f
+            strokes += kit.stroke(x, y, x + 40f, y + 90f, seed = k.toLong(), size = 18f)
+        }
+        c.vectors.addObjects(c.vec, strokes, "Add")
+        c.vectors.setSelection(c.vec, c.vec.vector!!.objects.take(100).mapTo(HashSet()) { it.id })
+        val s = session(c)
+        assertFalse("re-rendered", s.holdsPixelCopy)
+        var shownAt = 0L
+        s.onQuickFrame = { shownAt = System.nanoTime() }
+        var step = 0
+        fun frame(): Double {
+            step++
+            shownAt = 0L
+            val t0 = System.nanoTime()
+            s.update("color", if (step % 2 == 0) 0xFF20A060.toInt() else 0xFFC03080.toInt())
+            assertTrue(spinUntil { shownAt != 0L })
+            val ms = (shownAt - t0) / 1e6
+            // The exact frame lands before the next change.
+            assertTrue(spinUntil { !s.isRendering && !s.previewStale })
+            return ms
+        }
+        val what = "quick frame, 100 of 200 strokes selected"
+        val median = PerfBudget.measuredWithin(PerfBudget.ms(10.0), what = what) {
+            repeat(3) { frame() }
+            val runs = DoubleArray(15) { frame() }.sorted()
+            runs[runs.size / 2]
+        }
+        println(String.format(Locale.ROOT, "CdcObjectPreviewTimingTest (%s): median %.2f ms of 15 runs after 3 warm-ups; x6 = %.1f ms; budget %.1f ms", what, median, median * 6, 10.0))
+        assertTrue("the quick frame's source is kept", s.holdsQuickSource)
         s.cancel()
     }
 

@@ -23,10 +23,12 @@ import org.robolectric.RobolectricTestRunner
 /**
  * v1.10 (A5, R12): the More row's "Sharp corner" / "Smooth" item gave way to the X / Y pill's
  * cell, and the point thickness control keeps v1.9's place on the More row of Curve and Path:
- * - on the same line, with the same items after it (the lines are end-aligned), whether or not
- *   "All points 100 %" shows. That item comes and goes with the slider's own use (a point leaves
- *   or reaches 100 %) and sits before it, so a line change moved the slider away from the finger
- *   in the middle of a drag (at 392 dp, without the kept place of the removed item);
+ * - on the same line, at the same place on it (the lines are end-aligned: the same width of
+ *   items after it), whether or not "All points 100 %" shows. That item comes and goes with the
+ *   slider's own use (a point leaves or reaches 100 %), so a line change or a shift moved the
+ *   slider away from the finger in the middle of a drag. v1.10 Gate 2 (F7): it follows the
+ *   slider, right after it on its line (Polyline's order), and no hidden item keeps a place; the
+ *   items after the slider changed with it, so the place is their width, no longer their keys;
  * - a line of its own (it starts its line), never the last item of a line, where its slider's
  *   reach would meet the line's clip at the strip's end.
  * Pure: the specs of every open state with points selected, split as the host splits them at
@@ -38,8 +40,14 @@ class ThicknessKeepsItsLineTest {
 
     private fun spec(f: CurveStripFacts) = curveSpec(c.tool(if (f.kind == CurveKind.PATH) ToolId.PATH else ToolId.CURVE), f, CurveStripUi())
 
-    /** The thickness item's More line, whether it starts that line, and the keys after it there. */
-    private data class Place(val line: Int, val first: Boolean, val after: List<String>)
+    /**
+     * The thickness item's More line, whether it starts that line, and the width of the items
+     * after it there (with the gap before them; it sets the slider's x on an end-aligned line);
+     * [after], their keys, only for the message.
+     */
+    private data class Place(val line: Int, val first: Boolean, val afterDp: Float, val after: List<String>) {
+        fun samePlace(o: Place) = line == o.line && first == o.first && afterDp == o.afterDp
+    }
 
     private fun place(f: CurveStripFacts, screen: Float, chip: Boolean): Place? {
         val spec = spec(f)
@@ -47,7 +55,10 @@ class ThicknessKeepsItsLineTest {
         val split = StripLayout.split(spec, content - if (chip) StripLayout.VECTOR_CHIP_DP + StripLayout.GAP_DP else 0f)
         StripLayout.moreLines(split, spec.hint, content).forEachIndexed { i, line ->
             val k = line.indexOfFirst { it.key == CurveKeys.THICKNESS }
-            if (k >= 0) return Place(i, k == 0, line.drop(k + 1).map { it.key })
+            if (k >= 0) {
+                val after = line.drop(k + 1)
+                return Place(i, k == 0, if (after.isEmpty()) 0f else StripLayout.rowWidth(after) + StripLayout.GAP_DP, after.map { it.key })
+            }
         }
         return null
     }
@@ -83,7 +94,8 @@ class ThicknessKeepsItsLineTest {
                 continue
             }
             checked++
-            if (at100 != varied) problems += "$where: it moves when \"All points 100 %\" comes: $at100 -> $varied"
+            if (!at100.samePlace(varied)) problems += "$where: it moves when \"All points 100 %\" comes: $at100 -> $varied"
+            if (varied.after.firstOrNull() != CurveKeys.ALL_100) problems += "$where: \"All points 100 %\" does not follow it on its line: $varied"
             for ((name, p) in listOf("at 100 %" to at100, "varied" to varied)) {
                 if (!p.first) problems += "$where, $name: it does not start its line: $p"
                 if (p.after.isEmpty()) problems += "$where, $name: it ends its line: $p"

@@ -16,6 +16,7 @@ import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.EditTarget
 import com.brushwork.paint.engine.LambdaAction
 import com.brushwork.paint.engine.UndoAction
+import com.brushwork.paint.engine.budget.LayerBudgetV110
 import com.brushwork.paint.model.ArrayInstances
 import com.brushwork.paint.model.ArrayPixels
 import com.brushwork.paint.model.ArraySpec
@@ -29,7 +30,6 @@ import com.brushwork.paint.tools.array.ArrayTool
 import com.brushwork.paint.tools.vector.ShapeCodec
 import com.brushwork.paint.ui.common.ArrayLabels
 import com.brushwork.paint.ui.common.ArrayLabels18
-import com.brushwork.paint.ui.common.EngineLabels110
 import com.brushwork.paint.vector.VObject
 import com.brushwork.paint.vector.VShape
 import com.brushwork.paint.vector.VectorContent
@@ -314,7 +314,7 @@ object ArrayOps {
         if (!c.checkUsable(src)) return false
         if (src.alphaLocked) { c.toast(alphaLocked(src.name)); return false }
         // v1.10 (A3 step 6, design 2.13): the cut writes the source (the active layer, so FLAT: always admitted).
-        if (!src.admitWrite()) { c.toast(EngineLabels110.PAINT_REFUSED); return false }
+        if (!src.admitWrite()) { c.toast(LayerBudgetV110.firstWriteRefusal()); return false }
         if (!ArraySources.hasRoom(c, 1, 0L)) { c.toast(MEMORY_REFUSAL); return false }
         val layer = paused(c) {
             val sel = c.selection ?: return@paused null

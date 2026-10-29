@@ -41,6 +41,7 @@ import com.brushwork.paint.ui.common.StabilityLabels19
 import com.brushwork.paint.vector.render.RenderCache
 import com.brushwork.paint.vector.render.VectorLayerRenderer
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -50,8 +51,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.ceil
 import kotlin.math.hypot
+import kotlin.math.min
 
 /**
  * A filter being previewed on the active layer. Created by EditorController.startFilter().
@@ -149,8 +152,12 @@ class FilterSession(
      * every object of a vector or shape layer without an array tint is a target the v1.9 pixel
      * preview is exact and is kept ([ObjectColorTargets.exactByPixels]); otherwise the preview
      * re-renders the layer's data with mapped colors (a live array's copies through `ArrayDraw`)
-     * and holds no copy of the layer's pixels. Apply changes the data as one step, re-rendered:
-     * nothing is rasterized. Which objects: [ObjectColorTargets].
+     * and holds no copy of the layer's pixels for it. v1.10 G2 (V7, lead's ruling): on a vector
+     * layer without an array whose exact render is slow ([QUICK_AFTER_MS]) a quick frame comes
+     * first, the layer's cached render recolored where the targets paint ([QuickSource]; within 2
+     * per premultiplied channel where they alone paint), and the exact render replaces it. Apply
+     * changes the data as one step, re-rendered: nothing is rasterized. Which objects:
+     * [ObjectColorTargets].
      */
     val objectMode: Boolean = target == EditTarget.CONTENT && filter.colorMapper(filter.defaultValues()) != null &&
         ObjectColorTargets.hasObjects(layer.dataSnapshot())
@@ -204,6 +211,36 @@ class FilterSession(
     private val objectTips by objectTipsLazy
     private val objectCacheLazy = lazy { RenderCache() }
     private val objectCache by objectCacheLazy
+
+    /**
+     * v1.10 G2 (V7): the quick frame's source for [owner] ([quickApplies]): the layer's cached
+     * render at the preview's size ([pixels], read on the main thread as the pixel preview reads
+     * it) and per pixel the share of that ink the targets paint ([weights], 0 to 255; the first
+     * quick frame's worker renders them once, [quickWeights]). A frame then recolors [pixels] by
+     * the filter itself, blended by [weights]: no render, whatever the layer holds.
+     */
+    private class QuickSource(val owner: ObjectSource, val pixels: PixelBuffer) {
+        /** Taken by the first frame, whose worker renders [weights]; the frames after it await them. */
+        val claimed = AtomicBoolean(false)
+
+        /** Completed once: the weights, or null when they stopped (this source went) or failed. */
+        val weights = CompletableDeferred<ByteArray?>()
+    }
+
+    /** Read by the worker rendering its weights: they stop once it is replaced (or the session closes). */
+    @Volatile private var quickSource: QuickSource? = null
+
+    /** Test hook (V7): called on the main thread right after a quick frame is shown. */
+    internal var onQuickFrame: (() -> Unit)? = null
+
+    /** Test hook (V7 review): called on the worker as a quick source's weights start to render ([quickWeights]). */
+    internal var onQuickWeights: (() -> Unit)? = null
+
+    /** Test hook (V7 review): a value change stops a computing preview once a render took this long ([SLOW_RENDER_MS]). */
+    internal var slowRenderMs: Long = SLOW_RENDER_MS
+
+    /** Test hook (V7): quick frames come once an exact render took this long ([QUICK_AFTER_MS]). */
+    internal var quickAfterMs: Long = QUICK_AFTER_MS
 
     private var previewJob: Job? = null
     private var analysisJob: Job? = null
@@ -373,6 +410,8 @@ class FilterSession(
 
     private fun close() {
         isClosed = true
+        // v1.10 G2 (V7 review): first, so quick weights still rendering stop at their next object.
+        quickSource = null
         previewJob?.cancel(); previewJob = null
         analysisJob?.cancel(); analysisJob = null
         documentWatch?.cancel(); documentWatch = null
@@ -651,8 +690,14 @@ class FilterSession(
     /** The preview has what it renders from: the downscaled pixels, or (object mode) the layer's data. */
     private fun hasSource() = previewSrc != null || objectSource != null
 
-    /** Test hook: a downscaled copy of the layer's pixels is held (in object mode only while [ObjectColorTargets.exactByPixels]). */
+    /**
+     * Test hook: a downscaled copy of the layer's pixels is held for the pixel preview (in object
+     * mode only while [ObjectColorTargets.exactByPixels]); the quick frame's is [holdsQuickSource].
+     */
     internal val holdsPixelCopy: Boolean get() = previewSrc != null
+
+    /** Test hook (V7): object mode holds a quick frame's source ([QuickSource]). */
+    internal val holdsQuickSource: Boolean get() = quickSource != null
 
     private fun requestPreview(delayMs: Long) {
         if (isClosed || !hasSource()) return
@@ -661,7 +706,7 @@ class FilterSession(
             // Still debouncing: the render reads the latest values when it starts.
             if (computingJob !== running) return
             val elapsedMs = (System.nanoTime() - computeStartNs) / 1_000_000
-            if (lastRenderMs < SLOW_RENDER_MS && elapsedMs < SLOW_RENDER_MS) { rerunRequested = true; return }
+            if (lastRenderMs < slowRenderMs && elapsedMs < slowRenderMs) { rerunRequested = true; return }
             running.cancel()
         }
         launchPreview(delayMs)
@@ -789,6 +834,7 @@ class FilterSession(
         val s = ObjectSource(data, ObjectColorTargets.of(data, selectedIds, sel), layer.contentVersion, sel)
         objectSource = s
         objectRule = s.targets.rule
+        quickSource = null
         if (s.targets.exactByPixels(data)) {
             synchronized(scratchLock) {
                 scratchBitmap?.recycle()
@@ -822,6 +868,45 @@ class FilterSession(
         }
     }
 
+    /**
+     * v1.10 G2 (V7): a quick frame comes before the exact render of [s]: a vector layer without
+     * an array (copies drawn from the targets, or a tint, are left to the exact render), whose
+     * cached render is current (no vector render pending), where some objects are targets and
+     * some are not (all of them keep the exact pixel preview).
+     */
+    private fun quickApplies(s: ObjectSource): Boolean {
+        val d = s.data
+        val v = d.vector ?: return false
+        if (d.text != null || d.shape != null || d.array != null || controller.vectors.isRendering) return false
+        val ids = s.targets.vectorIds ?: return false
+        return ids.isNotEmpty() && v.objects.any { it.id !in ids }
+    }
+
+    /**
+     * v1.10 G2 (V7): [src]'s quick source when a quick frame helps: the last exact render took
+     * [quickAfterMs] or more (the session's first frame is exact alone) and [quickApplies]. Made
+     * on first use, on the main thread; kept until the sources change ([buildObjectSource]).
+     */
+    private fun quickSourceFor(src: ObjectSource): QuickSource? {
+        if (lastRenderMs < quickAfterMs) return null
+        quickSource?.let { if (it.owner === src) return it }
+        if (!quickApplies(src)) return null
+        val bmp = previewBitmap ?: return null
+        return quickSourceOf(src, bmp.width, bmp.height).also { quickSource = it }
+    }
+
+    /** v1.10 G2 (V7): [s]'s quick source, the layer's pixels at the preview's [pw] x [ph]; null when they don't fit. */
+    private fun quickSourceOf(s: ObjectSource, pw: Int, ph: Int): QuickSource? = try {
+        val scaled = FilterSessionBitmaps.downscale(targetBitmap, pw, ph)
+        try {
+            QuickSource(s, BitmapUtils.toPixelBuffer(scaled))
+        } finally {
+            if (scaled !== targetBitmap) scaled.recycle()
+        }
+    } catch (e: OutOfMemoryError) {
+        null
+    }
+
     /** Object mode: re-reads the data and the targets when the layer's data or the selection changed. */
     private fun refreshObjectSource(): Refresh {
         val s = objectSource
@@ -841,7 +926,9 @@ class FilterSession(
      * Object mode: the layer's data with the targets' colors mapped by the filter's colorMapper,
      * rendered at [previewScale] into [scratchBitmap] on [Dispatchers.Default], then shown over
      * the whole layer (objects touching a selection change whole, so there is no region). The
-     * sources are fresh ([renderOnce]).
+     * sources are fresh ([renderOnce]). v1.10 G2 (V7): a quick frame ([quickFrame]) is shown
+     * first when [quickSourceFor] gives a source; `PerfTrace.FILTER_PREVIEW` still times the exact
+     * render alone.
      */
     private suspend fun renderObjectsOnce(self: Job) {
         val src = objectSource ?: return
@@ -851,6 +938,9 @@ class FilterSession(
         val scale = previewScale
         val doc = Rect(0, 0, controller.doc.width, controller.doc.height)
         computingJob = self
+        computeStartNs = System.nanoTime()
+        quickSourceFor(src)?.let { quickFrame(it, vals, colorMode, scale, doc) }
+        if (isClosed) return
         computeStartNs = System.nanoTime()
         val rendered = try {
             withContext(Dispatchers.Default) {
@@ -902,6 +992,96 @@ class FilterSession(
             installOverride()
             controller.invalidateDoc(null)
         }
+    }
+
+    /**
+     * v1.10 G2 (V7, lead's ruling): the quick frame of [vals]: [q]'s pixels, the layer's cached
+     * render, run through the filter itself and blended by [QuickSource.weights] (the first frame
+     * renders them, the others reuse them), on [Dispatchers.Default], then shown over the whole
+     * layer until the exact render replaces it. Where the targets alone paint it is within 2 per
+     * premultiplied channel of the exact render (the affine map commutes with antialiasing and
+     * source-over, C12); where a target and another object overlap it is an estimate. Nothing is
+     * shown when it fails (the exact render reports that) or stops. The weights are [q]'s, not
+     * this frame's: a value change that stops the frame ([requestPreview], each one during a drag
+     * once renders are slow) lets them finish for the next frame, which awaits them without
+     * holding a worker; they stop when [q] goes ([buildObjectSource], [close]).
+     */
+    private suspend fun quickFrame(q: QuickSource, vals: FilterValues, colorMode: ColorMode, scale: Float, doc: Rect) {
+        val dpi = controller.doc.dpi
+        val svc = services
+        val out = try {
+            withContext(Dispatchers.Default) {
+                val job = currentCoroutineContext().job
+                if (q.claimed.compareAndSet(false, true)) {
+                    var w: ByteArray? = null
+                    try {
+                        w = synchronized(scratchLock) { quickWeights(q, scale, doc) { quickSource === q } }
+                    } finally {
+                        q.weights.complete(w)
+                    }
+                }
+                val weights = q.weights.await() ?: return@withContext null
+                if (!job.isActive) return@withContext null
+                val ctx = FilterContext(scale = scale, dpi = dpi, services = svc, cancelled = { !job.isActive })
+                runFilter(q.pixels, vals, ctx, weights, alphaLocked = false, mask = false, colorMode, region = null, findChanges = false).out
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: OutOfMemoryError) {
+            null
+        } catch (e: Exception) {
+            null
+        }
+        if (out == null || isClosed) return
+        val bmp = previewBitmap ?: return
+        BitmapUtils.writePixelBuffer(bmp, out)
+        shownRegion = null
+        hasPreview = true
+        previewStale = vals !== values || q.owner !== objectSource
+        if (!isComparing) {
+            installOverride()
+            controller.invalidateDoc(null)
+        }
+        onQuickFrame?.invoke()
+    }
+
+    /**
+     * v1.10 G2 (V7): [q]'s weights: per preview pixel the share (0 to 255) of the cached render's
+     * ink the targets paint. The fewer of the targets and the other objects are rendered alone at
+     * [scale] into [scratchBitmap]: source-over composes alpha alike in any order, so with the
+     * layer's alpha A and the others' N the targets' alpha is 1 - (1 - A) / (1 - N) (none known
+     * under an opaque other: 0). Null when [active] stopped it. Under [scratchLock]; the scratch
+     * then holds no preview.
+     */
+    private fun quickWeights(q: QuickSource, scale: Float, doc: Rect, active: () -> Boolean): ByteArray? {
+        val out = scratchBitmap ?: return null
+        val content = q.owner.data.vector ?: return null
+        val ids = q.owner.targets.vectorIds ?: return null
+        val targetsFewer = ids.size * 2 <= content.objects.size
+        val exclude = if (targetsFewer) content.objects.mapNotNullTo(HashSet()) { o -> o.id.takeIf { it !in ids } } else ids
+        onQuickWeights?.invoke()
+        scratchOwner = null
+        out.eraseColor(0)
+        val cv = Canvas(out)
+        cv.scale(scale, scale)
+        if (!VectorLayerRenderer.renderWith(cv, content, doc, exclude, objectTips, doc, objectCache) { _, _ -> active() }) return null
+        val part = BitmapUtils.toPixelBuffer(out).pixels
+        val layer = q.pixels.pixels
+        val weights = ByteArray(layer.size)
+        Parallel.forRange(layer.size, 4096) { i0, i1 ->
+            for (i in i0 until i1) {
+                val a = layer[i] ushr 24
+                if (a == 0) continue
+                val r = part[i] ushr 24
+                val t = when {
+                    targetsFewer -> r
+                    r >= 255 -> 0
+                    else -> 255 - ((255 - a) * 255 + (255 - r) / 2) / (255 - r)
+                }
+                if (t > 0) weights[i] = min(255, (t * 255 + a / 2) / a).toByte()
+            }
+        }
+        return weights
     }
 
     /**
@@ -1272,6 +1452,11 @@ class FilterSession(
         private const val SLOW_RENDER_MS = 250L
         /** Bytes of brush tips the object preview's renders may cache. */
         private const val OBJECT_TIP_BYTES = 8L shl 20
+        /**
+         * v1.10 G2 (V7): a quick frame comes when the last exact render took this long or more
+         * (three frames at 60 Hz); a faster one shows the exact colors about as soon.
+         */
+        private const val QUICK_AFTER_MS = 50L
         private const val HANDLE_GRAB_DP = 36f
         private const val ACCENT = 0xFF4DA3FF.toInt()
     }

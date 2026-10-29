@@ -72,6 +72,7 @@ import com.brushwork.paint.model.SavedSelection
 import com.brushwork.paint.model.SelectionMode
 import com.brushwork.paint.tools.select.SavedSelectionOps
 import com.brushwork.paint.ui.common.BwDialog
+import com.brushwork.paint.ui.common.FitText
 import com.brushwork.paint.ui.common.SavedSelectionLabels
 import com.brushwork.paint.ui.common.V17Tags
 import com.brushwork.paint.ui.common.closeOnSecondFinger
@@ -157,10 +158,10 @@ private fun PendingSavedSelectionRow(id: Long, name: String) {
         Box(Modifier.size(THUMB).background(THUMB_BACK).border(1.dp, THUMB_EDGE), contentAlignment = Alignment.Center) {
             Spinner()
         }
-        Text(
+        FitText(
             name,
-            color = DIM,
             fontSize = NAME_SIZE,
+            color = DIM,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f).padding(start = 8.dp, end = 4.dp),
@@ -193,10 +194,12 @@ private fun SavedSelectionRow(controller: EditorController, entry: SavedSelectio
             // Indented under the Selection Layer row: these belong to it.
             Spacer(Modifier.width(INDENT))
             SavedSelectionThumbnail(entry, c.doc.width, c.doc.height, THUMB)
-            Text(
+            // (v1.10 Gate 2, I27: at a large font scale the name shrinks, never under its font
+            // scale 1 size; one too long even then ellipsizes as it does at font scale 1.)
+            FitText(
                 entry.name,
-                color = IbisColors.ListText,
                 fontSize = NAME_SIZE,
+                color = IbisColors.ListText,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f).padding(start = 8.dp, end = 4.dp),

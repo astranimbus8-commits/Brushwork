@@ -79,6 +79,7 @@ import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
@@ -91,9 +92,11 @@ import com.brushwork.paint.model.LayerTree
 import com.brushwork.paint.model.Selection
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.ui.common.ArrayLabels
+import com.brushwork.paint.ui.common.FitText
 import com.brushwork.paint.ui.common.FolderLabels
 import com.brushwork.paint.ui.common.SavedSelectionLabels
 import com.brushwork.paint.ui.common.V17Tags
+import com.brushwork.paint.ui.common.scale1Size
 import com.brushwork.paint.ui.editor.EditorIcons
 import com.brushwork.paint.ui.theme.IbisColors
 import com.brushwork.paint.ui.theme.IbisDims
@@ -203,18 +206,21 @@ internal data class LayerRowModel(
             val docOrder = topFirst.asReversed()
             val folders = doc.hasFolders
             val layers = doc.layers
-            val clips = if (folders) {
-                val flat = java.util.IdentityHashMap<Layer, Int>(layers.size * 2)
-                layers.forEachIndexed { i, l -> flat[l] = i }
-                topFirst.map { l -> flat[l]?.let { LayerTreeRows.clipInfo(layers, it) } ?: ClipInfo.NONE }
+            // v1.10 Gate 2 (O4): one index and one clip pass for every row (10,000 rows stay O(n)).
+            val index = if (folders) LayerTree.index(layers) else null
+            val clips = if (index != null) {
+                val all = LayerTreeRows.clipInfos(layers, index)
+                topFirst.map { l -> index.indexOf(l).let { i -> if (i >= 0) all[i] else ClipInfo.NONE } }
             } else {
                 LayerListMath.clipStructureForDisplay(docOrder.map { it.clipping })
             }
-            val tree = if (folders) LayerTreeRows.Tree(layers, draggedId) else null
+            // The rows listed (no closed or dragged folder above them), by flat index.
+            val listed = index?.let { LayerTreeRows.listed(layers, it, draggedId) }
             val badges = frames.badges(topFirst)
             val active = doc.activeLayer
             return topFirst.mapIndexed { i, l ->
                 val clip = clips[i]
+                val at = index?.indexOf(l) ?: -1
                 val adjustment = l.adjustment
                 val base = if (!clip.clipped) null else if (folders) layers.getOrNull(clip.baseIndex) else docOrder.getOrNull(clip.baseIndex)
                 LayerRowModel(
@@ -246,14 +252,14 @@ internal data class LayerRowModel(
                     effectName = adjustment?.let { AdjustmentEffects.displayName(it) },
                     hasArray = l.array != null,
                     arrayEditingSource = l.array?.spec?.editingSource == true,
-                    depth = tree?.depth(l) ?: 0,
+                    depth = index?.depth(at) ?: 0,
                     isFolder = l.isFolder,
                     folderOpen = l.isFolder && l.folderOpen,
                     passThrough = l.folder?.passThrough == true,
-                    descendants = if (l.isFolder) LayerTree.descendantCount(layers, doc.indexOf(l)) else 0,
-                    hiddenByFolder = tree?.hiddenByFolder(l) == true,
-                    lockedByFolder = tree?.lockedByFolder(l) == true,
-                    shownInList = tree?.shown(l) ?: true,
+                    descendants = index?.descendantCount(at) ?: 0,
+                    hiddenByFolder = index != null && !index.shownByAncestors(at),
+                    lockedByFolder = index?.lockedByAncestor(at) == true,
+                    shownInList = listed == null || at < 0 || listed[at],
                     shapesOnly = l.isVectorLayer && l.vector?.objects?.let { o -> o.isNotEmpty() && o.all { it is VShape } } == true,
                 )
             }
@@ -435,7 +441,7 @@ private fun RowScope.RowParts(
                 TallNumberLine(row, n, Modifier.fillMaxWidth().height(NUMBER_LINE).alpha(dim))
             } else {
                 Row(Modifier.fillMaxWidth().height(16.dp).alpha(dim), verticalAlignment = Alignment.CenterVertically) {
-                    Text(n.toString(), color = IbisColors.ListText, fontSize = 12.sp, lineHeight = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                    FitText(n.toString(), fontSize = 12.sp, color = IbisColors.ListText, fontWeight = FontWeight.SemiBold, lineHeight = 14.sp, maxLines = 1)
                     Spacer(Modifier.width(4.dp))
                     RowName(row.name, Modifier.weight(1f, fill = false))
                     Spacer(Modifier.weight(1f))
@@ -530,12 +536,18 @@ private class BlendSplit(val words: List<String>, val style: TextStyle, val heig
 private fun rememberBlendSplit(label: String, maxWidthPx: Int): BlendSplit? {
     val measurer = rememberTextMeasurer(cacheSize = 0)
     val base = LocalTextStyle.current
-    return remember(measurer, base, label, maxWidthPx) {
+    val density = LocalDensity.current
+    return remember(measurer, base, density, label, maxWidthPx) {
         val words = label.split(' ', limit = 2)
         if (words.size < 2) return@remember null
-        val oneLine = measurer.measure(label, base.copy(fontSize = IbisDims.LayerRowTextMin), maxLines = 1, softWrap = false)
+        // (Above font scale 1, at the sizes they have at font scale 1: see [fitTextStyle].)
+        val oneLine = measurer.measure(label, base.copy(fontSize = density.scale1Sp(IbisDims.LayerRowTextMin.value)), maxLines = 1, softWrap = false)
         if (oneLine.size.width <= maxWidthPx) return@remember null
-        val style = base.copy(fontSize = SPLIT_BLEND_TEXT, lineHeight = (SPLIT_BLEND_TEXT.value + SPLIT_LINE_GAP.value).sp, lineHeightStyle = EXACT_LINES)
+        val style = base.copy(
+            fontSize = density.scale1Sp(SPLIT_BLEND_TEXT.value),
+            lineHeight = density.scale1Sp(SPLIT_BLEND_TEXT.value + SPLIT_LINE_GAP.value),
+            lineHeightStyle = EXACT_LINES,
+        )
         val height = words.sumOf { measurer.measure(it, style, maxLines = 1, softWrap = false).size.height }
         BlendSplit(words, style, height)
     }
@@ -560,7 +572,10 @@ private fun TallNumberLine(row: LayerRowModel, n: Int, modifier: Modifier) {
         val room = constraints.maxWidth
         val mask = wantsMask && remember(measurer, base, density, digits, room, row.alphaLocked, row.locked, row.lockedByFolder) {
             with(density) {
-                fun width(text: String, style: TextStyle) = measurer.measure(text, base.merge(style), maxLines = 1, softWrap = false).size.width
+                // (Above font scale 1, at the sizes they have at font scale 1: the badges keep
+                // them, see [NumberLineBadges], and the number's floor is in dp, [fitTextStyle].)
+                fun width(text: String, style: TextStyle) =
+                    measurer.measure(text, base.merge(style).copy(fontSize = scale1Sp(style.fontSize.value)), maxLines = 1, softWrap = false).size.width
                 var need = width(digits, TextStyle(fontSize = IbisDims.LayerRowTextMin, fontWeight = FontWeight.Normal)) +
                     width("MASK", MASK_TEXT) + (MASK_PAD * 2 + BADGE_GAP).roundToPx()
                 if (row.alphaLocked) need += width("α", ALPHA_TEXT) + (ALPHA_LOCK + BADGE_GAP).roundToPx()
@@ -580,7 +595,12 @@ private fun TallNumberLine(row: LayerRowModel, n: Int, modifier: Modifier) {
     }
 }
 
-/** The number line's badges: MASK (when [mask]), α + lock, lock (v1.7: a dimmed lock when a folder above is locked). */
+/**
+ * The number line's badges: MASK (when [mask]), α + lock, lock (v1.7: a dimmed lock when a folder
+ * above is locked). v1.10 Gate 2 (I27): like the thumbnail's badges, they keep their font scale 1
+ * sizes at every font scale, beside their dp icons on the 22 dp line (at 2.0 the α grew past the
+ * line and squeezed the number out of its box).
+ */
 @Composable
 private fun NumberLineBadges(row: LayerRowModel, mask: Boolean) {
     if (mask) {
@@ -588,6 +608,8 @@ private fun NumberLineBadges(row: LayerRowModel, mask: Boolean) {
             "MASK",
             color = IbisColors.Accent,
             style = LocalTextStyle.current.merge(MASK_TEXT),
+            fontSize = scale1Size(MASK_TEXT.fontSize),
+            lineHeight = scale1Size(MASK_TEXT.lineHeight),
             maxLines = 1,
             softWrap = false,
             modifier = Modifier.testTag(LayerWindowTags.badge(row.layer.id, LayerWindowTags.BADGE_MASK)).border(1.dp, IbisColors.Accent, RoundedCornerShape(2.dp)).padding(horizontal = MASK_PAD),
@@ -710,8 +732,9 @@ private val SPLIT_LINE_GAP = 1.sp
 private fun rememberFittedStyle(lines: List<String>, constraints: Constraints, max: TextUnit, min: TextUnit, lineGap: TextUnit): TextStyle {
     val measurer = rememberTextMeasurer(cacheSize = 0)
     val base = LocalTextStyle.current
-    return remember(measurer, base, lines, constraints.maxWidth, constraints.maxHeight, max, min, lineGap) {
-        fitTextStyle(measurer, lines, base, constraints.maxWidth, constraints.maxHeight, max, min, lineGap)
+    val density = LocalDensity.current
+    return remember(measurer, base, density, lines, constraints.maxWidth, constraints.maxHeight, max, min, lineGap) {
+        fitTextStyle(measurer, lines, base, constraints.maxWidth, constraints.maxHeight, max, min, lineGap, density)
     }
 }
 
@@ -720,6 +743,12 @@ private fun rememberFittedStyle(lines: List<String>, constraints: Constraints, m
  * [lines] fits [maxWidthPx] on one line and all of them stacked, each line [lineGap] taller than
  * the size, fit [maxHeightPx]; at [min] when none does (the lines then ellipsize). One size for
  * all the lines, as ibisPaint sets "100%" over "Normal".
+ *
+ * v1.10 Gate 2 (I27, the Large fonts rule): above font scale 1 ([density]'s) the sizes are worked
+ * out as laid out, from [max] as it shows at this scale down to [min] and [lineGap] as they show
+ * at font scale 1 (the rows keep their dp heights). So the values and the Selection row fit at
+ * 1.3 and 2.0 wherever they fit at font scale 1, never smaller than there, and lay out as there
+ * at the floor. At font scale 1 (or without [density]) the sizes are sp as before.
  */
 internal fun fitTextStyle(
     measurer: TextMeasurer,
@@ -730,11 +759,15 @@ internal fun fitTextStyle(
     max: TextUnit,
     min: TextUnit,
     lineGap: TextUnit,
+    density: Density? = null,
 ): TextStyle {
+    val large = density != null && density.fontScale > 1f
+    /** [v] in the units the search runs in (sp at font scale 1, dp above it) as a text size. */
+    fun unit(v: Float): TextUnit = if (large) density!!.scale1Sp(v) else v.sp
     // Each line exactly its line height (Mode.Tight: a line would otherwise keep at least the
     // font's full ascent and descent, 1.17 em, and two 18 sp lines would not fit the 40 dp eye
     // line; the glyphs, caps 0.71 em and descenders 0.21 em, stay well inside 1.11 em).
-    fun style(sp: Float) = base.copy(fontSize = sp.sp, lineHeight = (sp + lineGap.value).sp, lineHeightStyle = EXACT_LINES)
+    fun style(sp: Float) = base.copy(fontSize = unit(sp), lineHeight = unit(sp + lineGap.value), lineHeightStyle = EXACT_LINES)
     /** The widest line and the stacked height at [sp] (px). */
     fun measure(sp: Float): Pair<Int, Int> {
         val s = style(sp)
@@ -748,7 +781,7 @@ internal fun fitTextStyle(
         return w to h
     }
     fun fits(sp: Float): Boolean = measure(sp).let { (w, h) -> w <= maxWidthPx && h <= maxHeightPx }
-    val top = max.value
+    val top = if (large) with(density!!) { max.toDp().value } else max.value
     val bottom = min.value
     val (w0, h0) = measure(top)
     if (w0 <= maxWidthPx && h0 <= maxHeightPx) return style(top)
@@ -761,18 +794,27 @@ internal fun fitTextStyle(
 }
 
 private const val FIT_STEP = 0.5f
+
+/**
+ * v1.10 Gate 2: [v] sp as laid out at font scale 1 (that many dp), as a text size at this font
+ * scale; [v] sp at font scale 1 or below.
+ */
+private fun Density.scale1Sp(v: Float): TextUnit = if (fontScale > 1f) v.dp.toSp() else v.sp
+
 private val EXACT_LINES = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.Both, LineHeightStyle.Mode.Tight)
 
 @Composable
 private fun RowName(name: String, modifier: Modifier) {
-    Text(
+    // v1.10 Gate 2 (I27): at a large font scale the name shrinks into its 16 dp line, never under
+    // its font scale 1 size; a name too long even then ellipsizes as it does at font scale 1.
+    FitText(
         name,
-        color = IbisColors.ListText,
         fontSize = IbisDims.LayerRowText,
+        modifier = modifier,
+        color = IbisColors.ListText,
         lineHeight = 14.sp,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
-        modifier = modifier,
     )
 }
 
@@ -845,21 +887,26 @@ private fun RowThumbnail(
         if (overlayText != null) {
             // Across the whole thumbnail, not just the picture: a tall canvas's picture is too
             // narrow for a word ("To" / "ne"). The effect's name is spoken with the row's values
-            // (RowValues), not here.
-            Text(
-                overlayText,
-                color = IbisColors.ListText,
-                fontSize = 9.sp,
-                lineHeight = 10.sp,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                textAlign = TextAlign.Center,
-                modifier = Modifier
+            // (RowValues), not here. v1.10 Gate 2 (I27): at a large font scale it shrinks into the
+            // 62 dp thumbnail, never under its font scale 1 size ("Gradation Map" was cut at 2.0);
+            // silent inside a cleared box, so the I27 checks still read its layout.
+            Box(
+                Modifier
                     .padding(horizontal = 3.dp)
                     .background(Color(0xCCFFFFFF))
                     .padding(horizontal = 2.dp)
                     .clearAndSetSemantics { },
-            )
+            ) {
+                FitText(
+                    overlayText,
+                    fontSize = 9.sp,
+                    color = IbisColors.ListText,
+                    lineHeight = 10.sp,
+                    textAlign = TextAlign.Center,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
         badge()
     }
@@ -911,7 +958,9 @@ private fun BadgeBox(description: String, modifier: Modifier, content: @Composab
 @Composable
 private fun LetterBadge(letter: String, description: String, modifier: Modifier) =
     BadgeBox(description, modifier) {
-        Text(letter, color = Color.White, fontSize = 10.sp, lineHeight = 12.sp, fontWeight = FontWeight.Bold)
+        // v1.10 Gate 2 (I27): the badge stays 16 dp high at every font scale, so its letter keeps
+        // its font scale 1 size (at 2.0 a text layer's "T" grew past the badge).
+        Text(letter, color = Color.White, fontSize = scale1Size(10.sp), lineHeight = scale1Size(12.sp), fontWeight = FontWeight.Bold)
     }
 
 /** "T" badge of an editable text layer (row [n]). */
@@ -943,9 +992,10 @@ private fun FrameBadgeView(frame: FrameBadge, description: String, modifier: Mod
     BadgeBox(description, modifier) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Filled.Link, contentDescription = null, tint = Color.White, modifier = Modifier.size(10.dp))
-            Text(frame.text, color = Color.White, fontSize = 9.sp, lineHeight = 11.sp, fontWeight = FontWeight.Bold)
+            // Like [LetterBadge]'s letter: font scale 1 sizes in the 16 dp badge (I27).
+            Text(frame.text, color = Color.White, fontSize = scale1Size(9.sp), lineHeight = scale1Size(11.sp), fontWeight = FontWeight.Bold)
             if (frame.overset) {
-                Text("+", color = DANGER, fontSize = 11.sp, lineHeight = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.background(Color.White).padding(horizontal = 1.dp))
+                Text("+", color = DANGER, fontSize = scale1Size(11.sp), lineHeight = scale1Size(11.sp), fontWeight = FontWeight.Bold, modifier = Modifier.background(Color.White).padding(horizontal = 1.dp))
             }
         }
     }
@@ -957,7 +1007,8 @@ internal fun AlphaLockBadge(tint: Color, tag: String? = null) {
         Modifier.clearAndSetSemantics { if (tag != null) testTag = tag },
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text("α", color = tint, style = LocalTextStyle.current.merge(ALPHA_TEXT))
+        // (Font scale 1 sizes at every font scale, beside the 9 dp lock: see [NumberLineBadges].)
+        Text("α", color = tint, style = LocalTextStyle.current.merge(ALPHA_TEXT), fontSize = scale1Size(ALPHA_TEXT.fontSize), lineHeight = scale1Size(ALPHA_TEXT.lineHeight))
         Icon(Icons.Filled.Lock, contentDescription = null, tint = tint, modifier = Modifier.size(ALPHA_LOCK))
     }
 }

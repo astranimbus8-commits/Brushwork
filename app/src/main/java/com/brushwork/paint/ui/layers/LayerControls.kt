@@ -123,6 +123,7 @@ import com.brushwork.paint.model.TransparencyDisplay
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.ui.common.ArrayLabels
 import com.brushwork.paint.ui.common.ColorSwatch
+import com.brushwork.paint.ui.common.FitText
 import com.brushwork.paint.ui.common.FolderLabels
 import com.brushwork.paint.ui.common.closeOnSecondFinger
 import com.brushwork.paint.ui.common.stepOnLongPress
@@ -714,9 +715,11 @@ private fun BlendModeDropdown(
                     .padding(start = 10.dp, end = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
+                // (v1.10 Gate 2, I27: at a large font scale it shrinks into the 36 dp box, never
+                // under its font scale 1 size.)
+                FitText(
                     if (through) FolderLabels.PASS_THROUGH else mode.label,
-                    color = IbisColors.ListText, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
+                    fontSize = 14.sp, color = IbisColors.ListText, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
                 )
                 Icon(Icons.Filled.KeyboardArrowUp, contentDescription = LayerLabels.BLEND, tint = IbisColors.ListText)
             }
@@ -785,7 +788,7 @@ internal fun OpacityRow(controller: EditorController, layer: Layer, opacity: Flo
                 .clickable(onClickLabel = LayerLabels.TYPE_OPACITY, role = Role.Button, onClick = onType),
             contentAlignment = Alignment.CenterEnd,
         ) {
-            Text("$pct%", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, modifier = Modifier.padding(end = 2.dp))
+            FitText("$pct%", fontSize = 13.sp, color = Color.White, fontWeight = FontWeight.SemiBold, maxLines = 1, modifier = Modifier.padding(end = 2.dp))
         }
         RoundStepButton(Icons.Filled.Remove, LayerLabels.LESS_OPACITY) { step(up = false) }
         IbisOpacitySlider(

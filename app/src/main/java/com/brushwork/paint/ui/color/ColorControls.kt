@@ -65,6 +65,7 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.brushwork.paint.core.ColorUtils
+import com.brushwork.paint.ui.common.FitText
 import com.brushwork.paint.ui.common.NumberAdjust
 import com.brushwork.paint.ui.common.NumberField
 import com.brushwork.paint.ui.common.checkerboard
@@ -449,6 +450,8 @@ fun PickerBody(state: ColorEditState, mode: PickerMode, wheelMaxSize: Dp, modifi
 /**
  * Previous | current comparison. Tapping the previous half calls [onRevert].
  * Colors are shown as given (callers map them for grayscale documents).
+ * v1.10 Gate 2 (I27): at a large font scale "Previous" and "Current" shrink into their halves,
+ * never under their font scale 1 size ([FitText]), instead of being cut.
  */
 @Composable
 fun CompareSwatch(previous: Int, current: Int, onRevert: () -> Unit, modifier: Modifier = Modifier) {
@@ -470,7 +473,7 @@ fun CompareSwatch(previous: Int, current: Int, onRevert: () -> Unit, modifier: M
                 .clickable(onClickLabel = "Restore previous color", onClick = onRevert)
                 .padding(horizontal = 6.dp, vertical = 3.dp),
             contentAlignment = Alignment.BottomStart,
-        ) { Text("Previous", style = MaterialTheme.typography.labelSmall, color = labelColorOn(previous), maxLines = 1) }
+        ) { SwatchLabel("Previous", previous) }
         Box(
             Modifier
                 .weight(1f)
@@ -478,8 +481,15 @@ fun CompareSwatch(previous: Int, current: Int, onRevert: () -> Unit, modifier: M
                 .background(Color(current))
                 .padding(horizontal = 6.dp, vertical = 3.dp),
             contentAlignment = Alignment.BottomEnd,
-        ) { Text("Current", style = MaterialTheme.typography.labelSmall, color = labelColorOn(current), maxLines = 1) }
+        ) { SwatchLabel("Current", current) }
     }
+}
+
+/** A [CompareSwatch] half's label, on its color [on]. */
+@Composable
+private fun SwatchLabel(text: String, on: Int) {
+    val style = MaterialTheme.typography.labelSmall
+    FitText(text, fontSize = style.fontSize, color = labelColorOn(on), maxLines = 1, style = style)
 }
 
 /** Black or white text, whichever reads better on [c] (semi-transparent colors sit on white). */

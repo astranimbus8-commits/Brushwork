@@ -8,27 +8,18 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.AspectRatio
-import androidx.compose.material.icons.filled.Brush
-import androidx.compose.material.icons.filled.CenterFocusStrong
 import androidx.compose.material.icons.filled.ChangeHistory
 import androidx.compose.material.icons.filled.Deselect
 import androidx.compose.material.icons.filled.FormatColorFill
 import androidx.compose.material.icons.filled.Gesture
-import androidx.compose.material.icons.filled.LineWeight
 import androidx.compose.material.icons.filled.Loop
-import androidx.compose.material.icons.filled.Pin
 import androidx.compose.material.icons.filled.Restore
-import androidx.compose.material.icons.filled.Straighten
-import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.outlined.Delete
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
@@ -41,10 +32,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -68,7 +56,6 @@ import com.brushwork.paint.tools.vector.ShapeStroke
 import com.brushwork.paint.tools.vector.ShapeTool
 import com.brushwork.paint.tools.vector.ShapeType
 import com.brushwork.paint.ui.common.BwSheet
-import com.brushwork.paint.ui.common.SnapToObjectsChip
 import com.brushwork.paint.ui.common.ChoiceChips
 import com.brushwork.paint.ui.common.CogLabels18
 import com.brushwork.paint.ui.common.IncrementStepping
@@ -89,98 +76,14 @@ import kotlin.math.roundToInt
 import kotlin.math.sin
 
 /*
- * Options strip and sheets of the shape tool (split out of VectorOptions.kt in v1.5; owned by A3).
+ * Sheets of the shape tool (split out of VectorOptions.kt in v1.5; owned by A3). v1.10 G2 (V4): its
+ * v1.5 options strip, `ShapeToolOptions`, which only tests still rendered, is gone: the options
+ * strip is [shapeStrip].
  */
 
 private val MAX_LEN = ShapeSettings.MAX_LENGTH.toDouble()
 
 // ====================================================================== shape tool
-
-/**
- * Options strip of the shape tool: shape type, style (or line ends), stroke width, drawing
- * toggles, and the "Numbers" / settings sheets.
- *
- * v1.10 (R3 row 5): the app no longer shows it (the options strip is [ShapeStripItems]); only
- * tests render it, so it stays until they move to the strip (LeadRequest), showing the same
- * paint-mode cell as the strip.
- */
-@Composable
-fun ShapeToolOptions(tool: ShapeTool) {
-    val s = tool.settings
-    val controller = tool.controller
-    // docVersion bumps when the document size / dpi change, so the width label follows the dpi.
-    val dpi = remember(controller.docVersion) { controller.doc.dpi }
-    var showSettings by rememberSaveable { mutableStateOf(false) }
-    var showNumbers by rememberSaveable { mutableStateOf(false) }
-    fun set(f: (ShapeSettings) -> ShapeSettings) = tool.update(f)
-
-    DropdownChip(
-        label = s.type.label,
-        options = ShapeGeometry.pickerTypes,
-        selected = s.type,
-        optionLabel = { it.label },
-        onSelect = { t -> set { it.copy(type = t) } },
-        leading = { Icon(shapeIcon(s.type), contentDescription = null, modifier = Modifier.size(18.dp)) },
-        optionLeading = { Icon(shapeIcon(it), contentDescription = null) },
-        contentDescription = "Shape type",
-    )
-    // Points of the pending shape (and the selected point's actions).
-    ShapePointsStrip(tool)
-    if (s.type.isLineLike) {
-        // A brush paints its own ends: the line caps only apply to plain lines.
-        if (s.strokeWith == ShapeStroke.PLAIN) DropdownChip(
-            label = "${s.lineCap.label} ends",
-            options = LineCapStyle.entries,
-            selected = s.lineCap,
-            optionLabel = { "${it.label} ends" },
-            onSelect = { c -> set { it.copy(lineCap = c) } },
-            contentDescription = "Line ends",
-        )
-    } else {
-        // v1.10 (R3): the paint mode as the options strip shows it (its glyph, icon segments in its menu).
-        PaintModeMenuCell(
-            label = ShapeStripItems.STYLE_LABEL,
-            mode = s.style.paintMode(),
-            fill = s.fillColor ?: controller.color,
-            width = ShapeStripItems.STYLE_DP.dp,
-            tag = PaintModeTags.SHAPE_STRIP,
-            onPick = { m -> set { it.copy(style = m.shapeStyle()) } },
-        )
-    }
-    if (s.strokes) {
-        DropdownChip(
-            label = s.strokeWith.label,
-            options = ShapeStroke.entries,
-            selected = s.strokeWith,
-            optionLabel = { it.label },
-            onSelect = { m -> set { it.copy(strokeWith = m) } },
-            leading = { Icon(if (s.strokeWith == ShapeStroke.BRUSH) Icons.Filled.Brush else Icons.Filled.LineWeight, contentDescription = null, modifier = Modifier.size(18.dp)) },
-            contentDescription = "Stroke with",
-        )
-        if (s.strokeWith == ShapeStroke.PLAIN || s.type == ShapeType.ARROW) {
-            // The width (the brush size when "Use brush size" is on).
-            ActionChip(Units.format(tool.strokeWidth.toDouble(), s.unit, dpi.toDouble()), if (s.useBrushSize) Icons.Filled.Brush else Icons.Filled.LineWeight) { showSettings = true }
-        }
-    }
-    ShapeEditableChip(tool)
-    OptionChip("Center", s.fromCenter, { set { it.copy(fromCenter = !it.fromCenter) } }, icon = Icons.Filled.CenterFocusStrong)
-    if (!s.type.isLineLike) {
-        OptionChip(
-            if (s.type == ShapeType.ELLIPSE) "Circle" else "Proportional",
-            s.keepProportions,
-            { set { it.copy(keepProportions = !it.keepProportions) } },
-            icon = Icons.Filled.AspectRatio,
-        )
-    }
-    OptionChip("15°", s.snapAngle, { set { it.copy(snapAngle = !it.snapAngle) } }, icon = Icons.Filled.Straighten)
-    SnapToObjectsChip(controller)
-    ActionChip("Numbers", Icons.Filled.Pin) { if (tool.ensurePending()) showNumbers = true }
-    // I10: shows "Settings", known as "Shape settings" (the tool menu has a "Settings" cell).
-    ActionChip("Settings", Icons.Filled.Tune, contentDescription = "Shape settings") { showSettings = true }
-
-    if (showSettings) ShapeSettingsSheet(tool) { showSettings = false }
-    if (showNumbers) ShapeNumbersSheet(tool) { showNumbers = false }
-}
 
 @Composable
 internal fun ShapeSettingsSheet(tool: ShapeTool, onDismiss: () -> Unit) {
@@ -380,7 +283,7 @@ private fun CogPercentSlider(label: String, value: Float, min: Float, max: Float
     )
 }
 
-/** Numeric placement of the pending shape (hosted by [ShapeToolOptions] and by the v1.8 strip's overlays). */
+/** Numeric placement of the pending shape (hosted by the v1.8 strip's overlays, [shapeStrip]). */
 @Composable
 internal fun ShapeNumbersSheet(tool: ShapeTool, onDismiss: () -> Unit) {
     val b = tool.box

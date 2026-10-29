@@ -36,7 +36,16 @@ import kotlin.math.abs
  * [CurveGeometry.toPath] draws it) both handles are 0, so its ends are corners the shape menu can
  * round. Polyline anchors are all sharp, without handles. [ShapePoints.fit] places the box
  * (rotation 0). A closed path (more than 2 anchors) becomes a closed custom outline
- * ([ShapeType.RECTANGLE] with points), an open one a line with points ([ShapeType.LINE]).
+ * ([ShapeType.RECTANGLE] with points), an open one a line with points ([ShapeType.LINE]). A
+ * "closed" path of 2 anchors draws one segment, as an open one, and converts as one.
+ *
+ * v1.10 G2 (V1, the lead's ruling): an open path with a fill and no line fills as if closed (the
+ * renderer closes it with a straight chord), so it becomes a closed outline with the fill alone
+ * ([ShapeStyle.FILL]): the open path's handles stay as they are (its ends have no outer handle)
+ * and the chord is the straight closing segment; 2 anchors get a sharp point in the middle of the
+ * chord (a closed outline has at least [ShapePoints.MIN_CLOSED]). It renders as the path did, with
+ * the note [ObjectBarLabels110.NOTE_CLOSED_FILL]. An open path with a fill and a line stays a line
+ * (the line exactly; a closed outline would stroke the chord) and loses its fill.
  *
  * Style: the line's color, width, cap and join (as the corner: miter = sharp, round = round,
  * bevel = bevel; radius 0, so the outline is unchanged) are copied; a line of other thickness
@@ -52,8 +61,9 @@ import kotlin.math.abs
  * Lossy cases convert, each with one note ([Result.notes], in this order): a gradient fill becomes
  * its first color ([ObjectBarLabels110.NOTE_GRADIENT]); varying thickness or a taper becomes the
  * mean thickness ([ObjectBarLabels110.NOTE_WIDTH]); a generator is dropped, its outline kept
- * ([ObjectBarLabels110.NOTE_GENERATED]); an open path loses its fill
- * ([ObjectBarLabels110.NOTE_OPEN_FILL]). [refusal] names what can't convert at all.
+ * ([ObjectBarLabels110.NOTE_GENERATED]); an open path with a line loses its fill
+ * ([ObjectBarLabels110.NOTE_OPEN_FILL]), one without a line is closed to keep it
+ * ([ObjectBarLabels110.NOTE_CLOSED_FILL]). [refusal] names what can't convert at all.
  */
 object PathToShape {
     /** The converted shape and the notes of what changed (empty when nothing did). */
@@ -86,10 +96,22 @@ object PathToShape {
         val refused = refusal(path)
         require(refused == null) { refused.toString() }
         val sub = path.subpaths[0]
-        val closed = sub.closed && sub.anchors.size > 2
+        // Closed as the renderer draws it: a "closed" path of 2 anchors draws one segment.
+        val drawnClosed = sub.closed && sub.anchors.size > 2
+        // v1.10 G2 (V1): an open path filled without a line is closed by its chord to keep the fill.
+        val closedForFill = !drawnClosed && path.fill != null && path.stroke == null
+        val closed = drawnClosed || closedForFill
         // The anchors exactly as the renderer reads them (raw thickness factors).
         val ca = VectorOps.curveAnchors(sub)
-        val (box, points) = ShapePoints.fit(0f, anchorsOf(ca, path, closed), closed)
+        // The handles as the path draws them (an open path's ends without outer handles, so the
+        // closing segment of [closedForFill] is the straight chord).
+        val drawn = anchorsOf(ca, path, drawnClosed)
+        val anchors = if (closedForFill && drawn.size < ShapePoints.MIN_CLOSED) {
+            drawn + ShapeAnchor((drawn.first().pos + drawn.last().pos) * 0.5f)
+        } else {
+            drawn
+        }
+        val (box, points) = ShapePoints.fit(0f, anchors, closed)
 
         val notes = ArrayList<String>(4)
         val fillColor: Int? = when (val f = path.fill) {
@@ -105,6 +127,7 @@ object PathToShape {
         val even = widths.all { abs(it - widths[0]) < WIDTH_SAME }
         if (stroke != null && (!even || stroke.taperPercent > 0f)) notes += ObjectBarLabels110.NOTE_WIDTH
         if (path.generator != null) notes += ObjectBarLabels110.NOTE_GENERATED
+        if (closedForFill) notes += ObjectBarLabels110.NOTE_CLOSED_FILL
         if (!closed && path.fill != null) notes += ObjectBarLabels110.NOTE_OPEN_FILL
 
         // The line's one thickness: the common factor, else the mean one.

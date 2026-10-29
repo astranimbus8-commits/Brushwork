@@ -550,7 +550,9 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
         val active = doc.activeLayer
         val box = RectF()
         fun hit(l: Layer): Int {
-            if (!l.isTextLayer || !doc.effectiveVisible(l) || doc.effectiveLocked(l)) return -1
+            // v1.10 G2 (V6): a copies-only layer ("Array behind") hides its text: never hit, so a
+            // tap there edits the visible original above it (or starts a new text).
+            if (!l.isTextLayer || !doc.effectiveVisible(l) || doc.effectiveLocked(l) || controller.vectors.hidesObjects(l)) return -1
             controller.textThreads.frameOf(l)?.let { frame ->
                 FrameGeometry.outerRect(frame, box)
                 val inside = p.x >= box.left - tol && p.x <= box.right + tol && p.y >= box.top - tol && p.y <= box.bottom + tol

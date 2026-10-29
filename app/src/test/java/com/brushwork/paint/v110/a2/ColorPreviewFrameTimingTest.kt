@@ -50,12 +50,10 @@ import kotlin.math.roundToInt
  * - the control, a drag frame of the same open shape (a finger moving it by 2 px): R2 (c) says a
  *   preview frame costs what a drag frame costs;
  * - the fill color: plain items in the live layer, no replay; at most 5.5 ms;
- * - the stroke color: the brush stroke starts again in the new color (the brush preview's key
- *   holds the color) and, having copies, is replayed exactly (`BrushTool.beginPath` ignores the
- *   draft budget for a stroke with copies): about a drag frame of this harness, where the replay
- *   of a drag is not held back (its cost is read on the looper's clock, which stands still), at
- *   most 1.25 times it. The design's absolute 5.5 ms does not hold for this stroke through the
- *   v1.8 brush engine (a lead request; ARCHITECTURE A2);
+ * - the stroke color: v1.10 G2 (V3, Q10) re-tints the live brush stroke and its 8 copies in the
+ *   new color without a replay (`BrushTool.recolorPath`: the stroke's coverage holds no color); at
+ *   most 5.5 ms. (v1.10 A2 replayed the copies exactly every frame, about a drag frame of this
+ *   harness, and held it to 1.25 drag frames.)
  * - printed only, the stroke color of the same shape outlined with a plain line.
  * Afterwards the canvas shows the last stroke color.
  */
@@ -148,10 +146,10 @@ class ColorPreviewFrameTimingTest {
         }
         line("fill", fill)
         repeat(3) { previewFrame(ObjectColorTarget.STROKE) }
-        val stroke = PerfBudget.measuredWithin(drag * DRAG_FACTOR, what = "a stroke color preview frame, 8 copies (at most $DRAG_FACTOR drag frames)") {
+        val stroke = PerfBudget.measuredWithin(PerfBudget.ms(5.5), what = "a stroke color preview frame, 8 copies") {
             median(List(15) { previewFrame(ObjectColorTarget.STROKE) })
         }
-        line("stroke (over 5.5 ms: the v1.8 brush engine's exact replay of 8 copies)", stroke)
+        line("stroke (re-tinted, no replay)", stroke)
 
         // Once the stroke rests, the canvas shows its last color (left of the fill, on the outline).
         ed.preview(ObjectColorTarget.STROKE, BLUE)
@@ -182,8 +180,5 @@ class ColorPreviewFrameTimingTest {
 
         /** Past the brush preview's refinement delay (200 ms) and its refinements. */
         const val REST_MS = 2_000L
-
-        /** A stroke color preview frame costs at most this many drag frames (R2 (c): about one). */
-        const val DRAG_FACTOR = 1.25
     }
 }
