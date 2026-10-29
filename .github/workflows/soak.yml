@@ -12,6 +12,10 @@ name: Soak tests
 # v1.10 lead (CI fix at A8's merge): ubuntu-24.04, as in android.yml (/tmp quota on ubuntu-26.04).
 # v1.10 G2 (compat, C6): 75 minutes, not 60. The -PsoakOnly run took 1851 s (31 min) on the PC with
 # the NIGHTLY plan (20 min at FULL, about 10 min of Classic replay, 129,400 steps); twice that is 62.
+# v1.10 G2 (lead, closer): both jobs run testDebugUnitTest with --rerun. A second run on an unchanged
+# main (a dispatch or a nightly) was served from the Gradle build cache that setup-gradle restores:
+# run 40819133192 replayed the soak and two chaos shards (testDebugUnitTest FROM-CACHE in under a
+# minute), which is no run at all. --rerun runs the tests again; compilation stays cached.
 on:
   schedule:
     - cron: '30 2 * * *'
@@ -59,7 +63,7 @@ jobs:
 
       - name: Soak tests
         if: steps.find.outputs.present == 'true'
-        run: ./gradlew --no-daemon testDebugUnitTest -PsoakOnly
+        run: ./gradlew --no-daemon testDebugUnitTest --rerun -PsoakOnly
 
       - uses: actions/upload-artifact@v7
         if: always() && steps.find.outputs.present == 'true'
@@ -96,7 +100,7 @@ jobs:
 
       - name: Park chaos tests
         run: >-
-          ./gradlew --no-daemon --console=plain testDebugUnitTest -PengineMode=full -PparkChaos -PunitFull
+          ./gradlew --no-daemon --console=plain testDebugUnitTest --rerun -PengineMode=full -PparkChaos -PunitFull
           -PtestShard=${{ matrix.testShard }} -PtestShards=3
           --tests 'com.brushwork.paint.engine.*' --tests 'com.brushwork.paint.tools.*' --tests 'com.brushwork.paint.storage.*'
 
