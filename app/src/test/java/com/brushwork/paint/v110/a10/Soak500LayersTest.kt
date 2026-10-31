@@ -12,8 +12,11 @@ import com.brushwork.paint.engine.CanvasOps
 import com.brushwork.paint.engine.CanvasRotation
 import com.brushwork.paint.engine.EngineConfig
 import com.brushwork.paint.engine.EngineLevel
+import com.brushwork.paint.engine.GovernorPolicy
+import com.brushwork.paint.engine.GovernorPolicyV19
 import com.brushwork.paint.engine.LayerBudget
 import com.brushwork.paint.engine.LayerBudgetV19
+import com.brushwork.paint.engine.MemoryGovernor
 import com.brushwork.paint.engine.budget.LedgerCategory
 import com.brushwork.paint.engine.budget.MemoryBudget
 import com.brushwork.paint.engine.tiles.BlankPixels
@@ -86,6 +89,17 @@ import kotlin.random.Random
  * (whose ledger holds no layer) made. 32 steps hold about 4 rotations at most, well under R; an
  * undo chain never comes near 32 steps (8 % of the edits undo).
  *
+ * v1.10 G2 (soak fix, nightly run 40819618156): nor is memory admission (`MemoryGovernor.admit`).
+ * The app's policy weighs an allocation against this JVM's own heap (`GovernorPolicyV19.heap`,
+ * `maxMemory` less 64 MiB), and the test's own use of that heap differs between the runs and from
+ * runner to runner: in that run the Classic replay held the FULL run's checkpoints besides its
+ * own, the heap crossed the margin near step 180,249, and from there the replay refused every
+ * "Merge down" FULL had made ("Not enough memory for Merge down"), so the layer list at step
+ * 180,300 differed. Each run therefore sets [Admits] over the app's policy (every allocation
+ * admitted, the rest the app's own), and the suite's
+ * [aCrowdedJavaHeapAtEitherLevelLeavesTheReplayAsTheFullRun] crowds the heap at one level at a
+ * time to hold it.
+ *
  * Leaks of tiled stores. A8 (undo on tiles, step 4) and A11 (canvas operations on stores, with
  * pins, step 4) are merged, so [PRE_A8_A11_DROPS] is false: the soak takes no pins of its own, and
  * every tiled store it saw in a layer must be empty once the editor is disposed and the layers
@@ -110,11 +124,21 @@ class Soak500LayersTest {
     private val app get() = RuntimeEnvironment.getApplication() as BrushworkApp
     private val projects = mutableListOf<String>()
 
+    /** The app's memory policy and the heap it reads, as the test found them (each run puts [Admits] over the policy). */
+    private lateinit var savedPolicy: GovernorPolicy
+    private lateinit var savedHeap: GovernorPolicyV19.Heap
+
     @Before
-    fun setUp() = Smoke.scopeErrors.clear()
+    fun setUp() {
+        Smoke.scopeErrors.clear()
+        savedPolicy = MemoryGovernor.policy
+        savedHeap = GovernorPolicyV19.heap
+    }
 
     @After
     fun tearDown() {
+        MemoryGovernor.policy = savedPolicy
+        GovernorPolicyV19.heap = savedHeap
         projects.forEach { id -> runCatching { runBlocking { app.repository.delete(id) } } }
         SwapKit.cleanUp()
         Smoke.scopeErrors.clear()
@@ -134,6 +158,55 @@ class Soak500LayersTest {
                 "up to ${full.mostLayers} layers, ${full.parked} parked layers seen at checkpoints, ${full.swapped} tiles swapped out, " +
                 "${full.drops} stores the gate dropped, released",
         )
+    }
+
+    /**
+     * v1.10 G2 (soak fix, nightly run 40819618156): the Java heap does not steer the replay. The
+     * test's own memory varies from run to run (what it keeps, the runner's speed), so a level
+     * whose heap is crowded (`GovernorPolicyV19.heap` used up to `maxMemory`, as in that run's
+     * Classic replay) must still make every edit the other level made; [Admits] holds that. Each
+     * way round: the heap crowded only at Classic (the replay would refuse "Merge down"), then
+     * only at FULL (FULL would, and the replay would merge). Both runs ask to merge down, so the
+     * crowded heap is met.
+     */
+    @Test
+    fun aCrowdedJavaHeapAtEitherLevelLeavesTheReplayAsTheFullRun() {
+        for (crowded in listOf(EngineLevel.CLASSIC, EngineLevel.FULL)) {
+            GovernorPolicyV19.heap = CrowdedAt(crowded)
+            try {
+                val full = run(EngineLevel.FULL, Plan.SUITE, steps = null, expected = null)
+                val classic = run(EngineLevel.CLASSIC, Plan.SUITE, steps = full.steps, expected = full)
+                assertEquals("crowded at $crowded: the replay met every checkpoint", full.checkpoints.size, classic.checkpoints.size)
+                for (o in listOf(full, classic)) {
+                    assertTrue("crowded at $crowded: a merge down was asked (${o.asked})", (o.asked[MERGE_DOWN] ?: 0) > 0)
+                }
+            } finally {
+                GovernorPolicyV19.heap = savedHeap
+            }
+        }
+    }
+
+    /** A Java heap used up to its maximum while [EngineConfig.level] is [level], empty otherwise. */
+    private class CrowdedAt(private val level: EngineLevel) : GovernorPolicyV19.Heap {
+        override fun used(): Long = if (EngineConfig.level == level) max() else 0L
+
+        override fun max(): Long = 1536L shl 20
+
+        override fun collect() = Unit
+    }
+
+    /**
+     * v1.10 G2 (soak fix): the policy each run sets over the app's ([inner]): it admits every
+     * allocation (`MemoryGovernor.admit`) and counts what was asked, by purpose ([asked]);
+     * everything else is [inner]'s. Admission is not under test (the class KDoc).
+     */
+    private class Admits(private val inner: GovernorPolicy) : GovernorPolicy by inner {
+        val asked = java.util.concurrent.ConcurrentHashMap<String, Int>()
+
+        override fun admit(bytes: Long, purpose: String): Boolean {
+            asked.merge(purpose, 1, Int::plus)
+            return true
+        }
     }
 
     /**
@@ -181,6 +254,7 @@ class Soak500LayersTest {
         val steps: Int,
         val checkpoints: List<Checkpoint>,
         val trace: Trace,
+        val asked: Map<String, Int>,
         val parked: Int,
         val swapped: Int,
         val mostLayers: Int,
@@ -226,6 +300,9 @@ class Soak500LayersTest {
         System.setProperty(MemoryBudget.UNDO_CAP_PROPERTY, NO_UNDO_BYTE_CAP.toString())
         EngineConfig.openSession(level, engine.sessionBudgets(), null)
         LayerBudget.current = Roomy
+        // Admission reads this JVM's heap, which the test fills as it goes (the class KDoc): not under test.
+        val admits = Admits(savedPolicy)
+        MemoryGovernor.policy = admits
         val ledger = EngineConfig.budget.ledger
         val tilesBefore = ledger.of(LedgerCategory.TILES)
         val store = if (level == EngineLevel.FULL) SwapKit.store() else null
@@ -287,11 +364,12 @@ class Soak500LayersTest {
             assertEquals("$level: the swap after the close", 0L, store.usedBytes)
         }
         EngineConfig.closeSession()
+        MemoryGovernor.policy = savedPolicy
         if (store != null) {
             SwapKit.awaitClosed(store)
             assertFalse("$level: the session's swap directory", store.dir.exists())
         }
-        return Outcome(step, checkpoints, trace, parked, swapped, most, drops.released)
+        return Outcome(step, checkpoints, trace, HashMap(admits.asked), parked, swapped, most, drops.released)
     }
 
     private fun assertSameAs(want: Checkpoint?, got: Checkpoint, where: String) {
@@ -595,6 +673,9 @@ class Soak500LayersTest {
         const val PRE_A8_A11_DROPS = false
 
         const val ROOM = 10_000
+
+        /** The purpose `LayerMerge` asks `MemoryGovernor.admit` for. */
+        const val MERGE_DOWN = "Merge down"
 
         /** What [signature] packs, high bits first, and the bits each takes. */
         val SIG_FIELDS = listOf("kind" to 7, "layers" to 13, "pixel layers" to 13, "undo steps" to 9, "canUndo" to 1, "canRedo" to 1, "active" to 13)
