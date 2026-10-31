@@ -52,7 +52,13 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import java.nio.ByteBuffer
+import java.security.MessageDigest
 import java.util.IdentityHashMap
+import java.util.zip.GZIPInputStream
+import java.util.zip.GZIPOutputStream
 import kotlin.random.Random
 
 /**
@@ -152,9 +158,9 @@ class Soak500LayersTest {
         assertTrue("the FULL run parked layers", full.parked > 0)
         assertTrue("the FULL run swapped tiles", full.swapped > 0)
         val classic = run(EngineLevel.CLASSIC, plan, steps = full.steps, expected = full)
-        assertEquals("the replay met every checkpoint", full.checkpoints.size, classic.checkpoints.size)
+        assertEquals("the replay met every checkpoint", full.checks, classic.checks)
         println(
-            "v110 A10 Soak500LayersTest ($plan): ${full.steps} steps, ${full.checkpoints.size} checkpoints, " +
+            "v110 A10 Soak500LayersTest ($plan): ${full.steps} steps, ${full.checks} checkpoints, " +
                 "up to ${full.mostLayers} layers, ${full.parked} parked layers seen at checkpoints, ${full.swapped} tiles swapped out, " +
                 "${full.drops} stores the gate dropped, released",
         )
@@ -176,7 +182,7 @@ class Soak500LayersTest {
             try {
                 val full = run(EngineLevel.FULL, Plan.SUITE, steps = null, expected = null)
                 val classic = run(EngineLevel.CLASSIC, Plan.SUITE, steps = full.steps, expected = full)
-                assertEquals("crowded at $crowded: the replay met every checkpoint", full.checkpoints.size, classic.checkpoints.size)
+                assertEquals("crowded at $crowded: the replay met every checkpoint", full.checks, classic.checks)
                 for (o in listOf(full, classic)) {
                     assertTrue("crowded at $crowded: a merge down was asked (${o.asked})", (o.asked[MERGE_DOWN] ?: 0) > 0)
                 }
@@ -249,9 +255,13 @@ class Soak500LayersTest {
 
     // ------------------------------------------------------------------ one run
 
-    /** What one run did; [trace] what each of its steps did. */
+    /**
+     * What one run did: [checks] checkpoints, kept in [checkpoints] by a run that has none to
+     * compare with (the FULL run; the replay compares and keeps none); [trace] what each step did.
+     */
     private class Outcome(
         val steps: Int,
+        val checks: Int,
         val checkpoints: List<Checkpoint>,
         val trace: Trace,
         val asked: Map<String, Int>,
@@ -286,8 +296,26 @@ class Soak500LayersTest {
         fun at(step: Int): String? = if (step in 1..size) "${describe(sigs[step - 1])}, message ${messages[step]}" else null
     }
 
-    /** A checkpoint: the flattened render's pixels and one line per row of the layer list. */
-    private class Checkpoint(val step: Int, val render: IntArray, val rows: List<String>)
+    /**
+     * A checkpoint: the SHA-256 of the flattened render's pixels and the layer list, one line per
+     * row, gzipped ([text] reads it back). v1.10 G2 (soak fix): it kept the render's pixels and the
+     * rows as strings, about 330 KiB a checkpoint on the nightly plan, and the replay held the FULL
+     * run's and its own, so the test's heap grew with the FULL run's length (set by the clock, so
+     * by the runner's speed): about 1.2 GiB of the 1.5 GiB heap near step 160,000 of the replay.
+     * Now a checkpoint is a few KiB; a render that differs is still found bit for bit (the digest),
+     * though no longer at a pixel: the layer list's per-layer hashes say which layer differs.
+     */
+    private class Checkpoint(val step: Int, val render: ByteArray, private val rows: ByteArray) {
+        fun text(): String = GZIPInputStream(ByteArrayInputStream(rows)).use { String(it.readBytes(), Charsets.UTF_8) }
+
+        companion object {
+            fun of(step: Int, render: IntArray, rows: List<String>): Checkpoint {
+                val bytes = ByteBuffer.allocate(render.size * 4).apply { asIntBuffer().put(render) }.array()
+                val zipped = ByteArrayOutputStream().also { out -> GZIPOutputStream(out).use { it.write(rows.joinToString("\n").toByteArray(Charsets.UTF_8)) } }
+                return Checkpoint(step, MessageDigest.getInstance("SHA-256").digest(bytes), zipped.toByteArray())
+            }
+        }
+    }
 
     /**
      * Runs [plan] at [level] for [steps] steps (null: until the plan's steps or minutes run out),
@@ -322,12 +350,13 @@ class Soak500LayersTest {
         var parked = 0
         var swapped = 0
         var most = 0
+        var checks = 0
         fun check(where: String) {
             val doc = editor.c.doc
             Smoke.assertQuiet(editor.c, where)
             val cp = checkpoint(doc, step)
-            if (expected != null) assertSameAs(expected.checkpoints.getOrNull(checkpoints.size), cp, where)
-            checkpoints += cp
+            if (expected != null) assertSameAs(expected.checkpoints.getOrNull(checks), cp, where) else checkpoints += cp
+            checks++
             most = maxOf(most, doc.pixelLayerCount)
             if (store != null) {
                 parked += doc.layers.count { it.residency == ResidencyState.PARKED }
@@ -369,20 +398,20 @@ class Soak500LayersTest {
             SwapKit.awaitClosed(store)
             assertFalse("$level: the session's swap directory", store.dir.exists())
         }
-        return Outcome(step, checkpoints, trace, HashMap(admits.asked), parked, swapped, most, drops.released)
+        return Outcome(step, checks, checkpoints, trace, HashMap(admits.asked), parked, swapped, most, drops.released)
     }
 
     private fun assertSameAs(want: Checkpoint?, got: Checkpoint, where: String) {
         if (want == null) throw AssertionError("$where: the FULL run had no checkpoint here")
         assertEquals("$where: the checkpoint's step", want.step, got.step)
-        assertEquals("$where: the layer list", want.rows.joinToString("\n"), got.rows.joinToString("\n"))
-        val first = want.render.indices.firstOrNull { want.render[it] != got.render[it] }
+        assertEquals("$where: the layer list", want.text(), got.text())
         assertTrue(
-            "$where: the render differs from the FULL run's at pixel $first " +
-                "(FULL ${first?.let { Integer.toHexString(want.render[it]) }}, Classic ${first?.let { Integer.toHexString(got.render[it]) }})",
-            first == null && want.render.size == got.render.size,
+            "$where: the render differs from the FULL run's (SHA-256 FULL ${hex(want.render)}, Classic ${hex(got.render)})",
+            want.render.contentEquals(got.render),
         )
     }
+
+    private fun hex(b: ByteArray): String = b.joinToString("") { "%02x".format(it) }
 
     // ------------------------------------------------------------------ the editor
 
@@ -595,7 +624,7 @@ class Soak500LayersTest {
         val rows = doc.layers.mapIndexed { i, l ->
             "$i id ${l.id} '${l.name}' parent ${l.parentId} visible ${l.visible} folder ${l.isFolder} pixels ${hashOf(l)}"
         }
-        return Checkpoint(step, px, rows)
+        return Checkpoint.of(step, px, rows)
     }
 
     /** A hash of [l]'s pixels, read without changing where they are (a parked layer's copy, recycled after). */
