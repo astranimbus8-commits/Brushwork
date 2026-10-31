@@ -64,7 +64,10 @@ import kotlin.random.Random
  * What holds: at each checkpoint the flattened render and every row of the layer list (its place,
  * id, name, parent, visibility and pixels) equal the replay's bit for bit, and nothing reached a
  * scope; the FULL run parked layers and swapped tiles; after the FULL run is closed the tile
- * ledger is back where it started, the store holds nothing and its directory is gone.
+ * ledger is back where it started, the store holds nothing and its directory is gone. v1.10 G2
+ * (soak fix): every step also did at the replay what it did at FULL ([Trace]: the edit's kind, the
+ * layer and undo counts after it, the message it left), so an edit one level refused, ignored or
+ * deferred fails at its own step with its message, not at the next checkpoint.
  *
  * The suite runs a short version ([Plan.SUITE]: a 64 px canvas, up to 24 layers). The nightly soak
  * job (`bw.testSet` soak) runs [Plan.NIGHTLY]: about 500 layers on 256 px canvases for 20 minutes;
@@ -124,7 +127,7 @@ class Soak500LayersTest {
         val full = run(EngineLevel.FULL, plan, steps = null, expected = null)
         assertTrue("the FULL run parked layers", full.parked > 0)
         assertTrue("the FULL run swapped tiles", full.swapped > 0)
-        val classic = run(EngineLevel.CLASSIC, plan, steps = full.steps, expected = full.checkpoints)
+        val classic = run(EngineLevel.CLASSIC, plan, steps = full.steps, expected = full)
         assertEquals("the replay met every checkpoint", full.checkpoints.size, classic.checkpoints.size)
         println(
             "v110 A10 Soak500LayersTest ($plan): ${full.steps} steps, ${full.checkpoints.size} checkpoints, " +
@@ -173,17 +176,51 @@ class Soak500LayersTest {
 
     // ------------------------------------------------------------------ one run
 
-    /** What one run did. */
-    private class Outcome(val steps: Int, val checkpoints: List<Checkpoint>, val parked: Int, val swapped: Int, val mostLayers: Int, val drops: Int)
+    /** What one run did; [trace] what each of its steps did. */
+    private class Outcome(
+        val steps: Int,
+        val checkpoints: List<Checkpoint>,
+        val trace: Trace,
+        val parked: Int,
+        val swapped: Int,
+        val mostLayers: Int,
+        val drops: Int,
+    )
+
+    /**
+     * v1.10 G2 (soak fix): what each step of a run did ([signature]: the edit's kind and the
+     * layer and undo counts after it, packed in a Long) and the message it left, if any (a
+     * refusal says why). The replay must do the same at every step, so an edit one level refused,
+     * ignored or deferred fails at its own step, with its message, and not a checkpoint later.
+     * About 8 bytes a step. Main thread.
+     */
+    private class Trace {
+        private var sigs = LongArray(1 shl 12)
+        private val messages = HashMap<Int, String>()
+
+        /** The steps recorded. */
+        var size = 0
+            private set
+
+        fun add(sig: Long, message: String?) {
+            if (size == sigs.size) sigs = sigs.copyOf(size * 2)
+            sigs[size++] = sig
+            if (message != null) messages[size] = message
+        }
+
+        /** Step [step] (from 1) as [describe] writes it, with its message. */
+        fun at(step: Int): String? = if (step in 1..size) "${describe(sigs[step - 1])}, message ${messages[step]}" else null
+    }
 
     /** A checkpoint: the flattened render's pixels and one line per row of the layer list. */
     private class Checkpoint(val step: Int, val render: IntArray, val rows: List<String>)
 
     /**
      * Runs [plan] at [level] for [steps] steps (null: until the plan's steps or minutes run out),
-     * comparing each checkpoint with [expected] when given; then closes the editor and the session.
+     * comparing each step and each checkpoint with [expected]'s when given; then closes the editor
+     * and the session.
      */
-    private fun run(level: EngineLevel, plan: Plan, steps: Int?, expected: List<Checkpoint>?): Outcome {
+    private fun run(level: EngineLevel, plan: Plan, steps: Int?, expected: Outcome?): Outcome {
         System.setProperty(EngineRule.MODE, level.name.lowercase())
         // Read by each editor this run makes (the reopens too): no byte cap, at both levels (the class KDoc).
         System.setProperty(MemoryBudget.UNDO_CAP_PROPERTY, NO_UNDO_BYTE_CAP.toString())
@@ -201,6 +238,7 @@ class Soak500LayersTest {
         val rnd = Random(plan.seed)
         val end = System.currentTimeMillis() + plan.minutes * 60_000L
         val checkpoints = ArrayList<Checkpoint>()
+        val trace = Trace()
         val drops = Drops()
         var editor = open(document(id, plan))
         var step = 0
@@ -211,7 +249,7 @@ class Soak500LayersTest {
             val doc = editor.c.doc
             Smoke.assertQuiet(editor.c, where)
             val cp = checkpoint(doc, step)
-            if (expected != null) assertSameAs(expected.getOrNull(checkpoints.size), cp, where)
+            if (expected != null) assertSameAs(expected.checkpoints.getOrNull(checkpoints.size), cp, where)
             checkpoints += cp
             most = maxOf(most, doc.pixelLayerCount)
             if (store != null) {
@@ -225,8 +263,12 @@ class Soak500LayersTest {
             while (if (steps != null) step < steps else step < plan.maxSteps && (plan.minutes == 0 || System.currentTimeMillis() < end)) {
                 step++
                 val where = "$level, step $step"
-                edit(editor.c, rnd, plan, step)
+                // The UI clears a message once shown: what is there after the edit is the edit's.
+                editor.c.message = null
+                val k = edit(editor.c, rnd, plan, step)
                 settle(editor.c, where)
+                trace.add(signature(editor.c, k), editor.c.message)
+                if (expected != null) assertEquals("$where: what the step did", expected.trace.at(step), trace.at(step))
                 keepNewestSteps(editor.c, plan, where)
                 unpin()
                 drops.landed(editor.c.doc)
@@ -249,7 +291,7 @@ class Soak500LayersTest {
             SwapKit.awaitClosed(store)
             assertFalse("$level: the session's swap directory", store.dir.exists())
         }
-        return Outcome(step, checkpoints, parked, swapped, most, drops.released)
+        return Outcome(step, checkpoints, trace, parked, swapped, most, drops.released)
     }
 
     private fun assertSameAs(want: Checkpoint?, got: Checkpoint, where: String) {
@@ -382,8 +424,11 @@ class Soak500LayersTest {
 
     // ------------------------------------------------------------------ the edits
 
-    /** One random edit; every choice comes from [rnd] and the layer list, so the replay makes the same. */
-    private fun edit(c: EditorController, rnd: Random, plan: Plan, step: Int) {
+    /**
+     * One random edit; every choice comes from [rnd] and the layer list, so the replay makes the
+     * same. Returns its kind (the draw that chose it).
+     */
+    private fun edit(c: EditorController, rnd: Random, plan: Plan, step: Int): Int {
         val doc = c.doc
         val pixel = doc.layers.filter { !it.isFolder }
         fun anyPixel(): Layer = pixel[rnd.nextInt(pixel.size)]
@@ -415,6 +460,7 @@ class Soak500LayersTest {
             }
             else -> c.selectLayer(anyLayer())
         }
+        return k
     }
 
     private fun stroke(c: EditorController, rnd: Random) {
@@ -549,6 +595,35 @@ class Soak500LayersTest {
         const val PRE_A8_A11_DROPS = false
 
         const val ROOM = 10_000
+
+        /** What [signature] packs, high bits first, and the bits each takes. */
+        val SIG_FIELDS = listOf("kind" to 7, "layers" to 13, "pixel layers" to 13, "undo steps" to 9, "canUndo" to 1, "canRedo" to 1, "active" to 13)
+
+        /** What one step left in [c] after an edit of kind [k] ([Trace]): the counts the replay must match. */
+        fun signature(c: EditorController, k: Int): Long {
+            val d = c.doc
+            val values = longArrayOf(
+                k.toLong(), d.layers.size.toLong(), d.pixelLayerCount.toLong(), c.undoManager.undoCount.toLong(),
+                if (c.canUndo) 1L else 0L, if (c.canRedo) 1L else 0L, d.activeLayerIndex + 1L,
+            )
+            var sig = 0L
+            for ((i, f) in SIG_FIELDS.withIndex()) {
+                require(values[i] in 0 until (1L shl f.second)) { "${f.first} ${values[i]} does not fit in ${f.second} bits" }
+                sig = (sig shl f.second) or values[i]
+            }
+            return sig
+        }
+
+        /** [sig] read back: "kind 44, layers 31, ..." ("active" is the active layer's index plus one). */
+        fun describe(sig: Long): String {
+            var rest = sig
+            val parts = ArrayList<String>()
+            for ((name, bits) in SIG_FIELDS.reversed()) {
+                parts += "$name ${rest and ((1L shl bits) - 1)}"
+                rest = rest ushr bits
+            }
+            return parts.reversed().joinToString(", ")
+        }
 
         /** The undo cap both runs set (`MemoryBudget.UNDO_CAP_PROPERTY`): none in bytes, so only steps bound the history ([Plan.undoSteps]). */
         const val NO_UNDO_BYTE_CAP = Long.MAX_VALUE
