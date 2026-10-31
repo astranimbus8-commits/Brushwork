@@ -27,6 +27,8 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.shadows.ShadowLog
 import java.util.Collections
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 /**
  * v1.9 A7a step 6 (design 3.2 A7a, R9; the user's crash "while using the magnetic lasso"): the
@@ -97,11 +99,20 @@ class MagneticLassoGuardTest {
         assertEquals(1, tool.anchorCount)
         c.message = null
 
-        // The live segment's trace throws while the finger is down.
+        // The live segment's trace throws while the finger is down. It waits on the worker until the
+        // finger's loupe is checked: a trace that throws at once can end the touch inside
+        // pointerDown itself (Main.immediate: the worker's failure can reach the main thread before
+        // the trace suspends), and the loupe would be gone before it is looked at.
         var traces = 0
-        tool.beforeTrace = { traces++; throw IllegalStateException("trace test") }
-        c.pointerDown(ToolPoint(280f, 90f))
-        assertNotNull("the finger's loupe", tool.loupe)
+        val go = CountDownLatch(1)
+        tool.beforeTrace = { go.await(10, TimeUnit.SECONDS); traces++; throw IllegalStateException("trace test") }
+        try {
+            c.pointerDown(ToolPoint(280f, 90f))
+            assertNotNull("the finger's loupe", tool.loupe)
+            assertEquals("not traced yet", 0, traces)
+        } finally {
+            go.countDown()
+        }
         assertTrue(Smoke.pumpUntil { tool.idle && c.message != null })
         assertEquals(StabilityLabels19.ERROR_TOAST.format(ToolId.MAGNETIC_LASSO.label), c.message)
         assertEquals("traced once", 1, traces)
