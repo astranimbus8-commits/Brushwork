@@ -38,8 +38,8 @@ import java.util.concurrent.atomic.AtomicBoolean
  * directory. At CLASSIC the session installs nothing.
  *
  * The FULL session opens a real small artwork whose load is held at its first layer
- * ([OpeningLine.onLayer]) until the assertions made while it loads have run. (It opened an
- * artwork that does not exist before: the session's scope is `Main.immediate`, so `open()` runs
+ * ([OpeningLine.onLayer]) until the assertions made while it loads have run. (Before, it opened
+ * an artwork that does not exist: the session's scope is `Main.immediate`, so `open()` runs
  * inside `openEditor` up to the load's `withContext(IO)`, and when the IO thread threw "This
  * artwork no longer exists" before main reached the suspension, `withContext` rethrew on main at
  * once and `openEditor` returned a session already Failed.)
@@ -51,7 +51,11 @@ class EditorSessionSwapStoreTest {
 
     private val app get() = RuntimeEnvironment.getApplication() as BrushworkApp
 
-    /** Lets the held load go on (counted down by the test, and by [tearDown] should the test fail first). */
+    /**
+     * Lets the held load go on: counted down by the test, and by [tearDown] before the editor
+     * closes should the test fail first (cancelling the session's scope does not wake a held load,
+     * and the session's end, which closes the store, waits for the load to return).
+     */
     private val go = CountDownLatch(1)
 
     private var project: File? = null
