@@ -76,7 +76,7 @@ object ObjectBarLabels110 { // R10, R11
 object LayersLabels110 {    // R13
     fun count(n: Int): String = if (n == 1) "1 layer" else "$n layers"
     const val GUARD = "An artwork can have at most 10,000 layers"
-    const val PAYLOAD_TOO_MANY = "The share format holds at most 1000 layers. Export as PSD, or merge some layers first."
+    const val PAYLOAD_TOO_MANY = "The share format holds at most 1000 layers. Turn off \"Include Brushwork data\", or merge some layers first."
     fun canvasTooBig(w: Int, h: Int): String = "This canvas is too big for this phone's memory. The largest is about $w × $h."
     fun largestOnPhone(w: Int, h: Int): String = "Largest on this phone: about $w × $h px"    // A7's lead request: under the size fields
     /** The new-canvas dialog's row at FULL. */
