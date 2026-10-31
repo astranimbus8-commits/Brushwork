@@ -12,8 +12,11 @@ import com.brushwork.paint.engine.CanvasOps
 import com.brushwork.paint.engine.CanvasRotation
 import com.brushwork.paint.engine.EngineConfig
 import com.brushwork.paint.engine.EngineLevel
+import com.brushwork.paint.engine.GovernorPolicy
+import com.brushwork.paint.engine.GovernorPolicyV19
 import com.brushwork.paint.engine.LayerBudget
 import com.brushwork.paint.engine.LayerBudgetV19
+import com.brushwork.paint.engine.MemoryGovernor
 import com.brushwork.paint.engine.budget.LedgerCategory
 import com.brushwork.paint.engine.budget.MemoryBudget
 import com.brushwork.paint.engine.tiles.BlankPixels
@@ -49,7 +52,13 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import java.nio.ByteBuffer
+import java.security.MessageDigest
 import java.util.IdentityHashMap
+import java.util.zip.GZIPInputStream
+import java.util.zip.GZIPOutputStream
 import kotlin.random.Random
 
 /**
@@ -64,7 +73,10 @@ import kotlin.random.Random
  * What holds: at each checkpoint the flattened render and every row of the layer list (its place,
  * id, name, parent, visibility and pixels) equal the replay's bit for bit, and nothing reached a
  * scope; the FULL run parked layers and swapped tiles; after the FULL run is closed the tile
- * ledger is back where it started, the store holds nothing and its directory is gone.
+ * ledger is back where it started, the store holds nothing and its directory is gone. v1.10 G2
+ * (soak fix): every step also did at the replay what it did at FULL ([Trace]: the edit's kind, the
+ * layer and undo counts after it, the message it left), so an edit one level refused, ignored or
+ * deferred fails at its own step with its message, not at the next checkpoint.
  *
  * The suite runs a short version ([Plan.SUITE]: a 64 px canvas, up to 24 layers). The nightly soak
  * job (`bw.testSet` soak) runs [Plan.NIGHTLY]: about 500 layers on 256 px canvases for 20 minutes;
@@ -82,6 +94,17 @@ import kotlin.random.Random
  * with "Not enough memory to change the canvas with this many layers" that the Classic replay
  * (whose ledger holds no layer) made. 32 steps hold about 4 rotations at most, well under R; an
  * undo chain never comes near 32 steps (8 % of the edits undo).
+ *
+ * v1.10 G2 (soak fix, nightly run 40819618156): nor is memory admission (`MemoryGovernor.admit`).
+ * The app's policy weighs an allocation against this JVM's own heap (`GovernorPolicyV19.heap`,
+ * `maxMemory` less 64 MiB), and the test's own use of that heap differs between the runs and from
+ * runner to runner: in that run the Classic replay held the FULL run's checkpoints besides its
+ * own, the heap crossed the margin near step 180,249, and from there the replay refused every
+ * "Merge down" FULL had made ("Not enough memory for Merge down"), so the layer list at step
+ * 180,300 differed. Each run therefore sets [Admits] over the app's policy (every allocation
+ * admitted, the rest the app's own), and the suite's
+ * [aCrowdedJavaHeapAtEitherLevelLeavesTheReplayAsTheFullRun] crowds the heap at one level at a
+ * time to hold it.
  *
  * Leaks of tiled stores. A8 (undo on tiles, step 4) and A11 (canvas operations on stores, with
  * pins, step 4) are merged, so [PRE_A8_A11_DROPS] is false: the soak takes no pins of its own, and
@@ -107,11 +130,21 @@ class Soak500LayersTest {
     private val app get() = RuntimeEnvironment.getApplication() as BrushworkApp
     private val projects = mutableListOf<String>()
 
+    /** The app's memory policy and the heap it reads, as the test found them (each run puts [Admits] over the policy). */
+    private lateinit var savedPolicy: GovernorPolicy
+    private lateinit var savedHeap: GovernorPolicyV19.Heap
+
     @Before
-    fun setUp() = Smoke.scopeErrors.clear()
+    fun setUp() {
+        Smoke.scopeErrors.clear()
+        savedPolicy = MemoryGovernor.policy
+        savedHeap = GovernorPolicyV19.heap
+    }
 
     @After
     fun tearDown() {
+        MemoryGovernor.policy = savedPolicy
+        GovernorPolicyV19.heap = savedHeap
         projects.forEach { id -> runCatching { runBlocking { app.repository.delete(id) } } }
         SwapKit.cleanUp()
         Smoke.scopeErrors.clear()
@@ -124,13 +157,62 @@ class Soak500LayersTest {
         val full = run(EngineLevel.FULL, plan, steps = null, expected = null)
         assertTrue("the FULL run parked layers", full.parked > 0)
         assertTrue("the FULL run swapped tiles", full.swapped > 0)
-        val classic = run(EngineLevel.CLASSIC, plan, steps = full.steps, expected = full.checkpoints)
-        assertEquals("the replay met every checkpoint", full.checkpoints.size, classic.checkpoints.size)
+        val classic = run(EngineLevel.CLASSIC, plan, steps = full.steps, expected = full)
+        assertEquals("the replay met every checkpoint", full.checks, classic.checks)
         println(
-            "v110 A10 Soak500LayersTest ($plan): ${full.steps} steps, ${full.checkpoints.size} checkpoints, " +
+            "v110 A10 Soak500LayersTest ($plan): ${full.steps} steps, ${full.checks} checkpoints, " +
                 "up to ${full.mostLayers} layers, ${full.parked} parked layers seen at checkpoints, ${full.swapped} tiles swapped out, " +
                 "${full.drops} stores the gate dropped, released",
         )
+    }
+
+    /**
+     * v1.10 G2 (soak fix, nightly run 40819618156): the Java heap does not steer the replay. The
+     * test's own memory varies from run to run (what it keeps, the runner's speed), so a level
+     * whose heap is crowded (`GovernorPolicyV19.heap` used up to `maxMemory`, as in that run's
+     * Classic replay) must still make every edit the other level made; [Admits] holds that. Each
+     * way round: the heap crowded only at Classic (the replay would refuse "Merge down"), then
+     * only at FULL (FULL would, and the replay would merge). Both runs ask to merge down, so the
+     * crowded heap is met.
+     */
+    @Test
+    fun aCrowdedJavaHeapAtEitherLevelLeavesTheReplayAsTheFullRun() {
+        for (crowded in listOf(EngineLevel.CLASSIC, EngineLevel.FULL)) {
+            GovernorPolicyV19.heap = CrowdedAt(crowded)
+            try {
+                val full = run(EngineLevel.FULL, Plan.SUITE, steps = null, expected = null)
+                val classic = run(EngineLevel.CLASSIC, Plan.SUITE, steps = full.steps, expected = full)
+                assertEquals("crowded at $crowded: the replay met every checkpoint", full.checks, classic.checks)
+                for (o in listOf(full, classic)) {
+                    assertTrue("crowded at $crowded: a merge down was asked (${o.asked})", (o.asked[MERGE_DOWN] ?: 0) > 0)
+                }
+            } finally {
+                GovernorPolicyV19.heap = savedHeap
+            }
+        }
+    }
+
+    /** A Java heap used up to its maximum while [EngineConfig.level] is [level], empty otherwise. */
+    private class CrowdedAt(private val level: EngineLevel) : GovernorPolicyV19.Heap {
+        override fun used(): Long = if (EngineConfig.level == level) max() else 0L
+
+        override fun max(): Long = 1536L shl 20
+
+        override fun collect() = Unit
+    }
+
+    /**
+     * v1.10 G2 (soak fix): the policy each run sets over the app's ([inner]): it admits every
+     * allocation (`MemoryGovernor.admit`) and counts what was asked, by purpose ([asked]);
+     * everything else is [inner]'s. Admission is not under test (the class KDoc).
+     */
+    private class Admits(private val inner: GovernorPolicy) : GovernorPolicy by inner {
+        val asked = java.util.concurrent.ConcurrentHashMap<String, Int>()
+
+        override fun admit(bytes: Long, purpose: String): Boolean {
+            asked.merge(purpose, 1, Int::plus)
+            return true
+        }
     }
 
     /**
@@ -173,22 +255,82 @@ class Soak500LayersTest {
 
     // ------------------------------------------------------------------ one run
 
-    /** What one run did. */
-    private class Outcome(val steps: Int, val checkpoints: List<Checkpoint>, val parked: Int, val swapped: Int, val mostLayers: Int, val drops: Int)
+    /**
+     * What one run did: [checks] checkpoints, kept in [checkpoints] by a run that has none to
+     * compare with (the FULL run; the replay compares and keeps none); [trace] what each step did.
+     */
+    private class Outcome(
+        val steps: Int,
+        val checks: Int,
+        val checkpoints: List<Checkpoint>,
+        val trace: Trace,
+        val asked: Map<String, Int>,
+        val parked: Int,
+        val swapped: Int,
+        val mostLayers: Int,
+        val drops: Int,
+    )
 
-    /** A checkpoint: the flattened render's pixels and one line per row of the layer list. */
-    private class Checkpoint(val step: Int, val render: IntArray, val rows: List<String>)
+    /**
+     * v1.10 G2 (soak fix): what each step of a run did ([signature]: the edit's kind and the
+     * layer and undo counts after it, packed in a Long) and the message it left, if any (a
+     * refusal says why). The replay must do the same at every step, so an edit one level refused,
+     * ignored or deferred fails at its own step, with its message, and not a checkpoint later.
+     * About 8 bytes a step. Main thread.
+     */
+    private class Trace {
+        private var sigs = LongArray(1 shl 12)
+        private val messages = HashMap<Int, String>()
+
+        /** The steps recorded. */
+        var size = 0
+            private set
+
+        fun add(sig: Long, message: String?) {
+            if (size == sigs.size) sigs = sigs.copyOf(size * 2)
+            sigs[size++] = sig
+            if (message != null) messages[size] = message
+        }
+
+        /** Step [step] (from 1) as [describe] writes it, with its message. */
+        fun at(step: Int): String? = if (step in 1..size) "${describe(sigs[step - 1])}, message ${messages[step]}" else null
+    }
+
+    /**
+     * A checkpoint: the SHA-256 of the flattened render's pixels and the layer list, one line per
+     * row, gzipped ([text] reads it back). v1.10 G2 (soak fix): it kept the render's pixels and the
+     * rows as strings, about 330 KiB a checkpoint on the nightly plan, and the replay held the FULL
+     * run's and its own, so the test's heap grew with the FULL run's length (set by the clock, so
+     * by the runner's speed): about 1.2 GiB of the 1.5 GiB heap near step 160,000 of the replay.
+     * Now a checkpoint is a few KiB; a render that differs is still found bit for bit (the digest),
+     * though no longer at a pixel: the layer list's per-layer hashes say which layer differs.
+     */
+    private class Checkpoint(val step: Int, val render: ByteArray, private val rows: ByteArray) {
+        fun text(): String = GZIPInputStream(ByteArrayInputStream(rows)).use { String(it.readBytes(), Charsets.UTF_8) }
+
+        companion object {
+            fun of(step: Int, render: IntArray, rows: List<String>): Checkpoint {
+                val bytes = ByteBuffer.allocate(render.size * 4).apply { asIntBuffer().put(render) }.array()
+                val zipped = ByteArrayOutputStream().also { out -> GZIPOutputStream(out).use { it.write(rows.joinToString("\n").toByteArray(Charsets.UTF_8)) } }
+                return Checkpoint(step, MessageDigest.getInstance("SHA-256").digest(bytes), zipped.toByteArray())
+            }
+        }
+    }
 
     /**
      * Runs [plan] at [level] for [steps] steps (null: until the plan's steps or minutes run out),
-     * comparing each checkpoint with [expected] when given; then closes the editor and the session.
+     * comparing each step and each checkpoint with [expected]'s when given; then closes the editor
+     * and the session.
      */
-    private fun run(level: EngineLevel, plan: Plan, steps: Int?, expected: List<Checkpoint>?): Outcome {
+    private fun run(level: EngineLevel, plan: Plan, steps: Int?, expected: Outcome?): Outcome {
         System.setProperty(EngineRule.MODE, level.name.lowercase())
         // Read by each editor this run makes (the reopens too): no byte cap, at both levels (the class KDoc).
         System.setProperty(MemoryBudget.UNDO_CAP_PROPERTY, NO_UNDO_BYTE_CAP.toString())
         EngineConfig.openSession(level, engine.sessionBudgets(), null)
         LayerBudget.current = Roomy
+        // Admission reads this JVM's heap, which the test fills as it goes (the class KDoc): not under test.
+        val admits = Admits(savedPolicy)
+        MemoryGovernor.policy = admits
         val ledger = EngineConfig.budget.ledger
         val tilesBefore = ledger.of(LedgerCategory.TILES)
         val store = if (level == EngineLevel.FULL) SwapKit.store() else null
@@ -201,18 +343,20 @@ class Soak500LayersTest {
         val rnd = Random(plan.seed)
         val end = System.currentTimeMillis() + plan.minutes * 60_000L
         val checkpoints = ArrayList<Checkpoint>()
+        val trace = Trace()
         val drops = Drops()
         var editor = open(document(id, plan))
         var step = 0
         var parked = 0
         var swapped = 0
         var most = 0
+        var checks = 0
         fun check(where: String) {
             val doc = editor.c.doc
             Smoke.assertQuiet(editor.c, where)
             val cp = checkpoint(doc, step)
-            if (expected != null) assertSameAs(expected.getOrNull(checkpoints.size), cp, where)
-            checkpoints += cp
+            if (expected != null) assertSameAs(expected.checkpoints.getOrNull(checks), cp, where) else checkpoints += cp
+            checks++
             most = maxOf(most, doc.pixelLayerCount)
             if (store != null) {
                 parked += doc.layers.count { it.residency == ResidencyState.PARKED }
@@ -225,8 +369,12 @@ class Soak500LayersTest {
             while (if (steps != null) step < steps else step < plan.maxSteps && (plan.minutes == 0 || System.currentTimeMillis() < end)) {
                 step++
                 val where = "$level, step $step"
-                edit(editor.c, rnd, plan, step)
+                // The UI clears a message once shown: what is there after the edit is the edit's.
+                editor.c.message = null
+                val k = edit(editor.c, rnd, plan, step)
                 settle(editor.c, where)
+                trace.add(signature(editor.c, k), editor.c.message)
+                if (expected != null) assertEquals("$where: what the step did", expected.trace.at(step), trace.at(step))
                 keepNewestSteps(editor.c, plan, where)
                 unpin()
                 drops.landed(editor.c.doc)
@@ -245,24 +393,25 @@ class Soak500LayersTest {
             assertEquals("$level: the swap after the close", 0L, store.usedBytes)
         }
         EngineConfig.closeSession()
+        MemoryGovernor.policy = savedPolicy
         if (store != null) {
             SwapKit.awaitClosed(store)
             assertFalse("$level: the session's swap directory", store.dir.exists())
         }
-        return Outcome(step, checkpoints, parked, swapped, most, drops.released)
+        return Outcome(step, checks, checkpoints, trace, HashMap(admits.asked), parked, swapped, most, drops.released)
     }
 
     private fun assertSameAs(want: Checkpoint?, got: Checkpoint, where: String) {
         if (want == null) throw AssertionError("$where: the FULL run had no checkpoint here")
         assertEquals("$where: the checkpoint's step", want.step, got.step)
-        assertEquals("$where: the layer list", want.rows.joinToString("\n"), got.rows.joinToString("\n"))
-        val first = want.render.indices.firstOrNull { want.render[it] != got.render[it] }
+        assertEquals("$where: the layer list", want.text(), got.text())
         assertTrue(
-            "$where: the render differs from the FULL run's at pixel $first " +
-                "(FULL ${first?.let { Integer.toHexString(want.render[it]) }}, Classic ${first?.let { Integer.toHexString(got.render[it]) }})",
-            first == null && want.render.size == got.render.size,
+            "$where: the render differs from the FULL run's (SHA-256 FULL ${hex(want.render)}, Classic ${hex(got.render)})",
+            want.render.contentEquals(got.render),
         )
     }
+
+    private fun hex(b: ByteArray): String = b.joinToString("") { "%02x".format(it) }
 
     // ------------------------------------------------------------------ the editor
 
@@ -382,8 +531,11 @@ class Soak500LayersTest {
 
     // ------------------------------------------------------------------ the edits
 
-    /** One random edit; every choice comes from [rnd] and the layer list, so the replay makes the same. */
-    private fun edit(c: EditorController, rnd: Random, plan: Plan, step: Int) {
+    /**
+     * One random edit; every choice comes from [rnd] and the layer list, so the replay makes the
+     * same. Returns its kind (the draw that chose it).
+     */
+    private fun edit(c: EditorController, rnd: Random, plan: Plan, step: Int): Int {
         val doc = c.doc
         val pixel = doc.layers.filter { !it.isFolder }
         fun anyPixel(): Layer = pixel[rnd.nextInt(pixel.size)]
@@ -415,6 +567,7 @@ class Soak500LayersTest {
             }
             else -> c.selectLayer(anyLayer())
         }
+        return k
     }
 
     private fun stroke(c: EditorController, rnd: Random) {
@@ -471,7 +624,7 @@ class Soak500LayersTest {
         val rows = doc.layers.mapIndexed { i, l ->
             "$i id ${l.id} '${l.name}' parent ${l.parentId} visible ${l.visible} folder ${l.isFolder} pixels ${hashOf(l)}"
         }
-        return Checkpoint(step, px, rows)
+        return Checkpoint.of(step, px, rows)
     }
 
     /** A hash of [l]'s pixels, read without changing where they are (a parked layer's copy, recycled after). */
@@ -549,6 +702,38 @@ class Soak500LayersTest {
         const val PRE_A8_A11_DROPS = false
 
         const val ROOM = 10_000
+
+        /** The purpose `LayerMerge` asks `MemoryGovernor.admit` for. */
+        const val MERGE_DOWN = "Merge down"
+
+        /** What [signature] packs, high bits first, and the bits each takes. */
+        val SIG_FIELDS = listOf("kind" to 7, "layers" to 13, "pixel layers" to 13, "undo steps" to 9, "canUndo" to 1, "canRedo" to 1, "active" to 13)
+
+        /** What one step left in [c] after an edit of kind [k] ([Trace]): the counts the replay must match. */
+        fun signature(c: EditorController, k: Int): Long {
+            val d = c.doc
+            val values = longArrayOf(
+                k.toLong(), d.layers.size.toLong(), d.pixelLayerCount.toLong(), c.undoManager.undoCount.toLong(),
+                if (c.canUndo) 1L else 0L, if (c.canRedo) 1L else 0L, d.activeLayerIndex + 1L,
+            )
+            var sig = 0L
+            for ((i, f) in SIG_FIELDS.withIndex()) {
+                require(values[i] in 0 until (1L shl f.second)) { "${f.first} ${values[i]} does not fit in ${f.second} bits" }
+                sig = (sig shl f.second) or values[i]
+            }
+            return sig
+        }
+
+        /** [sig] read back: "kind 44, layers 31, ..." ("active" is the active layer's index plus one). */
+        fun describe(sig: Long): String {
+            var rest = sig
+            val parts = ArrayList<String>()
+            for ((name, bits) in SIG_FIELDS.reversed()) {
+                parts += "$name ${rest and ((1L shl bits) - 1)}"
+                rest = rest ushr bits
+            }
+            return parts.reversed().joinToString(", ")
+        }
 
         /** The undo cap both runs set (`MemoryBudget.UNDO_CAP_PROPERTY`): none in bytes, so only steps bound the history ([Plan.undoSteps]). */
         const val NO_UNDO_BYTE_CAP = Long.MAX_VALUE
