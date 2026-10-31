@@ -75,7 +75,7 @@ class VectorLiveEditTest {
             if (!brush.isDraft) return
             shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(300))
         }
-        assertFalse("the live brush stroke was refined", brush.isDraft)
+        assertFalse("live brush stroke refined within 6 s", brush.isDraft)
     }
 
     private fun controller(w: Int = 200, h: Int = 200): EditorController {
@@ -554,8 +554,13 @@ class VectorLiveEditTest {
         tool.update { it.copy(stroke = CurveStroke.BRUSH, fill = true, fillColor = blue, closed = true) }
         c.tap(40f, 40f); c.tap(160f, 40f); c.tap(160f, 160f); c.tap(40f, 160f)
         tool.flushPreview()
-        // The fill's band is kept free from the first replay on, draft or not.
-        for (y in listOf(43, 44)) assertEquals("no fill over the draft stroke at y=$y", 0, alpha(c.overlay().getPixel(100, y)))
+        // The fill's band is kept free from the first replay on, draft or not, and the draft
+        // shows the stroke there (at the smallest budget its soft edge at y=44 is still about 170).
+        val draft = c.composite()
+        for (y in listOf(43, 44)) {
+            assertEquals("no fill over the draft stroke at y=$y", 0, alpha(c.overlay().getPixel(100, y)))
+            assertTrue("draft stroke visible at y=$y", alpha(draft.getPixel(100, y)) > 100)
+        }
         // The soft edge (y=44 is 4.5 px from the 10 px stroke's center) is exact once refined.
         c.refineLiveStroke()
         assertNotNull("still a live brush stroke", c.renderOverride)
@@ -591,6 +596,7 @@ class VectorLiveEditTest {
         shape.update { it.copy(type = ShapeType.RECTANGLE, style = ShapeStyle.STROKE_FILL, strokeWith = ShapeStroke.BRUSH, fillColor = blue) }
         c2.drag(40f to 60f, 100f to 100f, 160f to 140f)
         shape.flushPreview()
+        assertTrue("draft outline visible", alpha(c2.composite().getPixel(70, 63)) > 100)
         c2.refineLiveStroke()
         assertNotNull("still a live brush outline", c2.renderOverride)
         val over2 = c2.overlay()
