@@ -6771,7 +6771,8 @@ under `app/build/device-check-artworks/`. These are Brushwork PDF share files: o
 layer plus the Brushwork data, streamed through `PdfWriter`. Each layer holds seeded random
 strokes over about 35 % of the canvas. On the PC at Gate 2 the four files took about 60 s in all
 and came to about 54, 136, 27 and 37 MB. The lead attaches them to the GitHub release under
-Assets. `DeviceCheckArtworksTest` runs the same code at 64 x 64 and brings the file back through
+Assets by hand, because the tag's release job uploads only the APK (`files: dist/*.apk`): once
+that job has published the release, `gh release upload v2.0.0` with the four files. `DeviceCheckArtworksTest` runs the same code at 64 x 64 and brings the file back through
 the gallery's import (`GalleryImports.pdfPayloadSpec`, then `ExchangeUiState.importUri`). It
 checks the names, blend modes, coverage and pixels. Importing `check-500` on the phone needs the
 layer-by-layer import of lane open's O3 (the A11 block, "Not built").
