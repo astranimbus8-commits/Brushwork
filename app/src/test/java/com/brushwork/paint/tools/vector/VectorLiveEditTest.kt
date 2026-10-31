@@ -9,6 +9,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.brushwork.paint.AppSettings
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.brush.BrushLibrary
+import com.brushwork.paint.brush.BrushTool
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.model.Document
@@ -24,6 +25,8 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.After
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -39,6 +42,41 @@ import java.time.Duration
 class VectorLiveEditTest {
 
     private val red = 0xFFFF0000.toInt()
+
+    /**
+     * The replay budget follows the measured speed ([BrushStrokePreview.nsPerUnit], shared by
+     * every test of the JVM): a class run after slow ones, or on a loaded runner (the nightly park
+     * chaos shards), starts with a small budget, and its first live stroke is a coarser draft. Each
+     * test starts at the desktop speed and puts the measured one back (as G2VectorStrokeRecolorTest).
+     */
+    private var savedSpeed = 1.0
+
+    @Before
+    fun pinSpeed() {
+        savedSpeed = BrushStrokePreview.nsPerUnit
+        BrushStrokePreview.nsPerUnit = 1.0
+    }
+
+    @After
+    fun restoreSpeed() {
+        BrushStrokePreview.nsPerUnit = savedSpeed
+    }
+
+    /**
+     * Runs the main looper until the live brush stroke is refined to the exact stroke. A long path
+     * is a draft after one replay at any budget (its dabs spread out, which thins the soft edge);
+     * the app refines it once the path has rested [BrushStrokePreview.REFINE_DELAY_MS]. Under
+     * -PparkChaos these idles also run ChaosResidency's idle handler, which parks only inactive
+     * layers: these documents have one layer, the active one, so nothing is parked.
+     */
+    private fun EditorController.refineLiveStroke() {
+        val brush = tools.getValue(lastPaintTool) as BrushTool
+        repeat(20) {
+            if (!brush.isDraft) return
+            shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(300))
+        }
+        assertFalse("the live brush stroke was refined", brush.isDraft)
+    }
 
     private fun controller(w: Int = 200, h: Int = 200): EditorController {
         val ctx = ApplicationProvider.getApplicationContext<Context>()
@@ -516,6 +554,12 @@ class VectorLiveEditTest {
         tool.update { it.copy(stroke = CurveStroke.BRUSH, fill = true, fillColor = blue, closed = true) }
         c.tap(40f, 40f); c.tap(160f, 40f); c.tap(160f, 160f); c.tap(40f, 160f)
         tool.flushPreview()
+        // The fill's band is kept free from the first replay on, draft or not.
+        for (y in listOf(43, 44)) assertEquals("no fill over the draft stroke at y=$y", 0, alpha(c.overlay().getPixel(100, y)))
+        // The soft edge (y=44 is 4.5 px from the 10 px stroke's center) is exact once refined.
+        c.refineLiveStroke()
+        assertNotNull("still a live brush stroke", c.renderOverride)
+        assertEquals("nothing baked yet", 0, c.doc.activeLayer.bitmap.getPixel(100, 44))
         val shot = c.composite()
         val over = c.overlay()
         // The inner half of the stroke (y 40..45, under the thin guide line at 40) is not covered
@@ -547,6 +591,8 @@ class VectorLiveEditTest {
         shape.update { it.copy(type = ShapeType.RECTANGLE, style = ShapeStyle.STROKE_FILL, strokeWith = ShapeStroke.BRUSH, fillColor = blue) }
         c2.drag(40f to 60f, 100f to 100f, 160f to 140f)
         shape.flushPreview()
+        c2.refineLiveStroke()
+        assertNotNull("still a live brush outline", c2.renderOverride)
         val over2 = c2.overlay()
         // 3 px inside the top edge (away from the handles and the dashed box).
         assertEquals(0, alpha(over2.getPixel(70, 63)))
